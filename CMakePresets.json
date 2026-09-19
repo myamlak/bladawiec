@@ -1,0 +1,104 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC (Visual Studio 2026)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-msvc",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "QCX_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-asan",
+      "displayName": "Windows MSVC ASan (Visual Studio 2026)",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-asan",
+      "cacheVariables": {
+        "QCX_ASAN": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-cuda",
+      "displayName": "Windows MSVC + CUDA (Visual Studio 2026)",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-cuda",
+      "cacheVariables": {
+        "QCX_ENABLE_CUDA": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-a3c",
+      "displayName": "Windows MSVC",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-a3c"
+    },
+    {
+      "name": "windows-msvc-pf",
+      "displayName": "Windows MSVC",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-pf"
+    },
+    {
+      "name": "wsl-gcc",
+      "displayName": "Linux GCC (CI)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wsl-gcc",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "QCX_INTEGRALS_LMAX": "2"
+      }
+    },
+    {
+      "name": "wsl-clang",
+      "displayName": "Linux Clang (CI)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wsl-clang",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-21",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "QCX_INTEGRALS_LMAX": "2"
+      }
+    },
+    {
+      "name": "wsl-gcc-release",
+      "displayName": "Linux GCC Release (CI)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wsl-gcc-release",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_BUILD_TYPE": "Release",
+        "QCX_INTEGRALS_LMAX": "2"
+      }
+    },
+    {
+      "name": "wsl-clang-release",
+      "displayName": "Linux Clang Release (CI)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wsl-clang-release",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-21",
+        "CMAKE_BUILD_TYPE": "Release",
+        "QCX_INTEGRALS_LMAX": "2"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows MSVC Debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows MSVC Release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    }
+  ]
+}

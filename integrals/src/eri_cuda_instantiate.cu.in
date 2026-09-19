@@ -1,0 +1,52 @@
+// Generated instantiation TU - one per {L_bra, L_ket} class, filled by
+// configure_file (the @lBra@/@lKet@/@family@ placeholders; CMake variable
+// names are case-sensitive, so the placeholders match the function
+// arguments exactly). The per-class OBJECT libraries give parallel and
+// incremental compilation, and no public header exposes the hot template
+// surface (the CPU lane: md_instantiate.cpp.in).
+//
+// Each TU defines the extern "C" launchers of its class only - the fused
+// kernel (families kV0/kV1; the thread count is runtime via args.threads,
+// so one instantiation serves both) or the VRR + bound-finalize pair (kV2)
+// - with the fp64/fp32 dispatch inside. The class table lives in the
+// generated eri_cuda_dispatch_gen.hpp; the launchers are referenced there,
+// which keeps this object in the link (no runtime registration).
+
+#define QCX_ERI_CUDA_HEADER_ONLY
+#include "eri_cuda.cu"
+
+#if @family@ == 2
+extern "C" int QcxEriCudaLaunchVrr_@lBra@_@lKet@(
+    qcx::integrals::internal::cuda::EriCudaClassArgs& args) {
+    if (args.precision == qcx::integrals::internal::cuda::kEriCudaPrecisionFp32)
+    {
+#if QcxIntegralsF32
+        return qcx::integrals::internal::cuda::EriCudaLaunchVrrClass<@lBra@, @lKet@, float>(args);
+#else
+        return qcx::integrals::internal::cuda::kEriCudaFp32Unavailable;
+#endif
+    }
+
+    return qcx::integrals::internal::cuda::EriCudaLaunchVrrClass<@lBra@, @lKet@, double>(args);
+}
+
+extern "C" int QcxEriCudaLaunchBound_@lBra@_@lKet@(
+    qcx::integrals::internal::cuda::EriCudaClassArgs& args) {
+    return qcx::integrals::internal::cuda::EriCudaLaunchBoundClass(args);
+}
+#else
+extern "C" int QcxEriCudaLaunchFused_@lBra@_@lKet@(
+    qcx::integrals::internal::cuda::EriCudaClassArgs& args) {
+    if (args.precision == qcx::integrals::internal::cuda::kEriCudaPrecisionFp32)
+    {
+#if QcxIntegralsF32
+        return qcx::integrals::internal::cuda::EriCudaLaunchFusedClass<@lBra@, @lKet@, float>(
+            args);
+#else
+        return qcx::integrals::internal::cuda::kEriCudaFp32Unavailable;
+#endif
+    }
+
+    return qcx::integrals::internal::cuda::EriCudaLaunchFusedClass<@lBra@, @lKet@, double>(args);
+}
+#endif

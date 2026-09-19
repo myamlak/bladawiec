@@ -1,0 +1,97 @@
+name: docs
+
+# Publishes the Doxygen API reference to GitHub Pages on each release tag.
+#
+# Mirrors the docs.yml of the pinned subprojects (external/boys,
+# external/excgrid): the same tags-only trigger, the same pinned Doxygen
+# 1.18.0 release, the same upload-then-deploy split and the same
+# Pages-availability gate. Two repository settings live outside this file, and
+# a tag push publishes nothing until both hold.
+#
+#   1. Pages source = "GitHub Actions" (Settings -> Pages). This one is
+#      checkable from inside the job, and the deploy below is gated on it: a
+#      repository that cannot publish SKIPS the deploy and stays green.
+#
+#   2. The github-pages environment admits the tag ref (Settings ->
+#      Environments -> github-pages -> "Deployment branches and tags" ->
+#      Add deployment tag rule "v*"). The environment is created with a branch
+#      rule for main alone, so without the tag rule the platform REJECTS the
+#      job before its first step - "Tag <t> is not allowed to deploy to
+#      github-pages due to environment protection rules" - the job reports zero
+#      steps, and no step log is ever written. Nothing in this file can soften
+#      that: the rejection precedes every step. Add the tag rule before the
+#      first v-tag is pushed. (Measured 2026-09-17; the mechanism is the
+#      platform's, not any one repository's.)
+#
+# TAGS-ONLY BY DESIGN: the published docs always match a released API surface,
+# and the deploy costs ~1-2 CI minutes per release instead of one run per push.
+# The zero-warning gate that keeps the reference from rotting between releases
+# is NOT here - it is the `docs (zero-warning Doxygen gate)` leg of ci.yml,
+# which runs on every push and every pull request. A publisher is not a gate.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Install Doxygen 1.18.0 (pinned release)
+        run: |
+          curl -L -sS -o /tmp/doxygen.tar.gz https://github.com/doxygen/doxygen/releases/download/Release_1_18_0/doxygen-1.18.0.linux.bin.tar.gz
+          tar -xzf /tmp/doxygen.tar.gz -C /tmp
+          echo "$(dirname "$(find /tmp/doxygen-1.18.0 -name doxygen -type f | head -1)")" >> "$GITHUB_PATH"
+      - name: Install docs dependencies
+        run: sudo apt-get update && sudo apt-get install -y libboost-dev libboost-graph-dev libhdf5-dev
+      # The same configure + target the ci.yml docs leg runs, deliberately: the
+      # artifact this workflow publishes is the artifact that leg gates.
+      - name: Configure
+        run: cmake --preset wsl-gcc
+      - name: Build docs (the zero-warning Doxygen gate)
+        run: cmake --build build/wsl-gcc --target qcx-docs
+      # No configure-pages step. This job reads none of its outputs, and with
+      # its default enablement:false it fails outright on a repository whose
+      # Pages site is switched off - standing in front of the availability
+      # check below, whose whole purpose is to keep exactly that repository
+      # green.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Doxygen writes build/doxygen/html (Doxyfile: OUTPUT_DIRECTORY +
+          # HTML_OUTPUT). This is the directory that CONTAINS index.html -
+          # uploading its parent publishes a site whose root has no index.
+          path: build/doxygen/html
+      - name: Check Pages availability (skips the deploy when Pages is off)
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api repos/${{ github.repository }}/pages --silent >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "Pages enabled - deploying."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Pages unavailable (Pages not enabled, or not set to GitHub Actions) - the deploy is skipped; enable Pages and re-run this workflow (or the v-tag push)."
+          fi
+      - name: Deploy to GitHub Pages
+        if: steps.pages.outputs.available == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v4

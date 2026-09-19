@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: qcx
+version: 0.1.0
+authors:
+  - family-names: Makowski
+    given-names: Marcin
+license: BSD-3-Clause
+repository-code: "https://github.com/myamlak/bladawiec"
+abstract: >-
+  A C++23 quantum-chemistry framework: Gaussian basis sets, one- and
+  two-electron integral engines, symmetry detection, DFT integration grids,
+  self-consistent field solvers, checkpointed storage and derived
+  properties, organized as a dependency-enforced module DAG. The published
+  work its algorithms, kernels and vendored data derive from is listed in
+  CITATION.bib.

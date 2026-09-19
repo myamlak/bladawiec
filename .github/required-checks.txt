@@ -1,0 +1,81 @@
+# The CI legs branch protection requires on main, one check name per line.
+#
+# This file is the single source of truth for the branch protection rule
+# itself (required_status_checks.contexts, set through the API - this file is
+# the input to that call, not the call). Adding a leg to ci.yml
+# does NOT require it; adding a name here does not create a leg.
+#
+# Names are the rendered job names from a completed run. ci.yml spells them
+# explicitly (`name: linux-x86 ${{ matrix.compiler }} ${{ matrix.build_type }}`,
+# `name: docs (zero-warning Doxygen gate)`) rather than leaving them to GitHub's
+# matrix rendering, so this list is readable against the workflow file with no
+# guessing: every name below IS a `name:` value in .github/workflows/ci.yml with
+# the matrix placeholders substituted.
+#
+# A NAME THAT MATCHES NOTHING IS SILENTLY UNENFORCED, and a name that never
+# reports blocks every pull request - the two ways this file fails. Both are
+# avoided the same way: add a name only from a leg that has reported.
+#
+# THREE OF THE LIVE CONTEXTS ARE NOT IN THIS FILE: `Analyze (c-cpp)`,
+# `Analyze (python)` and `Analyze (actions)` are GitHub's own code-scanning
+# jobs, not legs of ci.yml and not anything this repository spells. They are
+# required on main and must stay required; they are simply not ours to name,
+# which is why this file - the ci.yml half of the list - does not carry them.
+#
+# PROVENANCE, because several of these spellings are new or changed:
+#   * linux-x86 clang Debug - PROVEN as a shape: a full run carried presets
+#     wsl-gcc, wsl-clang and wsl-gcc-release and every job was green. It is the
+#     matrix's only Debug entry since 2026-09-19; the gcc Debug entry beside it
+#     was dropped and the Debug build type moved to windows-msvc, because gcc
+#     was already carried by the Release leg and both sanitizer legs.
+#   * linux-x86 gcc Release - same run, same preset (wsl-gcc-release), green as
+#     a build. Since 2026-09-19 it is the one leg that raises the integrals
+#     angular-momentum ceiling to the option's default.
+#   * windows-msvc Release - the SHAPE is proven: a run carried windows-latest +
+#     msvc-dev-cmd + vcpkg boost-graph + Ninja Release and was green end to end.
+#     That job's own context was `windows-msvc-release`; this leg is the same
+#     build at the same flags under a name that does not collide with the
+#     release workflow's job of that name.
+#   * windows-msvc Debug - WRITTEN, NOT RUN. Its shape is the Release entry
+#     beside it with the build type changed; it has not reported.
+#   * linux-sanitizers asan / ubsan - WRITTEN, NOT RUN. They are the two halves
+#     of the single `linux-sanitizers asan+ubsan` leg that measured 28.5 min of
+#     build and 63.1 min of test; the combined configure was run locally on
+#     2026-09-19 with no errors, and neither half's build has run anywhere.
+#   * gates (static checks) - WRITTEN, NOT RUN as a job, but not a new
+#     mechanism either: it runs the same two commands (tools/check_dag.py and
+#     tools/check_docs_gate.py) that every other leg used to run after its
+#     build, moved ahead of them so a structural failure costs a minute rather
+#     than a full leg.
+#   * docs (zero-warning Doxygen gate) - the JOB is proven (context `docs`) and
+#     the gate itself was re-checked on 2026-09-18 against a tree carrying
+#     exactly the Doxyfile's INPUT paths: exit 0, zero warnings, index.html
+#     produced.
+#   * linux-arm64 gcc Release / windows-arm64 msvc Release / macos arm64 /
+#     macos x64 - WRITTEN, NOT RUN: no arm64 machine exists here and CI is the
+#     first place either macOS leg configures. They were required before this
+#     file listed them; they are listed here now so the two agree.
+#
+# BEFORE WIRING BRANCH PROTECTION, push once and read the check list off that
+# run: every name below must appear in it, spelled exactly. A name that differs
+# by a hyphen or a capital letter is a requirement no run can ever satisfy, and
+# it blocks every pull request rather than failing loudly.
+#
+# A leg deliberately NOT here is not a gate: the release-lane legs
+# (ci-windows-release.yml: clang-tidy, the peak-memory tripwire, the long-test
+# category) are alert-only or release-cadence, and the two QFMM chain pins are
+# local-only - they carry the `heavy` label, which every routine ctest run
+# excludes.
+
+gates (static checks)
+linux-x86 clang Debug
+linux-x86 gcc Release
+windows-msvc Release
+windows-msvc Debug
+linux-sanitizers asan
+linux-sanitizers ubsan
+linux-arm64 gcc Release
+windows-arm64 msvc Release
+macos arm64
+macos x64
+docs (zero-warning Doxygen gate)

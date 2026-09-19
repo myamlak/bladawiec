@@ -1,0 +1,34 @@
+# clang-tidy config for qcx — C++ Core Guidelines focus.
+# Curated rather than blanket: broad static-analysis coverage without the
+# churn-y modernize-* rewrites. Quantum-chemistry math code legitimately
+# uses raw pointers/arrays and physical constants, so those CG rules
+# (pro-bounds-*, avoid-magic-numbers) are deliberately not enabled.
+# bugprone-unchecked-optional-access is also excluded: its two dominant
+# patterns here are both idiomatic and guarded — gtest ASSERT-then-deref
+# in tests (ASSERT_TRUE(x.has_value()) then *x; the macro's return
+# makes the deref safe but the check cannot see through it) and
+# production derefs guarded by Create-time state-machine invariants
+# (the optional is set at Create/validation, dereferenced at Build).
+# Enabling it floods the gate with ~100% false positives (2026-09-02).
+---
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  -bugprone-unchecked-optional-access,
+  performance-*,
+  performance-*,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-pro-type-static-cast-downcast,
+  cppcoreguidelines-pro-type-const-cast,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-narrowing-conversions,
+  cppcoreguidelines-prefer-member-initializer,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-special-member-functions,
+  cppcoreguidelines-virtual-class-destructor,
+  misc-definitions-in-headers
+
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^(core|memory|backend|linalg|molecule|symmetry|basisset|integrals|tests)/.*\.(hpp|h)$'
+SystemHeaders: false

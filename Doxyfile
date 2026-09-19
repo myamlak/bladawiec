@@ -1,0 +1,109 @@
+# Doxyfile for the qcx API documentation.
+# Used by the `qcx-docs` CMake target (doxygen_add_docs, working directory
+# is the repo root). Generate with:
+#   cmake --build build/windows-msvc --target qcx-docs
+# Output lands in build/doxygen/html (open index.html).
+
+PROJECT_NAME           = qcx
+PROJECT_NUMBER         = 0.1.0
+PROJECT_BRIEF          = "Quantum-chemistry framework"
+OUTPUT_DIRECTORY       = build/doxygen
+OUTPUT_LANGUAGE        = English
+
+# Extraction: document everything public in the scanned headers, and warn
+# about anything that escaped documentation. EXTRACT_ALL must stay NO -
+# with YES Doxygen silently disables WARN_IF_UNDOCUMENTED, which defeats
+# the gate (verified with Doxygen 1.18.0, 2026-08-16).
+EXTRACT_ALL            = NO
+EXTRACT_STATIC         = NO
+EXTRACT_PRIVATE        = NO
+HIDE_UNDOC_MEMBERS     = NO
+WARN_IF_UNDOCUMENTED   = YES
+WARN_NO_PARAMDOC       = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_IF_INCOMPLETE_DOC = NO
+# The docs gate fails the build on any warning (the fp16 Doxygen violations
+# printed warnings while the target
+# still exited 0 - the gate must be loud). SCOPE, measured 2026-09-15: YES stops
+# Doxygen at the FIRST warning, so a red run names one warning per run and never
+# the full list (two were red in HEAD and only a WARN_AS_ERROR=NO pass showed the
+# second). A GREEN run is still zero warnings - the abort exits non-zero - so the
+# cost is diagnosis, not soundness. FAIL_ON_WARNINGS, which Doxygen documents as
+# reporting every warning and then exiting non-zero, would remove that cost and
+# is not adopted here: the mode change needs a real qcx-docs run to verify.
+WARN_AS_ERROR          = YES
+QUIET                  = YES
+WARNINGS               = YES
+WARN_FORMAT            = "$file:$line: $text"
+
+# Preprocessor: the fp16 public API (boys.hpp fp16 entries, f16.hpp,
+# boys_cuda.hpp) is guarded by #if QcxIntegralsFp16 - without the define
+# Doxygen evaluates the guard to 0 and the whole API is invisible to the
+# gate (a vacuous zero-warning pass).
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+PREDEFINED             = QcxIntegralsFp16=1
+
+# Inputs: public headers of the modules, scanned recursively; the README
+# becomes the front page of the published docs. This list IS the gate's
+# coverage: a module absent from it is silently ungated - the build reports
+# the same zero warnings whether that module is documented or not (scf was
+# absent in this way until 2026-09-15, with the gate green over it). Every
+# qcx module owning an include/ directory must appear here. excgrid is
+# deliberately absent: it is a standalone project with its own Doxyfile.
+# ENFORCED by tools/check_docs_gate.py (pre-commit + both CI workflows): it reads
+# the module list from tools/check_dag.py - ORDER is that list's one home - and
+# refuses an INPUT that misses a module, names one that is not in the DAG, names
+# a module in a shape other than <module>/include, or names a path that is not
+# there. The rule is no longer a comment someone has to remember.
+INPUT                  = core/include backend/include memory/include linalg/include molecule/include symmetry/include basisset/include integrals/include scf/include grid/include properties/include io/include driver/include storage/include README.md docs/mainpage.md docs/api-guide.md docs/maintainer-guide.md CONTRIBUTING.md docs/input-guide.md docs/output-guide.md
+RECURSIVE              = YES
+FILE_PATTERNS          = *.hpp *.h *.md
+INPUT_ENCODING         = UTF-8
+USE_MDFILE_AS_MAINPAGE = docs/mainpage.md
+
+# C++ presentation
+OPTIMIZE_OUTPUT_FOR_C  = NO
+CPP_CLI_SUPPORT        = NO
+BUILTIN_STL_SUPPORT    = YES
+CASE_SENSE_NAMES       = YES
+SHOW_NAMESPACES        = YES
+SHOW_INCLUDE_FILES     = YES
+SHOW_GROUPED_MEMB_INC  = YES
+INLINE_INFO            = YES
+SORT_MEMBER_DOCS       = YES
+SORT_BRIEF_DOCS        = YES
+TYPEDEF_HIDES_STRUCT   = NO
+EXTRACT_LOCAL_CLASSES  = NO
+
+# Source browser
+SOURCE_BROWSER         = YES
+VERBATIM_HEADERS       = YES
+STRIP_CODE_COMMENTS    = YES
+REFERENCES_LINK_SOURCE = YES
+REFERENCED_BY_RELATION = NO
+REFERENCES_RELATION    = NO
+
+# HTML output only (LaTeX/RTF/man turned off)
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_COLORSTYLE        = LIGHT
+GENERATE_TREEVIEW      = YES
+TREEVIEW_WIDTH         = 250
+GENERATE_LATEX         = NO
+GENERATE_RTF           = NO
+GENERATE_MAN           = NO
+GENERATE_XML           = NO
+GENERATE_DOCBOOK       = NO
+
+# Index pages
+ALPHABETICAL_INDEX     = YES
+GENERATE_TODOLIST      = YES
+GENERATE_TESTLIST      = YES
+GENERATE_BUGLIST       = YES
+GENERATE_DEPRECATEDLIST= YES
+
+# No graphviz dependency (HAVE_DOT OFF); enable if diagram generation is
+# ever wanted: `winget install Graphviz.Graphviz` + HAVE_DOT = YES.
+HAVE_DOT               = NO

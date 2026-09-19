@@ -1,0 +1,13 @@
+# Build outputs
+/build/
+
+# Visual Studio IDE files
+/.vs/
+
+# Python caches
+__pycache__/
+
+# Comparative-benchmark captures (raw per-rep rows live here and are never
+# committed). The directory carries its own tracked .gitignore.
+tools/bench/out/*
+!tools/bench/out/.gitignore

@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "workload": "c12h26_sto3g_rhf (38 atoms, 86 contracted STO-3G, direct RHF, core guess, kNormal - the far-field-alive chain fixture)",
+  "case_manifest": "tools/bench/cases/c12h26_sto3g_rhf.toml",
+  "invocation": "/usr/bin/time -v qcx run <run-input TOML derived from the manifest via tools/bench/qcx_runner.WriteRunToml>",
+  "capture": "GNU time -v 'Maximum resident set size (kbytes)' on stderr",
+  "unit": "kib",
+  "threshold_rule": "alert-only (workflow warning annotation) when peak_kib > max(1.5 * baseline_peak_kib, baseline_peak_kib + 512 * 1024); the workflow step never fails the job",
+  "baseline_peak_kib": 524288,
+  "history_rows": [
+    {
+      "commit": "5caf223",
+      "date_utc": "2026-09-02T18:30:00+00:00",
+      "peak_kib": 524288,
+      "seed": true,
+      "note": "SEED ROW - placeholder estimate (512 MiB), no CI measurement yet. The 86-BF direct-RHF workload models tens of MiB at most, so the placeholder is deliberately loose (first-cut alert-only); this row is replaced with a measured one harvested from a CI run's 'perf-guard harvest' line when an accepted change moves the footprint (the reference-pin discipline - the same commit must carry the memory-model gate + memory_model_test)."
+    }
+  ]
+}

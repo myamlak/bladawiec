@@ -1,0 +1,368 @@
+name: CI Release
+
+# THE RELEASE LANE - the legs whose signal is CADENCE-bound or alert-only, kept
+# off the per-push critical path. This file was created while the repository was
+# private and its Actions minutes were budgeted (2000 Actions minutes/month,
+# Windows billed at twice the Linux rate); ci.yml carries the full per-push
+# matrix, and what is left here is what is here for a reason other than cost:
+#   * linux-gcc-release - the peak-memory tripwire. Its own note below is the
+#     argument for the run: a footprint regression is caught by comparing
+#     against a committed baseline, and comparing across releases is what the
+#     alert is for. Timing/footprint data is the payload, not build
+#     coverage - ci.yml's own Release leg carries the build.
+#   * clang-tidy - the whole-tree tidy sweep (parse-heavy, so it is not on the
+#     per-push path). It also builds the wsl-clang preset, because tidy needs
+#     the PCHs materialized.
+#   * windows-msvc-release - the Windows Release leg at the same flags ci.yml's
+#     per-push Windows leg uses, so the two OVERLAP. It is kept for now rather
+#     than deleted, and the reason is evidence: this is the only Windows leg
+#     that has ever reported green in CI (2026-08-17), while the per-push one
+#     has not run once. Delete it (or this whole file's Windows half) after the
+#     per-push leg has a green run - not before. It runs the routine test
+#     selection like every other leg.
+#   * large-tests - the `large` category: the long tests are on-demand runs
+#     rather than per-push ones, and this is the only job in CI that sets
+#     QCX_ENABLE_LARGE_TESTS, so no per-push run can see the category at all.
+#     This file is exactly that cadence - release tags and manual re-fires - and it
+#     runs the category on two RELEASE lines chosen as a covering set rather
+#     than a grid. Its own note below carries the set, the reasons, and the
+#     measured cost.
+# Runs on a release tag and on demand. The per-push coverage lives in ci.yml.
+#
+# WHY THERE IS NO `paths:` FILTER ON THIS FILE, when ci.yml and excgrid.yml
+# have one. A path filter is only ever evaluated for a diff-bearing event
+# (branch push / pull request): GitHub does not evaluate `paths` for tag
+# pushes, and a manual dispatch event carries no diff at all.
+# This workflow's only diff-bearing trigger is the release tag push below, so
+# there is nothing for a filter to act on - and a docs-only commit never
+# reached this file to begin with. Adding one here would be a decoration that
+# looks like an optimization and is not, which is worse than its absence.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  # Keyed on the ref, like the other two workflows: runs of one ref cost one
+  # run instead of one per push. Each release tag keeps its own group, so
+  # tagging v1.0.1 does not cancel the v1.0.0 build, and a manual re-fire from
+  # the same ref supersedes a still-running run of that ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-gcc-release:
+    # This leg's payload is the peak-memory tripwire below, and the tripwire
+    # needs two things a per-push leg does not give it: an optimized binary (a
+    # Debug RSS measurement would be meaningless) and a cadence wide enough to
+    # catch a regression introduced by any of the week's commits. Its test step
+    # deliberately duplicates the per-push gcc Release leg: the tripwire needs
+    # the binary, and a leg that built without testing would be the only one
+    # left that does.
+    runs-on: ubuntu-latest
+    env:
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Restore ccache
+        # Same ccache-gcc- prefix the per-push Debug leg writes (both are the
+        # gcc compiler), so this leg restores on the Debug leg's warm cache;
+        # ccache keys on the compile flags internally, so the two build types
+        # coexist in one cache without poisoning each other.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-gcc-${{ github.sha }}
+          restore-keys: |
+            ccache-gcc-
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          # Same package set as the per-push job in ci.yml - hdf5 for the
+          # HighFive smoke (QCX_ENABLE_IO), libboost-dev as the umbrella
+          # header package (noble has no modular dev packages for
+          # header-only Boost libs), graph-dev for the BoostConfig component
+          # file molecule's find_package needs (CMake 4 CMP0167 = config
+          # mode only).
+          # 'time' ships /usr/bin/time -v, the peak-RSS capture of the
+          # peak-memory tripwire step below.
+          sudo apt-get install -y ninja-build wget ccache time libboost-dev libboost-graph-dev libhdf5-dev
+      - name: Configure
+        run: cmake --preset wsl-gcc-release
+      - name: Build
+        run: cmake --build build/wsl-gcc-release
+      - name: ccache stats
+        run: ccache -s
+      # The static gates are NOT tests and are kept: they cost seconds and they
+      # are gates.
+      - name: Check module DAG
+        run: python3 tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python3 tools/check_docs_gate.py
+      # THE TEST STEP IS RESTORED, and the reversal is recorded here rather than
+      # left silent. It was removed while this repository was private and its
+      # Actions minutes were budgeted; the repository is public now and remote
+      # CI is not metered, so a leg that builds and stops was buying nothing.
+      # The step runs the routine selection - everything except the `large`
+      # category, which is a multi-hour on-demand run with its own job in this
+      # file and is enabled by no per-push configuration.
+      - name: Test (routine selection, large excluded)
+        run: ctest --test-dir build/wsl-gcc-release -LE large -j"$(nproc)" --output-on-failure
+      # The alert-only peak-memory tripwire: a single fixed-input qcx run of the
+      # c12h26_sto3g fixture (38 atoms / 86 BF, sub-minute) under
+      # /usr/bin/time -v, compared against the committed baseline
+      # benchmarks/data/perf-guard/ci-peak-memory.json. Warns (never fails the
+      # job) past max(1.5x, +512 MiB); the timing signal comes from the
+      # development machine's nightly baseline, not from CI. At the 86-BF
+      # workload size the +512 MiB absolute arm dominates the 1.5x arm - that
+      # looseness is accepted at first cut (the seed baseline is a 512 MiB
+      # placeholder; no CI measurement exists yet) and tightens data-driven once
+      # real runs harvest rows. Alert-only, never a merge gate: the warning
+      # lands on this job and is read with the run's own result.
+      # No `if:` guard any more: in ci.yml this step ran only on the Release
+      # matrix entry; here the whole job is that leg.
+      - name: Peak-memory tripwire (alert-only)
+        run: python3 tools/bench/ci_peak_memory.py --exe build/wsl-gcc-release/driver/qcx
+
+  # ---------------------------------------------------------------------------
+  # THE `large` CATEGORY. The long tests are on-demand runs rather than per-push
+  # ones: they are a multi-hour selection whose value is the cases a routine run
+  # cannot afford, so they belong on a cadence lane (release tags and manual
+  # re-fires) and not on the path every push pays for. Three clauses of that
+  # decision are visible below: Release configurations only, the gate turned ON
+  # in this job and nowhere else in CI, and every line parallelized.
+  #
+  # WHY A SEPARATE JOB RATHER THAN A STEP IN A NEIGHBOUR. Both jobs above are a
+  # build smoke and a tripwire; bolting a multi-hour sweep onto either would
+  # make its name a lie about what it does.
+  #
+  # TWO LINES, ONE PER SYSTEM, AND NEITHER IS ARM. The long category does not
+  # run on ARM at all - the owner's rule, the same one that keeps the ARM test
+  # steps serialized - so the covering set is Windows/x64 and Linux/x64 and
+  # nothing else. The macOS/arm64 line this matrix used to carry is gone rather
+  # than reduced, and what that costs is stated here so it is not discovered
+  # later: the long tests, and the physics-pinning cases among them, are now
+  # exercised on x64 only, while macOS keeps its per-push routine legs (macos
+  # arm64 and macos x64, both with the gate OFF) and no long-test coverage at
+  # all.
+  #
+  # Linux takes x64 rather than its arm64 for the same rule read the other way:
+  # the per-push arm64 legs already carry that architecture's routine
+  # selection, and x64 is the cheaper of the two to prepare here. The job NAME
+  # carries each line's system and architecture, so what a run covered is
+  # readable from the run list instead of assumed.
+  #
+  # THE COST. Measured locally on the Linux line's configuration: ~3.2 h of a
+  # 3.59 h Release leg (GCC Release, one machine, 2026-09-18). A hosted runner
+  # is slower and has fewer cores than the development machine, so the wall
+  # clock is bounded by the longest single case rather than by -j. -j is still
+  # the right call - the category is a bag of independent tests and the
+  # cap-family cases carry RUN_SERIAL so they never overlap anything - and
+  # timeout-minutes is stated rather than left at the 360 default: this job is
+  # slow on purpose, and a silent platform timeout is a red leg nobody can read.
+  #
+  # THIS IS THE ONLY PLACE IN CI THAT SETS QCX_ENABLE_LARGE_TESTS. The option is
+  # default-OFF and gates target REGISTRATION, so the category does not exist in
+  # any per-push configuration - a routine run cannot fail open into it, which
+  # is the whole point of the mechanism (see the root CMakeLists' block for the
+  # reasoning).
+  # ---------------------------------------------------------------------------
+  large-tests:
+    name: large ${{ matrix.system }}/${{ matrix.arch }} (the long-test category)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The covering set: two lines, one per system, both x64, and no ARM
+          # line at all. See the job note above for why, and for what the
+          # macOS line's removal costs.
+          - system: windows
+            arch: x64
+            runner: windows-latest
+            jobs: 4
+            build_dir: build/windows-large
+          - system: linux
+            arch: x64
+            runner: ubuntu-latest
+            jobs: 4
+            build_dir: build/wsl-gcc-release
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      # One toolchain step per system rather than one step with a conditional
+      # command: the two package managers have nothing in common, and a step
+      # named for its system is the one that shows up red when it breaks.
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache libboost-dev libboost-graph-dev libhdf5-dev
+      - name: Restore ccache (Linux)
+        if: runner.os == 'Linux'
+        # Same ccache-gcc- prefix as the gcc legs in ci.yml: ccache keys on the
+        # compile flags internally, so one cache serves all of them. Without it
+        # this line pays a cold Release build before it runs a single test.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-gcc-${{ github.sha }}
+          restore-keys: |
+            ccache-gcc-
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+        if: runner.os == 'Windows'
+      - name: Restore vcpkg tree (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed\x64-windows
+            C:\vcpkg\packages
+          key: vcpkg-classic-x64-windows-v1-${{ hashFiles('.github/workflows/ci.yml', '.github/workflows/ci-windows-release.yml') }}
+      - name: Install Boost.Graph (Windows)
+        if: runner.os == 'Windows'
+        run: vcpkg install boost-graph:x64-windows
+      # The gate is turned ON here and nowhere else (see the job note).
+      #
+      # The Linux line keeps the wsl-gcc-release preset: that is the geometry
+      # the measured cost above was taken under and the configuration ci.yml's
+      # per-push Release leg builds. The other line configures bare, the way its
+      # per-push leg does.
+      #
+      # QCX_INTEGRALS_LMAX is stated on both lines and raised to the
+      # option's own default (6). The per-push legs pin 2 to keep their cycle
+      # short, but the large category owns the angular-momentum axis: the grid
+      # screening case carries one shell per angular momentum, s through i (49
+      # functions), and under a ceiling of 2 it could only ever reach l <= 2.
+      # Stated explicitly rather than left to the preset, so the intent is
+      # visible where the ceiling is raised.
+      - name: Configure (large targets registered)
+        if: runner.os == 'Linux'
+        run: cmake --preset wsl-gcc-release -DQCX_INTEGRALS_LMAX=6 -DQCX_ENABLE_LARGE_TESTS=ON
+      - name: Configure (large targets registered)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build/windows-large -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_ENABLE_IO=OFF -DQCX_INTEGRALS_LMAX=6 -DQCX_ENABLE_LARGE_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+      - name: Build
+        run: cmake --build ${{ matrix.build_dir }} -j ${{ matrix.jobs }}
+      - name: ccache stats
+        if: runner.os == 'Linux'
+        run: ccache -s
+      # Assert the gate actually did something, before spending hours on
+      # the selection. A default-OFF option that silently stopped being read
+      # would make this job a green no-op - it would run zero tests and report
+      # success - which is the one failure mode a coverage lane must not have.
+      - name: Assert the category is registered (not an empty selection)
+        # bash on both lines: the check is one pipeline, and a per-shell
+        # copy of it would be a second thing to keep correct.
+        shell: bash
+        run: |
+          n=$(ctest --test-dir ${{ matrix.build_dir }} -N -L large 2>/dev/null \
+              | grep -c '^[[:space:]]*Test #[0-9]')
+          echo "large category on ${{ matrix.system }}/${{ matrix.arch }}: $n test(s)"
+          if [ -z "$n" ] || [ "$n" -lt 10 ]; then
+            echo "QCX_ENABLE_LARGE_TESTS=ON produced $n large tests; the category is"
+            echo "expected to hold 19. Either the option is no longer read or the"
+            echo "manifests were dropped - fix that instead of removing this check."
+            exit 1
+          fi
+      # --output-on-failure: a red case must carry its own evidence, because
+      # nobody is watching this job in real time.
+      - name: The large category
+        run: ctest --test-dir ${{ matrix.build_dir }} -L large -j ${{ matrix.jobs }} --output-on-failure
+
+  windows-msvc-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+      # Path-based caching of the vcpkg classic tree (the runner's vcpkg has no
+      # x-gha cache backend, so the tree is cached as files).
+      - name: Restore vcpkg tree (cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed\x64-windows
+            C:\vcpkg\packages
+          key: vcpkg-classic-x64-windows-v1-${{ hashFiles('.github/workflows/ci.yml', '.github/workflows/ci-windows-release.yml') }}
+      # boost-graph only (see the per-push Windows job's note).
+      - name: Install Boost.Graph
+        run: vcpkg install boost-graph:x64-windows
+      # QCX_ENABLE_IO=OFF and QCX_INTEGRALS_LMAX=2 like every other CI
+      # configuration, matching the per-push Windows leg: the CI build is a
+      # smoke of the shipped configuration, not a full-instantiation build, and
+      # no CI leg compiles the full MD class matrix. Both flags are a deliberate
+      # trim of the build, not leftovers - dropping them would widen the
+      # instantiation matrix and lengthen every leg.
+      - name: Configure
+        run: cmake -S . -B build/windows-msvc-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_ENABLE_IO=OFF -DQCX_INTEGRALS_LMAX=2 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+      - name: Build
+        run: cmake --build build/windows-msvc-release
+      # The static gates are NOT tests and are kept: they cost seconds and they
+      # are gates.
+      - name: Check module DAG
+        run: python tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python tools/check_docs_gate.py
+      # THE TEST STEP IS RESTORED, and the reversal is recorded here rather than
+      # left silent. It was removed while this repository was private and its
+      # Actions minutes were budgeted - Windows minutes bill at twice the Linux
+      # rate - so this leg built and stopped. The repository is public now and
+      # remote CI is not metered, and the sibling repositories' Windows legs run
+      # their tests, so a Windows leg that only builds was buying nothing. The
+      # step runs the routine selection: everything except the `large` category,
+      # which is a multi-hour on-demand run with its own job in this file.
+      - name: Test (routine selection, large excluded)
+        run: ctest --test-dir build/windows-msvc-release -LE large -j 4 --output-on-failure
+
+  # The whole-tree tidy sweep: it runs here, off the per-push critical path,
+  # because parsing every TU is heavy in minutes and a diagnostics list gains
+  # nothing from being produced on every push.
+  clang-tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Install clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build wget libboost-dev libboost-graph-dev libhdf5-dev
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          sudo apt-get install -y clang-tidy-21 libomp-21-dev
+      - name: Configure
+        run: cmake --preset wsl-clang
+      # Every target precompiles its headers, so the compile database carries
+      # -include-pch flags; tidy needs the .pch files to exist.
+      - name: Build (materializes the PCHs tidy reads)
+        run: cmake --build build/wsl-clang -j"$(nproc)"
+      - name: Run clang-tidy
+        run: |
+          # Excluded: the CUDA host tests need the CUDA toolkit (local-only,
+          # QCX_ENABLE_CUDA) - not present on CI runners. No job here turns it
+          # on, so every QCX_ENABLE_CUDA branch compiles in no CI lane at all;
+          # the limitation is declared at its guard, tests/CMakeLists.txt:112.
+          # Also excluded: any nested copy of this tree (a scratch checkout or
+          # an agent worktree holds COPIES of these sources, so walking it
+          # re-reports them under a scratch path) and external/ (the boys and
+          # excgrid submodules - a finding there is fixed upstream, never here).
+          # Keep this filter byte-identical to tools/run_clang_tidy.sh.
+          files=$(find . -path './build*' -prune -o -path './third_party*' -prune -o -path './external' -prune -o -path './backend/tests/cuda_smoke_test.cpp' -prune -o -path './memory/tests/device_buffer_cuda_test.cpp' -prune -o -path './memory/tests/tensor_cuda_test.cpp' -prune \
+                 -o -path './integrals/tests/boys_cuda_test.cpp' -prune -o -name '*.cpp' -print)
+          if [ -n "$files" ]; then
+            # run-clang-tidy.py parallelizes per TU: the amgcl TUs parse
+            # for ~30-50 s each and would serialize the whole job.
+            run-clang-tidy-21 -p build/wsl-clang -j "$(nproc)" -quiet $files
+          fi

@@ -1,0 +1,10 @@
+# Line endings: LF in the repository and in the working tree, on every OS.
+# This is the source of truth; the `text=auto eol=lf` rule below applies it.
+* text=auto eol=lf
+
+# Never mangle binaries.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pdf binary
