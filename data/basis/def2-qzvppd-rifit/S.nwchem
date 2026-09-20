@@ -1,0 +1,119 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVPPD-RIFIT
+# Description: def2-QZVPPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (13s,11p,10d,7f,3g,1h) -> [13s,11p,10d,7f,3g,1h]
+S    S
+    816.228                  1.0000000
+S    S
+    138.981                  1.0000000
+S    S
+     52.45                   1.0000000
+S    S
+     26.4209                 1.0000000
+S    S
+     13.7017                 1.0000000
+S    S
+      6.90973                1.0000000
+S    S
+      3.23509                1.0000000
+S    S
+      1.71319                1.0000000
+S    S
+      1.035                  1.0000000
+S    S
+      0.609319               1.0000000
+S    S
+      0.301607               1.0000000
+S    S
+      0.129721               1.0000000
+S    S
+      0.0468137              1.0000000
+S    P
+    252.772                  1.0000000
+S    P
+     78.1022                 1.0000000
+S    P
+     28.5103                 1.0000000
+S    P
+     15.672                  1.0000000
+S    P
+      7.33444                1.0000000
+S    P
+      3.78143                1.0000000
+S    P
+      1.82918                1.0000000
+S    P
+      0.884826               1.0000000
+S    P
+      0.534862               1.0000000
+S    P
+      0.264969               1.0000000
+S    P
+      0.105433               1.0000000
+S    D
+     90.3963                 1.0000000
+S    D
+     27.5466                 1.0000000
+S    D
+      9.69772                1.0000000
+S    D
+      4.94977                1.0000000
+S    D
+      2.51535                1.0000000
+S    D
+      1.30138                1.0000000
+S    D
+      0.768901               1.0000000
+S    D
+      0.374111               1.0000000
+S    D
+      0.174905               1.0000000
+S    D
+      0.0634107              1.0000000
+S    F
+     12.276131605            1.0000000
+S    F
+      5.0246237407           1.0000000
+S    F
+      2.3432991679           1.0000000
+S    F
+      1.2647947272           1.0000000
+S    F
+      0.73122191804          1.0000000
+S    F
+      0.36086017232          1.0000000
+S    F
+      0.135496               1.0000000
+S    G
+      3.4634661735           1.0000000
+S    G
+      1.1867413008           1.0000000
+S    G
+      0.57655948880          1.0000000
+S    H
+      1.0179355003           1.0000000
+END

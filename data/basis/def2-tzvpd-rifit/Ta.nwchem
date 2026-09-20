@@ -1,0 +1,100 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,9p,8d,5f,3g,2h) -> [9s,9p,8d,5f,3g,2h]
+Ta    S
+      4.60845                1.0000000
+Ta    S
+      3.21771                1.0000000
+Ta    S
+      2.08765                1.0000000
+Ta    S
+      1.53272                1.0000000
+Ta    S
+      0.596228               1.0000000
+Ta    S
+      0.373236               1.0000000
+Ta    S
+      0.149784               1.0000000
+Ta    S
+      0.0357053              1.0000000
+Ta    S
+      0.00215352             1.0000000
+Ta    P
+      6.82189                1.0000000
+Ta    P
+      3.90213                1.0000000
+Ta    P
+      2.75047                1.0000000
+Ta    P
+      1.82322                1.0000000
+Ta    P
+      0.873784               1.0000000
+Ta    P
+      0.427616               1.0000000
+Ta    P
+      0.224276               1.0000000
+Ta    P
+      0.0989356              1.0000000
+Ta    P
+      0.0779446              1.0000000
+Ta    D
+      7.52223                1.0000000
+Ta    D
+      4.40313                1.0000000
+Ta    D
+      2.29209                1.0000000
+Ta    D
+      1.19835                1.0000000
+Ta    D
+      0.643839               1.0000000
+Ta    D
+      0.235906               1.0000000
+Ta    D
+      0.117734               1.0000000
+Ta    D
+      0.074532               1.0000000
+Ta    F
+      5.11565                1.0000000
+Ta    F
+      1.92154                1.0000000
+Ta    F
+      1.01948                1.0000000
+Ta    F
+      0.497597               1.0000000
+Ta    F
+      0.187276               1.0000000
+Ta    G
+      1.39393                1.0000000
+Ta    G
+      0.557286               1.0000000
+Ta    G
+      0.223158               1.0000000
+Ta    H
+      1.08336                1.0000000
+Ta    H
+      0.552796               1.0000000
+END

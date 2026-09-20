@@ -1,0 +1,77 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-SVP
+# Description: def2-SVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,6p,5d,1f) -> [6s,3p,2d,1f]
+Os    S
+     15.286736000           -1.0647114485
+     12.700638000            1.8433193269
+Os    S
+      5.7094832504           1.0000000
+Os    S
+      1.0689228744           1.0000000
+Os    S
+      0.46783543749          1.0000000
+Os    S
+      0.13253456992          1.0000000
+Os    S
+      0.47101982911E-01      1.0000000
+Os    P
+      7.9362790000           0.33899369659
+      6.3036410000          -0.56379438345
+      1.4351579676           0.52360040577
+      0.68442749722          0.52445339821
+Os    P
+      0.28347394974          1.0000000
+Os    P
+      0.0581000              1.0000000
+Os    D
+      3.5808150000          -0.42773932262
+      3.1961650000           0.44501403992
+      1.0550226354           0.43689459722
+      0.41588406618          0.48220605798770E+00
+Os    D
+      0.14653507868          1.0000000
+Os    F
+      0.5506500              1.0000000
+END
+
+
+ECP
+Os nelec 60
+Os ul
+2       2.76707510            18.90945701
+Os S
+2      13.87575390           885.40571914
+2       6.93787690            25.96704014
+2       2.76707510           -18.90945701
+Os P
+2      10.19379260           320.08390185
+2       5.09689620            26.14876493
+2       2.76707510           -18.90945701
+Os D
+2       7.09923846           115.04484313
+2       3.54961923            13.62257457
+2       2.76707510           -18.90945701
+END

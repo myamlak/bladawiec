@@ -1,0 +1,69 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-universal-JFIT
+# Description: Coulomb fitting auxiliary basis for def2 basis sets
+#        Role: jfit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2006a
+#     Weigend, Florian
+#     Accurate Coulomb-fitting basis sets for H to Rn
+#     Phys. Chem. Chem. Phys. 8, 1057 (2006)
+#     10.1039/b515623h
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (11s,5p,5d,3f,3g) -> [8s,5p,5d,2f,3g]
+La    S
+     17.6099386             -0.0360198
+     10.3587871              0.2868368
+      6.0934040             -1.2729320
+      3.5843552              3.3276739
+La    S
+      2.1084442             -3.8722091
+La    S
+      0.7368611              1.7684916
+La    S
+      0.4334477              0.4497990
+La    S
+      0.2524448              0.0822052
+La    S
+      0.1484969              0.0291853
+La    S
+      0.0873511              0.0442031
+La    S
+      0.0513830              0.0098434
+La    P
+      4.2941634              0.0118889
+La    P
+      1.5678515             -0.0340976
+La    P
+      0.5644018              0.0424354
+La    P
+      0.2014779              0.0042923
+La    P
+      0.0717230              0.0107286
+La    D
+      1.3700039              0.0051491
+La    D
+      0.7087546             -0.0049203
+La    D
+      0.3615157             -0.0068229
+La    D
+      0.1828580             -0.0113111
+La    D
+      0.0922343             -0.0036977
+La    F
+      0.9957125             -0.0092472
+      0.4731394             -0.0027479
+La    F
+      0.2234196              0.0040615
+La    G
+      1.6277423              0.0013551
+La    G
+      0.5999926              0.0123505
+La    G
+      0.2197775              0.0046045
+END

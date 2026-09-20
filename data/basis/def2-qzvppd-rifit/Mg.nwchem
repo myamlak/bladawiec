@@ -1,0 +1,101 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVPPD-RIFIT
+# Description: def2-QZVPPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,11p,8d,6f,3g) -> [12s,11p,8d,6f,3g]
+Mg    S
+    847.92                   1.0000000
+Mg    S
+    190.646                  1.0000000
+Mg    S
+     62.4785                 1.0000000
+Mg    S
+     23.5105                 1.0000000
+Mg    S
+     11.3349                 1.0000000
+Mg    S
+      5.88574                1.0000000
+Mg    S
+      2.89591                1.0000000
+Mg    S
+      1.22478                1.0000000
+Mg    S
+      0.677426               1.0000000
+Mg    S
+      0.255638               1.0000000
+Mg    S
+      0.115581               1.0000000
+Mg    S
+      0.0665549              1.0000000
+Mg    P
+    217.000                  1.0000000
+Mg    P
+     45.651                  1.0000000
+Mg    P
+     28.9324                 1.0000000
+Mg    P
+     11.4273                 1.0000000
+Mg    P
+      6.8076                 1.0000000
+Mg    P
+      2.85786                1.0000000
+Mg    P
+      1.39901                1.0000000
+Mg    P
+      0.44558                1.0000000
+Mg    P
+      0.27134                1.0000000
+Mg    P
+      0.120765               1.0000000
+Mg    P
+      0.0704855              1.0000000
+Mg    D
+     32.1791                 1.0000000
+Mg    D
+     10.7925                 1.0000000
+Mg    D
+      6.76157                1.0000000
+Mg    D
+      3.64327                1.0000000
+Mg    D
+      1.419                  1.0000000
+Mg    D
+      0.745457               1.0000000
+Mg    D
+      0.270482               1.0000000
+Mg    D
+      0.106304               1.0000000
+Mg    F
+     15.2848                 1.0000000
+Mg    F
+      8.05694                1.0000000
+Mg    F
+      3.66197                1.0000000
+Mg    F
+      1.54283                1.0000000
+Mg    F
+      0.240775               1.0000000
+Mg    F
+      0.117844               1.0000000
+Mg    G
+     13.0351                 1.0000000
+Mg    G
+      7.15191                1.0000000
+Mg    G
+      0.226548               1.0000000
+END

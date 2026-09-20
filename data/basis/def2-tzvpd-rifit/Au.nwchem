@@ -1,0 +1,100 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,9p,8d,5f,3g,2h) -> [9s,9p,8d,5f,3g,2h]
+Au    S
+      7.74842                1.0000000
+Au    S
+      4.95736                1.0000000
+Au    S
+      3.67619                1.0000000
+Au    S
+      2.4762                 1.0000000
+Au    S
+      1.05675                1.0000000
+Au    S
+      0.602601               1.0000000
+Au    S
+      0.238864               1.0000000
+Au    S
+      0.11251                1.0000000
+Au    S
+      0.00529791             1.0000000
+Au    P
+     13.0149                 1.0000000
+Au    P
+      7.19476                1.0000000
+Au    P
+      4.6463                 1.0000000
+Au    P
+      3.1781                 1.0000000
+Au    P
+      1.49582                1.0000000
+Au    P
+      0.796388               1.0000000
+Au    P
+      0.487636               1.0000000
+Au    P
+      0.147953               1.0000000
+Au    P
+      0.0876336              1.0000000
+Au    D
+     11.0273                 1.0000000
+Au    D
+      5.13247                1.0000000
+Au    D
+      2.95631                1.0000000
+Au    D
+      2.0701                 1.0000000
+Au    D
+      0.822994               1.0000000
+Au    D
+      0.43396                1.0000000
+Au    D
+      0.19472                1.0000000
+Au    D
+      0.0070318              1.0000000
+Au    F
+      6.48366                1.0000000
+Au    F
+      2.98367                1.0000000
+Au    F
+      1.38703                1.0000000
+Au    F
+      0.77996                1.0000000
+Au    F
+      0.240845               1.0000000
+Au    G
+      2.22136                1.0000000
+Au    G
+      0.906145               1.0000000
+Au    G
+      0.35472                1.0000000
+Au    H
+      2.12252                1.0000000
+Au    H
+      1.14864                1.0000000
+END

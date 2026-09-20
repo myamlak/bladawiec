@@ -1,0 +1,82 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (8s,7p,6d,5f,3g,2h) -> [8s,7p,6d,5f,3g,2h]
+Zr    S
+      4.54991                1.0000000
+Zr    S
+      2.72892                1.0000000
+Zr    S
+      1.80907                1.0000000
+Zr    S
+      1.15953                1.0000000
+Zr    S
+      0.3821                 1.0000000
+Zr    S
+      0.183478               1.0000000
+Zr    S
+      0.110128               1.0000000
+Zr    S
+      0.0519723              1.0000000
+Zr    P
+      5.39429                1.0000000
+Zr    P
+      3.83483                1.0000000
+Zr    P
+      1.76586                1.0000000
+Zr    P
+      0.767056               1.0000000
+Zr    P
+      0.41668                1.0000000
+Zr    P
+      0.158543               1.0000000
+Zr    P
+      0.0782521              1.0000000
+Zr    D
+      3.45364                1.0000000
+Zr    D
+      2.09876                1.0000000
+Zr    D
+      0.892374               1.0000000
+Zr    D
+      0.606184               1.0000000
+Zr    D
+      0.218676               1.0000000
+Zr    D
+      0.110855               1.0000000
+Zr    F
+      1.59717                1.0000000
+Zr    F
+      0.880373               1.0000000
+Zr    F
+      0.409974               1.0000000
+Zr    F
+      0.21936                1.0000000
+Zr    F
+      0.101689               1.0000000
+Zr    G
+      1.26544                1.0000000
+Zr    G
+      0.526026               1.0000000
+Zr    G
+      0.179667               1.0000000
+Zr    H
+      1.15269                1.0000000
+Zr    H
+      0.611054               1.0000000
+END

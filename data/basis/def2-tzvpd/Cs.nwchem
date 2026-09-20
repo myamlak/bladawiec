@@ -1,0 +1,83 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD
+# Description: def2-TZVPD
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# rappoport2010a
+#     Rappoport, Dmitrij, Furche, Filipp
+#     Property-optimized Gaussian basis sets for molecular response
+#             calculations
+#     J. Chem. Phys. 133, 134105 (2010)
+#     10.1063/1.3484283
+# leininger1996a
+#     Leininger, Thierry, Nicklass, Andreas, Küchle, Wolfgang, Stoll,
+#             Hermann, Dolg, Michael, Bergner, Andreas
+#     The accuracy of the pseudopotential approximation: non-frozen-core
+#             effects for spectroscopic constants of alkali fluorides XF (X
+#             = K, Rb, Cs)
+#     Chem. Phys. Lett. 255, 274-280 (1996)
+#     10.1016/0009-2614(96)00382-x
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,7p,3d) -> [5s,4p,3d]
+Cs    S
+      5.8778113443           0.12859994983
+      4.3631538286          -0.34632569725
+      1.8048475155           0.69930637051
+Cs    S
+      0.37485237136          1.0000000
+Cs    S
+      0.16384858778          1.0000000
+Cs    S
+      0.27230462048E-01      1.0000000
+Cs    S
+      0.11991533212E-01      1.0000000
+Cs    P
+      4.2751856154           0.45723074174E-01
+      1.9656663360          -0.25019961976
+      0.47689195212          0.55660850066
+      0.21529749588          0.58218553406
+Cs    P
+      0.91450850296E-01      1.0000000
+Cs    P
+      0.40000000000E-01      1.0000000
+Cs    P
+      0.14000000000E-01      1.0000000
+Cs    D
+      0.27941471548          0.15040680034
+Cs    D
+      0.62419809739E-01      0.36150912942
+Cs    D
+      0.15987870156E-01      1.0000000
+END
+
+
+ECP
+Cs nelec 46
+Cs ul
+2       3.1232690            -28.8843090
+Cs S
+2       4.0797500             84.5477300
+2       2.4174060             16.6541730
+2       3.1232690             28.8843090
+Cs P
+2       5.5140800            157.0490590
+2       2.1603160             26.4233070
+2       3.1232690             28.8843090
+Cs D
+2       1.8074100             13.1727530
+2       0.8581820              3.3428330
+2       3.1232690             28.8843090
+END

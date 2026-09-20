@@ -1,0 +1,84 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD
+# Description: def2-TZVPD
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,7p,5d,1f) -> [6s,4p,3d,1f]
+Tc    S
+     15.000000000           -0.19945408941
+     12.910581694            0.33689922245
+Tc    S
+      4.4493321158           1.0000000
+Tc    S
+      1.0548409451           1.0000000
+Tc    S
+      0.47909677246          1.0000000
+Tc    S
+      0.99124162989E-01      1.0000000
+Tc    S
+      0.36882799789E-01      1.0000000
+Tc    P
+     10.027138011            0.61481602710E-01
+      5.8463419741          -0.23600729385
+      1.4968345491           0.47746483995
+      0.72934632066          0.50731543496
+Tc    P
+      0.33913558879          1.0000000
+Tc    P
+      0.11000000000          1.0000000
+Tc    P
+      0.35000000000E-01      1.0000000
+Tc    D
+      5.0906268699          -0.32176405405E-01
+      2.0156178510           0.21280802536
+      0.88113887240          0.44403309175
+Tc    D
+      0.36427094833          1.0000000
+Tc    D
+      0.13678402297          1.0000000
+Tc    F
+      0.7908500              1.0000000
+END
+
+
+ECP
+Tc nelec 28
+Tc ul
+2      10.4000000            -26.56244747
+2       5.2000000             -4.58568054
+Tc S
+2      10.4223462            195.15916591
+2       5.0365160             28.09260333
+2      10.4000000             26.56244747
+2       5.2000000              4.58568054
+Tc P
+2       8.9504494            135.28456622
+2       4.8544394             21.80650430
+2      10.4000000             26.56244747
+2       5.2000000              4.58568054
+Tc D
+2       6.9456968             54.32972942
+2       3.9705849             11.15506795
+2      10.4000000             26.56244747
+2       5.2000000              4.58568054
+END

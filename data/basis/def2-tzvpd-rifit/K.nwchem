@@ -1,0 +1,94 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,9p,8d,4f) -> [12s,9p,8d,4f]
+K    S
+     81.1062                 1.0000000
+K    S
+     34.0617                 1.0000000
+K    S
+     15.1982                 1.0000000
+K    S
+      6.5134                 1.0000000
+K    S
+      2.51865                1.0000000
+K    S
+      1.33939                1.0000000
+K    S
+      0.697083               1.0000000
+K    S
+      0.375252               1.0000000
+K    S
+      0.207004               1.0000000
+K    S
+      0.12854                1.0000000
+K    S
+      0.0688732              1.0000000
+K    S
+      0.030372               1.0000000
+K    P
+     14.8293                 1.0000000
+K    P
+      6.39289                1.0000000
+K    P
+      2.18312                1.0000000
+K    P
+      1.13857                1.0000000
+K    P
+      0.684013               1.0000000
+K    P
+      0.293545               1.0000000
+K    P
+      0.154618               1.0000000
+K    P
+      0.0729032              1.0000000
+K    P
+      0.0290007              1.0000000
+K    D
+     43.4708                 1.0000000
+K    D
+      6.20042                1.0000000
+K    D
+      2.49746                1.0000000
+K    D
+      1.43492                1.0000000
+K    D
+      0.526146               1.0000000
+K    D
+      0.266427               1.0000000
+K    D
+      0.0891913              1.0000000
+K    D
+      0.0540244              1.0000000
+K    F
+      1.60585                1.0000000
+K    F
+      0.653243               1.0000000
+K    F
+      0.332511               1.0000000
+K    F
+      0.0977427              1.0000000
+END

@@ -1,0 +1,106 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC (Visual Studio 2026)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-msvc",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "QCX_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-asan",
+      "displayName": "Windows MSVC ASan (Visual Studio 2026)",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-asan",
+      "cacheVariables": {
+        "QCX_ASAN": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-cuda",
+      "displayName": "Windows MSVC + CUDA (Visual Studio 2026)",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-cuda",
+      "cacheVariables": {
+        "QCX_ENABLE_CUDA": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-a3c",
+      "displayName": "Windows MSVC (narrower local configuration)",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-a3c"
+    },
+    {
+      "name": "windows-msvc-pf",
+      "displayName": "Windows MSVC (second narrower local configuration)",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-pf"
+    },
+    {
+      "name": "wsl-gcc",
+      "displayName": "Linux GCC (CI; Debug pins integral ceiling 2, see ci.yml)",
+      "description": "Pins QCX_INTEGRALS_LMAX to 2 - 24 instantiated MD classes against the 154 the shipped ceiling of 6 builds - and that pin is the measured exception, not a leftover. At 6 this Debug preset's test step stops skipping two footprint cases that carry no fast-mode gate: measured on this tree 2026-09-20 (12 cores, g++, -j12), RiFootprint.PrintsTheEngineCreateTimeFootprintAtC24H50Def2Svp passes at 830 s in Debug against 6.25 s in Release, and Footprint.RiJkNestedExchangeReachesItsOwnLightRungOnTheCountedPreGate was still running past 1200 s against 27.6 s in Release. Skipping them costs no coverage the Release presets do not already have, and running them costs about 40 minutes of a Debug test step whose per-test cap is 2400 s. When those cases are gated or moved to the large manifest, drop the pin here and in wsl-clang and follow wsl-gcc-release. The full record is the windows-msvc Configure note in ci.yml.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wsl-gcc",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "QCX_INTEGRALS_LMAX": "2"
+      }
+    },
+    {
+      "name": "wsl-clang",
+      "displayName": "Linux Clang (CI; Debug pins integral ceiling 2, see ci.yml)",
+      "description": "Same ceiling and same reason as wsl-gcc - read that preset's description; only the compiler differs. The docs and clang-tidy jobs configure through this preset, so the pin also bounds their builds (clang-tidy must materialize every PCH before it parses, and a ceiling of 6 multiplies the class-object targets 24 to 154).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wsl-clang",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-21",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "QCX_INTEGRALS_LMAX": "2"
+      }
+    },
+    {
+      "name": "wsl-gcc-release",
+      "displayName": "Linux GCC Release (CI; shipped integral ceiling, see ci.yml)",
+      "description": "Builds the shipped integral ceiling: this preset names no QCX_INTEGRALS_LMAX, so the configure takes the 6 that integrals/CMakeLists.txt ships (154 instantiated MD classes) rather than the 24 a ceiling of 2 builds. That is the point of it - a preset that pins a smaller matrix silently builds a different program than the release does. COST, measured on this tree 2026-09-20 (12 cores, g++, no ccache, one machine): a full Release build is 9m37s here against 7m26s at a ceiling of 2, so about two minutes eleven more compile on every full build; the routine test selection is 42m40s against 42m12s, i.e. nothing. In exchange 55 routine tests stop skipping. AN EXISTING BUILD DIRECTORY KEEPS THE OLD VALUE: integrals/CMakeLists.txt sets this as a cache entry without FORCE, so a tree that already holds 2 goes on holding it - this preset no longer passing -DQCX_INTEGRALS_LMAX is not enough to change it. Delete build/wsl-gcc-release or edit its CMakeCache.txt to pick the new ceiling up rather than assume the preset moved it. The Debug presets stay at 2 for a measured reason of their own - see the windows-msvc Configure note in ci.yml.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wsl-gcc-release",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "wsl-clang-release",
+      "displayName": "Linux Clang Release (CI; shipped integral ceiling, see ci.yml)",
+      "description": "Same ceiling and same cost as wsl-gcc-release - read that preset's description; the numbers are not repeated here because a second copy is a second thing to keep true. This one names no QCX_INTEGRALS_LMAX either, so the configure takes the shipped 6.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wsl-clang-release",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-21",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows MSVC Debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows MSVC Release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    }
+  ]
+}

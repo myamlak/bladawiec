@@ -1,0 +1,4 @@
+# Python dependencies for the basis-set data pipeline (Day 8).
+# Pinned; the vendored files under data/basis/ are the committed output and
+# regeneration is offline (see tools/fetch_basis_data.py).
+basis-set-exchange==0.12

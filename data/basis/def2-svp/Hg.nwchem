@@ -1,0 +1,77 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-SVP
+# Description: def2-SVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,6p,5d,1f) -> [6s,3p,2d,1f]
+Hg    S
+     26.842049000           -0.26845096483E-01
+     10.320909000            0.81771278143
+Hg    S
+      6.3656242291           1.0000000
+Hg    S
+      1.3898932095           1.0000000
+Hg    S
+      0.63706742699          1.0000000
+Hg    S
+      0.16047725098          1.0000000
+Hg    S
+      0.56410423453E-01      1.0000000
+Hg    P
+      9.7729900000           0.21210940502
+      7.1690950000          -0.44026342153
+      1.7559567931           0.58406314464
+      0.83145670425          0.49359746203
+Hg    P
+      0.34494917659          1.0000000
+Hg    P
+      0.07000000000          1.0000000
+Hg    D
+      4.2800000000          -0.32033414305491
+      3.4800000000           0.37748470203231
+      1.2535869926           0.48342275878173
+      0.50841366863          0.43493523158359
+Hg    D
+      0.18501599388          1.0000000
+Hg    F
+      0.7956900              1.0000000
+END
+
+
+ECP
+Hg nelec 60
+Hg ul
+2       3.88579112            30.36499643
+Hg S
+2      12.98154870           275.73721174
+2       6.49077440            49.08921249
+2       3.88579112           -30.36499643
+Hg P
+2      10.53809580           241.54007398
+2       5.26904790            27.39659081
+2       3.88579112           -30.36499643
+Hg D
+2       8.10172051           127.86700761
+2       4.05086026            16.60831151
+2       3.88579112           -30.36499643
+END

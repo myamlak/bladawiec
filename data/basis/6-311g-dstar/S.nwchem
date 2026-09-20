@@ -1,0 +1,62 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# mclean1980a
+#     McLean, A. D., Chandler, G. S.
+#     Contracted Gaussian basis sets for molecular calculations. I. Second
+#             row atoms, Z=11-18
+#     J. Chem. Phys. 72, 5639-5648 (1980)
+#     10.1063/1.438980
+# francl1982a
+#     Francl, Michelle M., Pietro, William J., Hehre, Warren J., Binkley, J.
+#             Stephen, Gordon, Mark S., DeFrees, Douglas J., Pople, John A.
+#     Self-consistent molecular orbital methods. XXIII. A polarization-type
+#             basis set for second-row elements
+#     J. Chem. Phys. 77, 3654-3665 (1982)
+#     10.1063/1.444267
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (13s,9p,1d) -> [6s,5p,1d]
+S    S
+  93413.4                    0.000743
+  13961.7                    0.005793
+   3169.91                   0.029954
+    902.456                  0.119028
+    297.158                  0.368432
+    108.702                  0.577299
+S    S
+    108.702                  0.143186
+     43.1553                 0.624465
+     18.1079                 0.283366
+S    S
+      5.56009                1.000000
+S    S
+      2.13183                1.000000
+S    S
+      0.420403               1.000000
+S    S
+      0.136045               1.000000
+S    P
+    495.040                  0.008309
+    117.221                  0.064024
+     37.7749                 0.277614
+     14.0584                 0.745076
+S    P
+      5.56574                0.613712
+      2.26297                0.443818
+S    P
+      0.807994               1.000000
+S    P
+      0.277460               1.000000
+S    P
+      0.077141               1.000000
+S    D
+      0.6500000              1.0000000
+END

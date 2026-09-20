@@ -1,0 +1,49 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (5s,4p,1d) -> [5s,4p,1d]
+He    S
+     24.71889717              .26232950
+He    S
+      5.35952422              .74373221
+He    S
+      1.56023734             1.0000000
+He    S
+       .55343668             1.0000000
+He    S
+      0.331944               1.0000000
+He    P
+      6.94853275             -.26439504
+He    P
+      3.47887085             1.62594634
+He    P
+      1.23998485             1.0000000
+He    P
+      0.464581               1.0000000
+He    D
+      0.25054                1.0000000
+END

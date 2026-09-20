@@ -1,0 +1,85 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: cc-pVTZ-RIFIT
+# Description: RI Fitting basis for use with cc-pVTZ
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (10s,8p,7d,5f,2g) -> [10s,8p,7d,5f,2g]
+Na    S
+    262.945                  1.0000000
+Na    S
+     59.3272                 1.0000000
+Na    S
+     24.4106                 1.0000000
+Na    S
+     10.3153                 1.0000000
+Na    S
+      3.82467                1.0000000
+Na    S
+      1.21138                1.0000000
+Na    S
+      0.626025               1.0000000
+Na    S
+      0.231136               1.0000000
+Na    S
+      0.099616               1.0000000
+Na    S
+      0.0608538              1.0000000
+Na    P
+     45.9602                 1.0000000
+Na    P
+      5.92673                1.0000000
+Na    P
+      2.44801                1.0000000
+Na    P
+      1.25173                1.0000000
+Na    P
+      0.555056               1.0000000
+Na    P
+      0.323653               1.0000000
+Na    P
+      0.131738               1.0000000
+Na    P
+      0.0679466              1.0000000
+Na    D
+     23.7262                 1.0000000
+Na    D
+      7.20337                1.0000000
+Na    D
+      2.54853                1.0000000
+Na    D
+      0.965966               1.0000000
+Na    D
+      0.423426               1.0000000
+Na    D
+      0.250862               1.0000000
+Na    D
+      0.102838               1.0000000
+Na    F
+      3.71955                1.0000000
+Na    F
+      1.16754                1.0000000
+Na    F
+      0.529388               1.0000000
+Na    F
+      0.265125               1.0000000
+Na    F
+      0.146659               1.0000000
+Na    G
+      1.44688                1.0000000
+Na    G
+      0.514372               1.0000000
+END

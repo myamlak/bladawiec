@@ -1,0 +1,80 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-SVP
+# Description: def2-SVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,6p,5d,1f) -> [5s,3p,2d,1f]
+Rh    S
+      7.9177440000           0.14014042010165E+01
+      6.8412070000          -0.17975072656312E+01
+      2.9598400000          -0.16225754496571
+Rh    S
+      1.3166643441            .87495110714057
+Rh    S
+      0.56907152172          1.0000000
+Rh    S
+      0.10059695193          1.0000000
+Rh    S
+      0.37071460798E-01      1.0000000
+Rh    P
+      4.1360790000          -0.55183328017626
+      2.9462810000           0.61370533515352
+      1.0792431924           0.64005434538256
+      0.46611217769          0.25958050755066
+Rh    P
+      0.17453169991          1.0000000
+Rh    P
+      0.0410000              1.0000000
+Rh    D
+      6.8847131641          -0.15962387984517E-01
+      2.3837304391           0.23047555828858
+      1.0184384022           0.44075804027937
+      0.39957494644          0.39567661995894
+Rh    D
+      0.13951120264          1.0000000
+Rh    F
+      1.0949900              1.0000000
+END
+
+
+ECP
+Rh nelec 28
+Rh ul
+2      12.3100000            -30.09345572
+2       6.1600000             -5.21848192
+Rh S
+2      11.7200000            225.34775353
+2       5.8200000             32.82318898
+2      12.3100000             30.09345572
+2       6.1600000              5.21848192
+Rh P
+2      10.4200000            158.70941159
+2       5.4500000             26.44410049
+2      12.3100000             30.09345572
+2       6.1600000              5.21848192
+Rh D
+2       8.8200000             62.75862572
+2       3.8700000             10.97871947
+2      12.3100000             30.09345572
+2       6.1600000              5.21848192
+END

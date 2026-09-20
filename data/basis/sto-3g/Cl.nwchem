@@ -1,0 +1,33 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: STO-3G
+# Description: STO-3G Minimal Basis (3 functions/AO)
+#        Role: orbital
+#     Version: 1  (Data from Gaussian09)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hehre1970a
+#     Hehre, W. J., Ditchfield, R., Stewart, R. F., Pople, J. A.
+#     Self-Consistent Molecular Orbital Methods. IV. Use of Gaussian
+#             Expansions of Slater-Type Orbitals. Extension to Second-Row
+#             Molecules
+#     J. Chem. Phys. 52, 2769-2773 (1970)
+#     10.1063/1.1673374
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,6p) -> [3s,2p]
+Cl    S
+      0.6013456136E+03       0.1543289673E+00
+      0.1095358542E+03       0.5353281423E+00
+      0.2964467686E+02       0.4446345422E+00
+Cl    SP
+      0.3896041889E+02      -0.9996722919E-01       0.1559162750E+00
+      0.9053563477E+01       0.3995128261E+00       0.6076837186E+00
+      0.2944499834E+01       0.7001154689E+00       0.3919573931E+00
+Cl    SP
+      0.2129386495E+01      -0.2196203690E+00       0.1058760429E-01
+      0.5940934274E+00       0.2255954336E+00       0.5951670053E+00
+      0.2325241410E+00       0.9003984260E+00       0.4620010120E+00
+END

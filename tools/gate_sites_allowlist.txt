@@ -1,0 +1,43 @@
+# The declared OFF-LADDER gate sites - the ONLY places a convergence gate that is
+# not a rung of the ladder may live.
+#
+# Read by tools/check_gate_tolerances.py, which fails any undeclared one. The
+# LADDER is not restated here: it is read, by import, from its one home
+# (tools/bench/qcx_runner.py _PRESET_TOLERANCES), on the same one-fact-one-home
+# rule this file follows for reasons. The REASON for a declaration does not live
+# here either: it lives in the code, in the comment above the site, which the
+# checker requires to be present (25-line window) so that a declaration whose
+# reason was deleted fails too. This file is the list; the sites are the reasons.
+#
+# One line per off-ladder LEG: `path :: field :: value`.
+#
+# Adding a line is a tolerance-policy act, not a local re-pin. One ladder is the
+# ruled set, and every rung's density leg is 10^2 looser than its energy leg - so
+# an equal-legs pair (1e-10/1e-10 and its siblings) is NOT a rung, and a site
+# needing one needs that decision taken for real, not a local pin that happens
+# to cross the ladder.
+
+# RETIRED 2026-09-18 (ruled: no convergence gate at or below 1e-10; and
+# on the premise that an algorithm needs one, "no algorithm should need it").
+# The four sections that stood here - the scf gate-conversion sites
+# (direct_rhf_test, direct_uhf_test, robustness_uhf_test) and the ETS partition
+# fragment SCFs (nocv_test) - bound the 1e-10/1e-10 pair. Each is now at the
+# operating rung, kNormal (1e-8/1e-6), and needs no declaration. Their measured
+# reasons are retained in the code above each site, because they are now
+# FINDINGS rather than defences: the properties those three sites assert were
+# measured to cross the rung at the defaults on 2026-09-15, and the NOCV
+# partition pins were taken at the retired gate (~5e-6 away at the rung). Those
+# are recorded, not accommodated - the bounds and the pins were left exactly as
+# they were, per the rule that a loosened gate is not a licence to re-pin.
+
+# RETIRED 2026-09-20. The two lines that stood here declared the ALKANE CHAIN
+# pins' equal-legs pair (1e-10/1e-10), which the chain TOML wrote in
+# driver/tests/run_driver_test.cpp. The owner's 2026-09-16 ruling kept that pair
+# while the pins ran it - an off-ladder gate deliberately kept is exactly what
+# this file is for - and the pins have since moved onto the operating defaults:
+# the chain TOML now writes the kNormal rung (1e-8/1e-6), so those sites bind a
+# rung and need no declaration, and the two lines had nothing left to declare.
+# Nothing was re-pinned with the move - the bounds, references and expected
+# values stand exactly as they were - on the rule the section above records: a
+# loosened gate is not a licence to re-pin. This file declares no off-ladder
+# site today.

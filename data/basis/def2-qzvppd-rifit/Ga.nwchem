@@ -1,0 +1,153 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVPPD-RIFIT
+# Description: def2-QZVPPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (14s,13p,12d,10f,7g,5h,1i) -> [14s,13p,12d,10f,7g,5h,1i]
+Ga    S
+   3031.09                   1.0000000
+Ga    S
+    110.510                  1.0000000
+Ga    S
+     66.2182                 1.0000000
+Ga    S
+     36.9849                 1.0000000
+Ga    S
+     25.0720                 1.0000000
+Ga    S
+     12.4359                 1.0000000
+Ga    S
+      8.07429                1.0000000
+Ga    S
+      4.50939                1.0000000
+Ga    S
+      2.06172                1.0000000
+Ga    S
+      1.11531                1.0000000
+Ga    S
+      0.473319               1.0000000
+Ga    S
+      0.205945               1.0000000
+Ga    S
+      0.123757               1.0000000
+Ga    S
+      0.0719892              1.0000000
+Ga    P
+    408.894                  1.0000000
+Ga    P
+    174.895                  1.0000000
+Ga    P
+     74.2759                 1.0000000
+Ga    P
+     24.9481                 1.0000000
+Ga    P
+     15.8813                 1.0000000
+Ga    P
+      7.97727                1.0000000
+Ga    P
+      4.30281                1.0000000
+Ga    P
+      2.46857                1.0000000
+Ga    P
+      0.979258               1.0000000
+Ga    P
+      0.521755               1.0000000
+Ga    P
+      0.228523               1.0000000
+Ga    P
+      0.11695                1.0000000
+Ga    P
+      0.0770421              1.0000000
+Ga    D
+    313.380                  1.0000000
+Ga    D
+     78.7793                 1.0000000
+Ga    D
+     35.5003                 1.0000000
+Ga    D
+     16.7551                 1.0000000
+Ga    D
+      9.24276                1.0000000
+Ga    D
+      3.89728                1.0000000
+Ga    D
+      2.58461                1.0000000
+Ga    D
+      0.917919               1.0000000
+Ga    D
+      0.449028               1.0000000
+Ga    D
+      0.228078               1.0000000
+Ga    D
+      0.130518               1.0000000
+Ga    D
+      0.0804313              1.0000000
+Ga    F
+     53.9623                 1.0000000
+Ga    F
+     18.8113                 1.0000000
+Ga    F
+      9.48241                1.0000000
+Ga    F
+      4.54418                1.0000000
+Ga    F
+      2.76642                1.0000000
+Ga    F
+      1.17994                1.0000000
+Ga    F
+      0.61306                1.0000000
+Ga    F
+      0.296803               1.0000000
+Ga    F
+      0.143436               1.0000000
+Ga    F
+      0.0923027              1.0000000
+Ga    G
+     32.0272                 1.0000000
+Ga    G
+     11.2725                 1.0000000
+Ga    G
+      4.60860                1.0000000
+Ga    G
+      2.05661                1.0000000
+Ga    G
+      1.05267                1.0000000
+Ga    G
+      0.548146               1.0000000
+Ga    G
+      0.29541                1.0000000
+Ga    H
+     17.9287                 1.0000000
+Ga    H
+      9.97533                1.0000000
+Ga    H
+      4.18150                1.0000000
+Ga    H
+      1.36135                1.0000000
+Ga    H
+      0.531683               1.0000000
+Ga    I
+      1.17255                1.0000000
+END

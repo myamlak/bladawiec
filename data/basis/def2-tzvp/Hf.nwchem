@@ -1,0 +1,82 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVP
+# Description: def2-TZVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,7p,5d,1f) -> [6s,4p,3d,1f]
+Hf    S
+     24.000000000            0.19369448644
+     16.000000000           -3.5064630782
+     14.400000000            4.3082581000
+     10.304504667           -0.91045809742
+Hf    S
+      3.8426510824           1.0000000
+Hf    S
+      0.93296029049          1.0000000
+Hf    S
+      0.42615320942          1.0000000
+Hf    S
+      0.93366560195E-01      1.0000000
+Hf    S
+      0.35532895141E-01      1.0000000
+Hf    P
+     17.000000000           -0.30316491880E-01
+     11.738072097            0.10139279686
+      4.9203967161          -0.28227924657
+      1.1251726138           0.52032008501
+Hf    P
+      0.54220114055          1.0000000
+Hf    P
+      0.25659447877          1.0000000
+Hf    P
+      0.06500000000          1.0000000
+Hf    D
+      3.9820623229          -0.42446023944E-01
+      1.3077987772           0.18409232564
+      0.53272310298          0.41484423516
+Hf    D
+      0.20564954488          1.0000000
+Hf    D
+      0.73099858787E-01      1.0000000
+Hf    F
+      0.3154700              1.0000000
+END
+
+
+ECP
+Hf nelec 60
+Hf ul
+2       1.78576984            10.04672251
+Hf S
+2      14.76995900          1499.28471073
+2       7.38497940            40.28210136
+2       1.78576984           -10.04672251
+Hf P
+2       9.84948950           397.73300533
+2       4.92474450            19.31640586
+2       1.78576984           -10.04672251
+Hf D
+2       6.09675640           101.32980526
+2       3.04837820             5.87343821
+2       1.78576984           -10.04672251
+END

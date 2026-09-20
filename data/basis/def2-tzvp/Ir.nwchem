@@ -1,0 +1,82 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVP
+# Description: def2-TZVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (8s,7p,6d,1f) -> [6s,4p,3d,1f]
+Ir    S
+     30.000000000            0.30797903228
+     27.000000000           -0.46726361781
+     13.961973911            0.47161003146
+Ir    S
+      5.3956977802           1.0000000
+Ir    S
+      1.2149128721           1.0000000
+Ir    S
+      0.55885743756          1.0000000
+Ir    S
+      0.14097974313          1.0000000
+Ir    S
+      0.50021924989E-01      1.0000000
+Ir    P
+     15.902664143           -0.16290720099
+     14.415830698            0.23483212987
+      5.7597608991          -0.30305337176
+      1.5008913108           0.55512982069
+Ir    P
+      0.72348035957          1.0000000
+Ir    P
+      0.32785980328          1.0000000
+Ir    P
+      0.56000000000E-01      1.0000000
+Ir    D
+      8.6321692504           0.75000099949E-01
+      6.5898192302          -0.17326965173
+      1.5808379663           0.55065196913
+      0.71827834905          0.85273641436
+Ir    D
+      0.30571851998          1.0000000
+Ir    D
+      0.11827071879          1.0000000
+Ir    F
+      0.6100800              1.0000000
+END
+
+
+ECP
+Ir nelec 60
+Ir ul
+2       3.03407192            21.53103107
+Ir S
+2      13.65220260           732.26919978
+2       6.82610130            26.48472087
+2       3.03407192           -21.53103107
+Ir P
+2      10.27986840           299.48947357
+2       5.13993410            26.46623354
+2       3.03407192           -21.53103107
+Ir D
+2       7.34985897           124.45759451
+2       3.67492949            14.03599518
+2       3.03407192           -21.53103107
+END

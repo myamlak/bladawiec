@@ -1,0 +1,119 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVPPD-RIFIT
+# Description: def2-QZVPPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (13s,11p,10d,7f,3g,1h) -> [13s,11p,10d,7f,3g,1h]
+Si    S
+    602.823                  1.0000000
+Si    S
+     98.2115                 1.0000000
+Si    S
+     40.3073                 1.0000000
+Si    S
+     17.5636                 1.0000000
+Si    S
+      9.66097                1.0000000
+Si    S
+      4.60646                1.0000000
+Si    S
+      2.38665                1.0000000
+Si    S
+      1.23617                1.0000000
+Si    S
+      0.640279               1.0000000
+Si    S
+      0.34884                1.0000000
+Si    S
+      0.190057               1.0000000
+Si    S
+      0.0982451              1.0000000
+Si    S
+      0.064175               1.0000000
+Si    P
+    154.869                  1.0000000
+Si    P
+     62.2401                 1.0000000
+Si    P
+     20.6955                 1.0000000
+Si    P
+     11.3206                 1.0000000
+Si    P
+      4.41448                1.0000000
+Si    P
+      2.56705                1.0000000
+Si    P
+      1.00406                1.0000000
+Si    P
+      0.550577               1.0000000
+Si    P
+      0.279655               1.0000000
+Si    P
+      0.161823               1.0000000
+Si    P
+      0.077844               1.0000000
+Si    D
+     58.3159                 1.0000000
+Si    D
+     17.5216                 1.0000000
+Si    D
+      5.89371                1.0000000
+Si    D
+      3.4548                 1.0000000
+Si    D
+      1.84813                1.0000000
+Si    D
+      0.825157               1.0000000
+Si    D
+      0.470194               1.0000000
+Si    D
+      0.265297               1.0000000
+Si    D
+      0.134632               1.0000000
+Si    D
+      0.0841296              1.0000000
+Si    F
+      8.9160731813           1.0000000
+Si    F
+      3.9621389114           1.0000000
+Si    F
+      1.8790600476           1.0000000
+Si    F
+      0.70709129617          1.0000000
+Si    F
+      0.40315442038          1.0000000
+Si    F
+      0.21501555354          1.0000000
+Si    F
+      0.0915166              1.0000000
+Si    G
+      2.3109706984           1.0000000
+Si    G
+      0.70626472074          1.0000000
+Si    G
+      0.35792288122          1.0000000
+Si    H
+      0.66825252207          1.0000000
+END

@@ -1,0 +1,94 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVP
+# Description: def2-QZVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (10s,8p,6d,3f,1g) -> [7s,5p,4d,3f,1g]
+Pt    S
+      4.6667116243           1.0000000
+Pt    S
+     23.465507222            0.55150926143
+     20.657091116           -1.2690274107
+     15.725107858            1.1215145470
+      7.9297463605          -0.42250178029
+Pt    S
+      1.4202522633           1.0000000
+Pt    S
+      0.66786671541          1.0000000
+Pt    S
+      0.19745059689          1.0000000
+Pt    S
+      0.92573920368E-01      1.0000000
+Pt    S
+      0.38895936899E-01      1.0000000
+Pt    P
+     15.500000000           -0.15672718629
+     14.000000000            0.23853412989
+      6.1161212339          -0.31041379733
+      1.5715586385           0.56473525089
+Pt    P
+      0.75132510781          1.0000000
+Pt    P
+      0.33306466812          1.0000000
+Pt    P
+      0.91000000000E-01      1.0000000
+Pt    P
+      0.35000000000E-01      1.0000000
+Pt    D
+      8.3207937611           0.62945508668E-01
+      7.4207226520          -0.90271154330E-01
+      1.6570410639           0.16812340903
+Pt    D
+      0.73943569960          1.0000000
+Pt    D
+      0.30508290090          1.0000000
+Pt    D
+      0.11350435924          1.0000000
+Pt    F
+      1.6402500              1.0000000
+Pt    F
+      0.6681300              1.0000000
+Pt    F
+      0.2721500              1.0000000
+Pt    G
+      1.0162300              1.0000000
+END
+
+
+ECP
+Pt nelec 60
+Pt ul
+2       3.30956857            24.31437573
+Pt S
+2      13.42865130           579.22386092
+2       6.71432560            29.66949062
+2       3.30956857           -24.31437573
+Pt P
+2      10.36594420           280.86077422
+2       5.18297210            26.74538204
+2       3.30956857           -24.31437573
+Pt D
+2       7.60047949           120.39644429
+2       3.80023974            15.81092058
+2       3.30956857           -24.31437573
+END

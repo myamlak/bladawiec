@@ -1,0 +1,94 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVP
+# Description: def2-QZVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (10s,8p,6d,3f,1g) -> [7s,5p,4d,3f,1g]
+Ta    S
+     24.473650944            0.20537515818
+     18.721372549           -0.74477445680
+     11.500000000            3.4067771001
+     10.350000000           -2.8222400335
+Ta    S
+      3.8125414615           1.0000000
+Ta    S
+      1.0507430630           1.0000000
+Ta    S
+      0.49732275755          1.0000000
+Ta    S
+      0.15602650970          1.0000000
+Ta    S
+      0.75056442354E-01      1.0000000
+Ta    S
+      0.31632668803E-01      1.0000000
+Ta    P
+     17.000000000           -0.32577305616E-01
+     12.008186536            0.10336287365
+      5.0278760583          -0.28526521696
+      1.1937124184           0.51790141155
+Ta    P
+      0.57889707053          1.0000000
+Ta    P
+      0.27225198801          1.0000000
+Ta    P
+      0.10000000000          1.0000000
+Ta    P
+      0.41700000000E-01      1.0000000
+Ta    D
+      7.1419762952           0.88606814221E-01
+      5.7696869171          -0.17156962221
+      1.2199483941           0.53547693505
+Ta    D
+      0.52366034246          1.0000000
+Ta    D
+      0.21384808767          1.0000000
+Ta    D
+      0.80254256735E-01      1.0000000
+Ta    F
+      0.9507000              1.0000000
+Ta    F
+      0.3738600              1.0000000
+Ta    F
+      0.1470200              1.0000000
+Ta    G
+      0.4016500              1.0000000
+END
+
+
+ECP
+Ta nelec 60
+Ta ul
+2       2.01788111            12.01796094
+Ta S
+2      14.54640770          1345.88064703
+2       7.27320380            36.76680620
+2       2.01788111           -12.01796094
+Ta P
+2       9.93556529           378.42530145
+2       4.96778243            22.29309086
+2       2.01788111           -12.01796094
+Ta D
+2       6.34737691           104.88395571
+2       3.17368846             8.75584805
+2       2.01788111           -12.01796094
+END

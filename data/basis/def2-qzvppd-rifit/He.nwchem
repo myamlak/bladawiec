@@ -1,0 +1,65 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVPPD-RIFIT
+# Description: def2-QZVPPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,5p,4d,2f) -> [7s,5p,4d,2f]
+He    S
+     73.1306                 1.0000000
+He    S
+     16.2161                 1.0000000
+He    S
+      5.3589                 1.0000000
+He    S
+      2.10351                1.0000000
+He    S
+      0.800137               1.0000000
+He    S
+      0.406207               1.0000000
+He    S
+      0.241098               1.0000000
+He    P
+      8.6905135631           1.0000000
+He    P
+      2.5796767548           1.0000000
+He    P
+      1.1943303704           1.0000000
+He    P
+      0.71278867940          1.0000000
+He    P
+      0.303282               1.0000000
+He    D
+      7.2944834617           1.0000000
+He    D
+      4.3632208275           1.0000000
+He    D
+      1.7345900404           1.0000000
+He    D
+      0.363745               1.0000000
+He    F
+      4.3507069127           1.0000000
+He    F
+      2.7082979618           1.0000000
+END

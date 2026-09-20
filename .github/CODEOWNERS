@@ -1,0 +1,6 @@
+# Every path is owned by the maintainer: a pull request cannot be merged
+# until a code owner approves it, which is what makes the branch protection
+# rule `require_code_owner_reviews` mean something.  Combined with the
+# repository setting `pull_request_creation_policy = collaborators_only`,
+# only collaborators can open a pull request in the first place.
+* @myamlak

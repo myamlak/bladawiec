@@ -1,0 +1,73 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-SVP
+# Description: def2-SVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# leininger1996a
+#     Leininger, Thierry, Nicklass, Andreas, Küchle, Wolfgang, Stoll,
+#             Hermann, Dolg, Michael, Bergner, Andreas
+#     The accuracy of the pseudopotential approximation: non-frozen-core
+#             effects for spectroscopic constants of alkali fluorides XF (X
+#             = K, Rb, Cs)
+#     Chem. Phys. Lett. 255, 274-280 (1996)
+#     10.1016/0009-2614(96)00382-x
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,6p,2d) -> [5s,3p,2d]
+Rb    S
+      0.45147933555          1.0000000
+Rb    S
+      4.6687885071           0.29008526793
+      2.9442428420          -0.67740090428
+      0.58171262989          0.45712389487
+Rb    S
+      0.21604923532          1.0000000
+Rb    S
+      0.32088816526E-01      1.0000000
+Rb    S
+      0.13833878175E-01      1.0000000
+Rb    P
+      5.5234179480           0.51234729472E-01
+      3.4120149646          -0.17337025646
+      0.76899021792          0.43339683188
+      0.33088071786          0.55354332721
+Rb    P
+      0.13423268441          1.0000000
+Rb    P
+      0.20642679613E-01      1.0000000
+Rb    D
+      0.2260000              1.0000000
+Rb    D
+      0.27432280711E-01      1.0000000
+END
+
+
+ECP
+Rb nelec 28
+Rb ul
+2       3.8431140            -12.3169000
+Rb S
+2       5.0365510             89.5001980
+2       1.9708490              0.4937610
+2       3.8431140             12.3169000
+Rb P
+2       4.2583410             58.5689740
+2       1.4707090              0.4317910
+2       3.8431140             12.3169000
+Rb D
+2       3.0231270             26.2248980
+2       0.6503830              0.9628390
+2       3.8431140             12.3169000
+END

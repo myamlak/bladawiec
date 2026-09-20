@@ -1,0 +1,82 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (8s,7p,6d,5f,3g,2h) -> [8s,7p,6d,5f,3g,2h]
+Mo    S
+      5.11888                1.0000000
+Mo    S
+      2.95725                1.0000000
+Mo    S
+      2.10175                1.0000000
+Mo    S
+      1.52271                1.0000000
+Mo    S
+      0.541535               1.0000000
+Mo    S
+      0.126719               1.0000000
+Mo    S
+      0.0787201              1.0000000
+Mo    S
+      0.033598               1.0000000
+Mo    P
+      6.58828                1.0000000
+Mo    P
+      4.54307                1.0000000
+Mo    P
+      2.33993                1.0000000
+Mo    P
+      0.874106               1.0000000
+Mo    P
+      0.595268               1.0000000
+Mo    P
+      0.208116               1.0000000
+Mo    P
+      0.115995               1.0000000
+Mo    D
+      4.65153                1.0000000
+Mo    D
+      3.53491                1.0000000
+Mo    D
+      1.94791                1.0000000
+Mo    D
+      0.894625               1.0000000
+Mo    D
+      0.310216               1.0000000
+Mo    D
+      0.169455               1.0000000
+Mo    F
+      4.06402                1.0000000
+Mo    F
+      2.25719                1.0000000
+Mo    F
+      0.900914               1.0000000
+Mo    F
+      0.466816               1.0000000
+Mo    F
+      0.244131               1.0000000
+Mo    G
+      1.81435                1.0000000
+Mo    G
+      0.874127               1.0000000
+Mo    G
+      0.297721               1.0000000
+Mo    H
+      1.57414                1.0000000
+Mo    H
+      0.867584               1.0000000
+END

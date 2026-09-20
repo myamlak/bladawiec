@@ -1,0 +1,29 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 3-21G
+# Description: 3-21G Split-valence basis set
+#        Role: orbital
+#     Version: 1  (Data from Gaussian 09)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# binkley1980a
+#     Binkley, J. Stephen, Pople, John A., Hehre, Warren J.
+#     Self-consistent molecular orbital methods. 21. Small split-valence
+#             basis sets for first-row elements
+#     J. Am. Chem. Soc. 102, 939-947 (1980)
+#     10.1021/ja00523a008
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (6s,3p) -> [3s,2p]
+Be    S
+      0.7188760000E+02       0.6442630975E-01
+      0.1072890000E+02       0.3660960554E+00
+      0.2222050000E+01       0.6959341053E+00
+Be    SP
+      0.1295480000E+01      -0.4210640659E+00       0.2051319237E+00
+      0.2688810000E+00       0.1224070192E+01       0.8825276719E+00
+Be    SP
+      0.7735010000E-01       0.1000000000E+01       0.1000000000E+01
+END

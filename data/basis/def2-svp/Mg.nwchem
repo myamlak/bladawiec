@@ -1,0 +1,47 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-SVP
+# Description: def2-SVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (10s,7p,1d) -> [4s,3p,1d]
+Mg    S
+   4953.8339196             -0.57778967498E-02
+    745.18044154            -0.43124761082E-01
+    169.21604972            -0.19268216987
+     47.300672019           -0.48641439116
+     14.461336973           -0.42550894077
+Mg    S
+     24.768174789            0.87956969984E-01
+      2.4940945349          -0.55165058128
+      0.87807584533         -0.53443294833
+Mg    S
+      0.87212782497E-01      1.0000000
+Mg    S
+      0.33599293780E-01      1.0000000
+Mg    P
+     98.053010494           -0.14480564601E-01
+     22.586932277           -0.95495750787E-01
+      6.8391509842          -0.30787672651
+      2.2332843818          -0.49936292886
+      0.71606599387         -0.31503476213
+Mg    P
+      0.18914796195          1.0000000
+Mg    P
+      0.53768755187E-01      1.0000000
+Mg    D
+      0.1010000              1.0000000
+END

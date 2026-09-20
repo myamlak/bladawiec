@@ -1,0 +1,82 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (8s,7p,6d,5f,3g,2h) -> [8s,7p,6d,5f,3g,2h]
+Y    S
+      4.35593                1.0000000
+Y    S
+      2.50493                1.0000000
+Y    S
+      1.44539                1.0000000
+Y    S
+      0.935429               1.0000000
+Y    S
+      0.405199               1.0000000
+Y    S
+      0.212559               1.0000000
+Y    S
+      0.116158               1.0000000
+Y    S
+      0.0653512              1.0000000
+Y    P
+      6.19808                1.0000000
+Y    P
+      3.09637                1.0000000
+Y    P
+      1.58942                1.0000000
+Y    P
+      0.769577               1.0000000
+Y    P
+      0.298019               1.0000000
+Y    P
+      0.138694               1.0000000
+Y    P
+      0.0648089              1.0000000
+Y    D
+      3.38324                1.0000000
+Y    D
+      1.79866                1.0000000
+Y    D
+      0.841631               1.0000000
+Y    D
+      0.524037               1.0000000
+Y    D
+      0.157838               1.0000000
+Y    D
+      0.100023               1.0000000
+Y    F
+      1.43038                1.0000000
+Y    F
+      0.686477               1.0000000
+Y    F
+      0.402557               1.0000000
+Y    F
+      0.185046               1.0000000
+Y    F
+      0.0932727              1.0000000
+Y    G
+      1.09327                1.0000000
+Y    G
+      0.418476               1.0000000
+Y    G
+      0.147134               1.0000000
+Y    H
+      0.704064               1.0000000
+Y    H
+      0.359427               1.0000000
+END

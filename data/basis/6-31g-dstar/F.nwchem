@@ -1,0 +1,42 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-31G**
+# Description: 6-31G + polarization on all atoms
+#        Role: orbital
+#     Version: 1  (Data from Gaussian 09/GAMESS)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hehre1972a
+#     Hehre, W. J., Ditchfield, R., Pople, J. A.
+#     Self-Consistent Molecular Orbital Methods. XII. Further Extensions of
+#             Gaussian-Type Basis Sets for Use in Molecular Orbital Studies
+#             of Organic Molecules
+#     J. Chem. Phys. 56, 2257-2261 (1972)
+#     10.1063/1.1677527
+# hariharan1973a
+#     Hariharan, P. C., Pople, J. A.
+#     The influence of polarization functions on molecular orbital
+#             hydrogenation energies
+#     Theor. Chim. Acta 28, 213-222 (1973)
+#     10.1007/bf00533485
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (10s,4p,1d) -> [3s,2p,1d]
+F    S
+      0.7001713090E+04       0.1819616901E-02
+      0.1051366090E+04       0.1391607961E-01
+      0.2392856900E+03       0.6840532453E-01
+      0.6739744530E+02       0.2331857601E+00
+      0.2151995730E+02       0.4712674392E+00
+      0.7403101300E+01       0.3566185462E+00
+F    SP
+      0.2084795280E+02      -0.1085069751E+00       0.7162872424E-01
+      0.4808308340E+01      -0.1464516581E+00       0.3459121027E+00
+      0.1344069860E+01       0.1128688581E+01       0.7224699564E+00
+F    SP
+      0.3581513930E+00       0.1000000000E+01       0.1000000000E+01
+F    D
+      0.8000000000E+00       1.0000000
+END

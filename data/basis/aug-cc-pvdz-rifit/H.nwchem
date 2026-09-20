@@ -1,0 +1,38 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: aug-cc-pVDZ-RIFIT
+# Description: RI Fitting basis for use with aug-cc-pVDZ
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2002a
+#     Weigend, Florian, Köhn, Andreas, Hättig, Christof
+#     Efficient use of the correlation consistent basis sets in resolution
+#             of the identity MP2 calculations
+#     J. Chem. Phys. 116, 3175-3183 (2002)
+#     10.1063/1.1445115
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (4s,3p,2d) -> [4s,3p,2d]
+H    S
+      5.11588952             1.0000000
+H    S
+      1.14296528             1.0000000
+H    S
+      0.29166153             1.0000000
+H    S
+      0.11272018383          1.0000000
+H    P
+      1.91496403             1.0000000
+H    P
+      0.98640124             1.0000000
+H    P
+      0.28586021512          1.0000000
+H    D
+      1.17208347             1.0000000
+H    D
+      0.30382076276          1.0000000
+END

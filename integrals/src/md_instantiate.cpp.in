@@ -1,0 +1,16 @@
+// Generated instantiation TU - one per {L_bra, L_ket} class, filled by
+// configure_file (the @lBra@/@lKet@ placeholders - CMake variable names
+// are case-sensitive, so the placeholders match the function arguments
+// exactly). The per-class OBJECT libraries give parallel and incremental
+// compilation: one kernel-core change recompiles only the touched classes,
+// and no public header exposes the hot template surface.
+
+#include <internal/md_vrr.hpp>
+
+template qcx::Result<void> qcx::integrals::internal::ComputeEriClass<@lBra@, @lKet@>(
+    const qcx::integrals::internal::MdClassBatch&);
+
+#if QcxIntegralsF32
+template qcx::Result<void> qcx::integrals::internal::ComputeEriClassF32<@lBra@, @lKet@>(
+    const qcx::integrals::internal::MdClassBatch&);
+#endif

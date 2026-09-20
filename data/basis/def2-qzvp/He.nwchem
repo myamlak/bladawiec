@@ -1,0 +1,43 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVP
+# Description: def2-QZVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2003a
+#     Weigend, Florian, Furche, Filipp, Ahlrichs, Reinhart
+#     Gaussian basis sets of quadruple zeta valence quality for atoms H-Kr
+#     J. Chem. Phys. 119, 12753-12762 (2003)
+#     10.1063/1.1627293
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (8s,3p,2d,1f) -> [4s,3p,2d,1f]
+He    S
+   1144.6470809              0.35861578618E-03
+    171.64596667             0.27725434466E-02
+     39.066056254            0.14241892216E-01
+     11.051401989            0.55457352277E-01
+      3.5725574473           0.16170511810
+He    S
+      1.2429415962            .33177883833
+He    S
+      0.44807668730           .42014033068
+He    S
+      0.16411579128           .18652273014
+He    P
+      5.99400000             1.0000000
+He    P
+      1.74500000             1.0000000
+He    P
+      0.56000000             1.0000000
+He    D
+      4.29900000             1.0000000
+He    D
+      1.22300000             1.0000000
+He    F
+      2.68000000             1.0000000
+END

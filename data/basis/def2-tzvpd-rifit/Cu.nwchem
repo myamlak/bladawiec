@@ -1,0 +1,113 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,10p,9d,6f,5g,2h) -> [10s,9p,9d,6f,5g,2h]
+Cu    S
+     76.61888700              .22127009
+     35.84420500             1.10771089
+     17.43598000            -1.23596756
+Cu    S
+      8.79010800             1.0000000
+Cu    S
+      4.57569200             1.0000000
+Cu    S
+      2.44935700             1.0000000
+Cu    S
+      1.34224700             1.0000000
+Cu    S
+       .74938200             1.0000000
+Cu    S
+       .42407900             1.0000000
+Cu    S
+       .24196400             1.0000000
+Cu    S
+       .13843600             1.0000000
+Cu    S
+      0.0409979              1.0000000
+Cu    P
+    214.96507000             -.38582926
+     49.56055100             1.55957840
+Cu    P
+     21.13481700            -1.17913540
+Cu    P
+      5.35438120             1.89982860
+Cu    P
+      2.19793250             1.0000000
+Cu    P
+      1.36618190             1.0000000
+Cu    P
+       .60037788             1.0000000
+Cu    P
+       .33277531             1.0000000
+Cu    P
+       .14673856             1.0000000
+Cu    P
+      0.0218053              1.0000000
+Cu    D
+    101.2                    1.0000000
+Cu    D
+     27.9788                 1.0000000
+Cu    D
+      8.69836                1.0000000
+Cu    D
+      3.99789                1.0000000
+Cu    D
+      2.53176                1.0000000
+Cu    D
+      1.27116                1.0000000
+Cu    D
+      0.474687               1.0000000
+Cu    D
+      0.195979               1.0000000
+Cu    D
+      0.0890713              1.0000000
+Cu    F
+     60.9985                 1.0000000
+Cu    F
+      9.37265                1.0000000
+Cu    F
+      4.52581                1.0000000
+Cu    F
+      2.49067                1.0000000
+Cu    F
+      1.40211                1.0000000
+Cu    F
+      0.480416               1.0000000
+Cu    G
+     23.4453                 1.0000000
+Cu    G
+      7.4589                 1.0000000
+Cu    G
+      3.45143                1.0000000
+Cu    G
+      1.43368                1.0000000
+Cu    G
+      0.621348               1.0000000
+Cu    H
+      7.85186                1.0000000
+Cu    H
+      3.52638                1.0000000
+END

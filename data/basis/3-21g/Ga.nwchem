@@ -1,0 +1,42 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 3-21G
+# Description: 3-21G Split-valence basis set
+#        Role: orbital
+#     Version: 1  (Data from Gaussian 09)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# dobbs1986a
+#     Dobbs, K. D., Hehre, W. J.
+#     Molecular orbital theory of the properties of inorganic and
+#             organometallic compounds 4. Extended basis sets for third-and
+#             fourth-row, main-group elements
+#     J. Comput. Chem. 7, 359-378 (1986)
+#     10.1002/jcc.540070313
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,9p,3d) -> [5s,4p,1d]
+Ga    S
+      0.4751897900E+04       0.6283960439E-01
+      0.7189205400E+03       0.3736112261E+00
+      0.1574459200E+03       0.6843626478E+00
+Ga    SP
+      0.2095834380E+03      -0.1115161570E+00       0.1442658399E+00
+      0.4569171330E+02       0.9269636382E-01       0.5731775198E+00
+      0.1413296880E+02       0.9622870572E+00       0.4490857768E+00
+Ga    SP
+      0.1459953900E+02       0.2910292410E+00       0.2656185960E-01
+      0.4860842130E+01      -0.3231875870E+00       0.4833136630E+00
+      0.1549110700E+01      -0.8643910510E+00       0.5924303820E+00
+Ga    SP
+      0.1267942770E+01      -0.2851306292E+00       0.3018346401E-01
+      0.1883995380E+00       0.1128022057E+01       0.9884658284E+00
+Ga    SP
+      0.5723675570E-01       0.1000000000E+01       0.1000000000E+01
+Ga    D
+      0.2129253000E+02       0.1619895026E+00
+      0.5393166200E+01       0.5116739083E+00
+      0.1333882800E+01       0.5898732096E+00
+END

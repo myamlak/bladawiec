@@ -1,0 +1,78 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVP
+# Description: def2-TZVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# leininger1996a
+#     Leininger, Thierry, Nicklass, Andreas, Küchle, Wolfgang, Stoll,
+#             Hermann, Dolg, Michael, Bergner, Andreas
+#     The accuracy of the pseudopotential approximation: non-frozen-core
+#             effects for spectroscopic constants of alkali fluorides XF (X
+#             = K, Rb, Cs)
+#     Chem. Phys. Lett. 255, 274-280 (1996)
+#     10.1016/0009-2614(96)00382-x
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,7p,3d) -> [6s,4p,3d]
+Rb    S
+      7.4744618040           0.26997866363
+      6.7296180594          -0.42629251814
+Rb    S
+      2.7816640004           1.0000000
+Rb    S
+      0.53452175148          1.0000000
+Rb    S
+      0.22368793034          1.0000000
+Rb    S
+      0.32410407052E-01      1.0000000
+Rb    S
+      0.14171047424E-01      1.0000000
+Rb    P
+      5.6720643194           0.48114224135E-01
+      3.3320183956          -0.18485131426
+      0.80150054910          0.42811864954
+      0.36302220227          0.58673165411
+Rb    P
+      0.15733924392          1.0000000
+Rb    P
+      0.40000000000E-01      1.0000000
+Rb    P
+      0.16000000000E-01      1.0000000
+Rb    D
+      0.25907866956          0.76806746340E-01
+Rb    D
+      0.42507438045E-01      0.37846160487
+Rb    D
+      0.11909276840E-01      1.0000000
+END
+
+
+ECP
+Rb nelec 28
+Rb ul
+2       3.8431140            -12.3169000
+Rb S
+2       5.0365510             89.5001980
+2       1.9708490              0.4937610
+2       3.8431140             12.3169000
+Rb P
+2       4.2583410             58.5689740
+2       1.4707090              0.4317910
+2       3.8431140             12.3169000
+Rb D
+2       3.0231270             26.2248980
+2       0.6503830              0.9628390
+2       3.8431140             12.3169000
+END

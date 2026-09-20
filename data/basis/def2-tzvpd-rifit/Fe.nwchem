@@ -1,0 +1,113 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,10p,9d,6f,5g,2h) -> [10s,9p,9d,6f,5g,2h]
+Fe    S
+    103.85349100             -.37210225
+     45.27861300             1.19914003
+     20.56439300             -.16381019
+Fe    S
+      9.69677400             1.0000000
+Fe    S
+      4.72897700             1.0000000
+Fe    S
+      2.37510000             1.0000000
+Fe    S
+      1.22274400             1.0000000
+Fe    S
+       .64199200             1.0000000
+Fe    S
+       .34192300             1.0000000
+Fe    S
+       .18369300             1.0000000
+Fe    S
+       .09897400             1.0000000
+Fe    S
+      0.041384               1.0000000
+Fe    P
+    154.88878755             -.45001013
+     43.57111900             1.54999995
+Fe    P
+     15.47321300            -1.21908267
+Fe    P
+      4.07017983             2.05074008
+Fe    P
+      1.54905689             1.0000000
+Fe    P
+       .92053237             1.0000000
+Fe    P
+       .46359660             1.0000000
+Fe    P
+       .24240288             1.0000000
+Fe    P
+       .10006571             1.0000000
+Fe    P
+      0.0368405              1.0000000
+Fe    D
+     78.8966                 1.0000000
+Fe    D
+     20.7589                 1.0000000
+Fe    D
+      5.95588                1.0000000
+Fe    D
+      3.02799                1.0000000
+Fe    D
+      1.7075                 1.0000000
+Fe    D
+      0.752153               1.0000000
+Fe    D
+      0.401439               1.0000000
+Fe    D
+      0.1501                 1.0000000
+Fe    D
+      0.0897688              1.0000000
+Fe    F
+     42.6025                 1.0000000
+Fe    F
+      8.89864                1.0000000
+Fe    F
+      4.63361                1.0000000
+Fe    F
+      2.15322                1.0000000
+Fe    F
+      1.14316                1.0000000
+Fe    F
+      0.433484               1.0000000
+Fe    G
+     13.6412                 1.0000000
+Fe    G
+      4.34844                1.0000000
+Fe    G
+      2.17762                1.0000000
+Fe    G
+      0.805605               1.0000000
+Fe    G
+      0.359993               1.0000000
+Fe    H
+      5.1185                 1.0000000
+Fe    H
+      2.4715                 1.0000000
+END

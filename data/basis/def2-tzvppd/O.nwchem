@@ -1,0 +1,64 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPPD
+# Description: def2-TZVPPD
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# rappoport2010a
+#     Rappoport, Dmitrij, Furche, Filipp
+#     Property-optimized Gaussian basis sets for molecular response
+#             calculations
+#     J. Chem. Phys. 133, 134105 (2010)
+#     10.1063/1.3484283
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,7p,3d,1f) -> [6s,4p,3d,1f]
+O    S
+  27032.3826310              0.21726302465E-03
+   4052.3871392              0.16838662199E-02
+    922.32722710             0.87395616265E-02
+    261.24070989             0.35239968808E-01
+     85.354641351            0.11153519115
+     31.035035245            0.25588953961
+O    S
+     12.260860728            0.39768730901
+      4.9987076005           0.24627849430
+O    S
+      1.1703108158           1.0000000
+O    S
+      0.46474740994          1.0000000
+O    S
+      0.18504536357          1.0000000
+O    S
+      0.70288026270E-01      1.0000000
+O    P
+     63.274954801            0.60685103418E-02
+     14.627049379            0.41912575824E-01
+      4.4501223456           0.16153841088
+      1.5275799647           0.35706951311
+O    P
+      0.52935117943           .44794207502
+O    P
+      0.17478421270           .24446069663
+O    P
+      0.51112745706E-01      1.0000000
+O    D
+      2.31400000             1.0000000
+O    D
+      0.64500000             1.0000000
+O    D
+      0.14696477366          1.0000000
+O    F
+      1.42800000             1.0000000
+END

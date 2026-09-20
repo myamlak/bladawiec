@@ -1,0 +1,50 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-31G**
+# Description: 6-31G + polarization on all atoms
+#        Role: orbital
+#     Version: 1  (Data from Gaussian 09/GAMESS)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# gordon1982a
+#     Gordon, Mark S., Binkley, J. Stephen, Pople, John A., Pietro, William
+#             J., Hehre, Warren J.
+#     Self-consistent molecular-orbital methods. 22. Small split-valence
+#             basis sets for second-row elements
+#     J. Am. Chem. Soc. 104, 2797-2803 (1982)
+#     10.1021/ja00374a017
+# francl1982a
+#     Francl, Michelle M., Pietro, William J., Hehre, Warren J., Binkley, J.
+#             Stephen, Gordon, Mark S., DeFrees, Douglas J., Pople, John A.
+#     Self-consistent molecular orbital methods. XXIII. A polarization-type
+#             basis set for second-row elements
+#     J. Chem. Phys. 77, 3654-3665 (1982)
+#     10.1063/1.444267
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (16s,10p,1d) -> [4s,3p,1d]
+Mg    S
+      0.1172280000E+05       0.1977829317E-02
+      0.1759930000E+04       0.1511399478E-01
+      0.4008460000E+03       0.7391077448E-01
+      0.1128070000E+03       0.2491909140E+00
+      0.3599970000E+02       0.4879278316E+00
+      0.1218280000E+02       0.3196618896E+00
+Mg    SP
+      0.1891800000E+03      -0.3237170471E-02       0.4928129921E-02
+      0.4521190000E+02      -0.4100790597E-01       0.3498879944E-01
+      0.1435630000E+02      -0.1126000164E+00       0.1407249977E+00
+      0.5138860000E+01       0.1486330216E+00       0.3336419947E+00
+      0.1906520000E+01       0.6164970898E+00       0.4449399929E+00
+      0.7058870000E+00       0.3648290531E+00       0.2692539957E+00
+Mg    SP
+      0.9293400000E+00      -0.2122908985E+00      -0.2241918123E-01
+      0.2690350000E+00      -0.1079854570E+00       0.1922708390E+00
+      0.1173790000E+00       0.1175844977E+01       0.8461802916E+00
+Mg    SP
+      0.4210610000E-01       0.1000000000E+01       0.1000000000E+01
+Mg    D
+      0.1750000000E+00       1.0000000
+END

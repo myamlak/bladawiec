@@ -1,0 +1,62 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-universal-JFIT
+# Description: Coulomb fitting auxiliary basis for def2 basis sets
+#        Role: jfit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2006a
+#     Weigend, Florian
+#     Accurate Coulomb-fitting basis sets for H to Rn
+#     Phys. Chem. Chem. Phys. 8, 1057 (2006)
+#     10.1039/b515623h
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (11s,5p,5d,3f,1g) -> [8s,4p,4d,1f,1g]
+Rb    S
+      1.7753272             -0.7055656
+Rb    S
+     14.8277116              0.0608401
+      8.7221830             -0.4741652
+      5.1306958              1.5852121
+      3.0180562             -1.8427056
+Rb    S
+      1.0443101              1.0825966
+Rb    S
+      0.6143000              0.9039138
+Rb    S
+      0.3613529              0.2340875
+Rb    S
+      0.0735504              0.0190446
+Rb    S
+      0.0432649             -0.0010159
+Rb    S
+      0.0254499              0.0007439
+Rb    P
+      3.0726016              0.0090140
+      1.1369353             -0.0358530
+Rb    P
+      0.4569368              0.0387502
+Rb    P
+      0.1936542              0.0104052
+Rb    P
+      0.0835914             -0.0155420
+Rb    D
+      1.3411819              0.0009034
+      0.4379095             -0.0071483
+Rb    D
+      0.1567271              0.0054534
+Rb    D
+      0.0595258              0.0020127
+Rb    D
+      0.0230791             -0.0000857
+Rb    F
+      0.8445587             -0.0026174
+      0.3153454             -0.0002409
+      0.1184513              0.0017392
+Rb    G
+      0.1808175             -0.0005805
+END

@@ -1,0 +1,85 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVP
+# Description: def2-QZVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# leininger1996a
+#     Leininger, Thierry, Nicklass, Andreas, Küchle, Wolfgang, Stoll,
+#             Hermann, Dolg, Michael, Bergner, Andreas
+#     The accuracy of the pseudopotential approximation: non-frozen-core
+#             effects for spectroscopic constants of alkali fluorides XF (X
+#             = K, Rb, Cs)
+#     Chem. Phys. Lett. 255, 274-280 (1996)
+#     10.1016/0009-2614(96)00382-x
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (8s,7p,5d,1f) -> [6s,5p,4d,1f]
+Cs    S
+      5.8684829520           0.12906631816
+      4.3741038860          -0.34380446158
+      1.7951201473           0.69937346606
+Cs    S
+      0.37816941125          1.0000000
+Cs    S
+      0.16624693130          1.0000000
+Cs    S
+      0.27763176052E-01      1.0000000
+Cs    S
+      0.16113005842E-01      1.0000000
+Cs    S
+      0.10996108743E-01      1.0000000
+Cs    P
+      4.2749775718           0.45595316685E-01
+      1.9639316240          -0.25031125651
+      0.47666322385          0.55660114378
+Cs    P
+      0.21736718772          1.0000000
+Cs    P
+      0.97276293828E-01      1.0000000
+Cs    P
+      0.26770518041E-01      1.0000000
+Cs    P
+      0.10845412222E-01      1.0000000
+Cs    D
+      2.0091044335          -0.34453182058E-02
+      0.35778351451          0.22686596025
+Cs    D
+      0.11070568254          0.47180885981
+Cs    D
+      0.33216214821E-01      1.0000000
+Cs    D
+      0.11409380652E-01      1.0000000
+Cs    F
+      0.5877700              1.0000000
+END
+
+
+ECP
+Cs nelec 46
+Cs ul
+2       3.1232690            -28.8843090
+Cs S
+2       4.0797500             84.5477300
+2       2.4174060             16.6541730
+2       3.1232690             28.8843090
+Cs P
+2       5.5140800            157.0490590
+2       2.1603160             26.4233070
+2       3.1232690             28.8843090
+Cs D
+2       1.8074100             13.1727530
+2       0.8581820              3.3428330
+2       3.1232690             28.8843090
+END

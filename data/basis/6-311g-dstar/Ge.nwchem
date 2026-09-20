@@ -1,0 +1,73 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# curtiss1995a
+#     Curtiss, Larry A., McGrath, Mark P., Blaudeau, Jean-Philippe, Davis,
+#             Nancy E., Binning, Robert C., Radom, Leo
+#     Extension of Gaussian-2 theory to molecules containing third-row atoms
+#             Ga-Kr
+#     J. Chem. Phys. 103, 6104-6113 (1995)
+#     10.1063/1.470438
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (15s,13p,6d) -> [8s,7p,3d]
+Ge    S
+ 357500.0                    0.00083898
+  53670.00                   0.00626350
+  12300.00                   0.03203600
+   3512.000                  0.12751000
+   1161.000                  0.39165000
+    428.0000                 0.54528000
+Ge    S
+    428.0000                 0.18160
+    170.0000                 0.62248
+     72.06000                0.24872
+Ge    S
+     26.69                   1.000000
+Ge    S
+     11.50                   1.000000
+Ge    S
+      3.742                  1.000000
+Ge    S
+      1.499                  1.000000
+Ge    S
+      0.2292                 1.000000
+Ge    S
+      0.08675                1.000000
+Ge    P
+   2345.0                    0.022514
+    554.20                   0.18335
+    177.30                   0.86003
+Ge    P
+     66.130                  0.34306
+     26.900                  0.50652
+     11.260                  0.26141
+Ge    P
+     11.26                   0.067246
+      6.116                  0.37238
+      2.819                  0.61763
+Ge    P
+      1.211000               1.000000
+Ge    P
+      0.356800               1.000000
+Ge    P
+      0.162100               1.000000
+Ge    P
+      0.060840               1.000000
+Ge    D
+     74.84                   0.030390
+     21.23                   0.173190
+      7.297                  0.440900
+      2.549                  0.565320
+Ge    D
+      0.816500               1.000000
+Ge    D
+      0.228000               1.000000
+END

@@ -1,0 +1,203 @@
+name: CI Large
+
+# THE `large` CATEGORY LANE: the one leg in CI that is not on the per-push path.
+# Everything else runs on every push in ci.yml; this file exists because this
+# category must not. The long tests are hours of runtime whose value is the
+# cases a routine run cannot afford, so running them on every push would spend
+# that on every commit while the routine legs are what give fast feedback. The
+# cadence here is release tags (`v*`) and manual dispatch, and nothing else.
+#
+# WHY A SEPARATE FILE RATHER THAN A CONDITIONAL JOB IN ci.yml. The trigger is
+# what differs, not the job. Giving this category its own workflow gives it a
+# tag-and-dispatch trigger without giving ci.yml's trigger set to every other
+# leg: ci.yml runs on pushes to main, on pull requests and on dispatch, and
+# adding `v*` tags there would re-run its whole matrix on every release tag.
+#
+# The job's own note below carries the covering set, the reasons behind it, and
+# the measured cost.
+#
+# WHY THERE IS NO `paths:` FILTER ON THIS FILE. A path filter is only ever
+# evaluated for a diff-bearing event (branch push / pull request): GitHub does
+# not evaluate `paths` for tag pushes, and workflow_dispatch carries no diff at
+# all. This workflow's only two triggers are those, so there is nothing for a
+# filter to act on. Adding one here would be a decoration that looks like an
+# optimization and is not, which is worse than its absence.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  # Keyed on the ref, like the other workflows: each release tag keeps its own
+  # group, so tagging v1.0.1 does not cancel the v1.0.0 run, and a manual
+  # re-fire from the Actions UI supersedes a still-running run on that ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # THE `large` CATEGORY. The long tests are on-demand runs rather than per-push
+  # ones: they are a multi-hour selection whose value is the cases a routine run
+  # cannot afford, so they belong on a release-tag-and-manual cadence and not on
+  # the path every push pays for. Three clauses of that decision are visible
+  # below: Release configurations only, the gate turned ON in this job and
+  # nowhere else in CI, and each line's -j taken from the runner it landed on
+  # rather than fixed.
+  #
+  # WHY IT IS ITS OWN WORKFLOW RATHER THAN A CONDITIONAL JOB IN ci.yml. The
+  # trigger is what differs, not the job: bolting a multi-hour sweep onto a leg
+  # that runs on every push would make that leg's name a lie about what it
+  # does, and adding the `v*` tag trigger to ci.yml would re-run its whole
+  # matrix on every release tag.
+  #
+  # THE COVERING SET: x86-64 RELEASE LINES ONLY, one per system, each line's
+  # `system`/`arch` pair unique - Windows/x64 and Linux/x64. The job NAME
+  # carries each line's pair, so "covered somewhere" is checkable from the run
+  # list instead of assumed. The set is the design: a third line would only
+  # repeat coverage these two already have.
+  #
+  # ARM64 IS NOT IN THE SET, and that is the rule the set is built around: the
+  # long tests are the hardware-heaviest thing CI runs, arm64 runners are slower
+  # per core than the x86 ones, and the test harness is not reliable there under
+  # concurrency - so this category does not run on an arm64 runner at all. That
+  # is why there is no macOS line here: `macos-latest` is Apple Silicon, and a
+  # macOS line would have been exactly the arm64 line this job must not have.
+  #
+  # THE REMOVAL COSTS NO COVERAGE. The set is about which systems THIS job
+  # touches, not about which systems CI touches: macOS/arm64, macOS/x64,
+  # Linux/aarch64 and Windows/aarch64 are all still exercised by the routine
+  # per-push legs in ci.yml - the `macos` job's two lines, and the `linux-arm64`
+  # and `windows-arm64` jobs - which is where a platform's build and its routine
+  # tests belong. No system's only leg was here, so none was left uncovered.
+  #
+  # THE COST. Measured locally on the Linux line's configuration: ~3.2 h of a
+  # 3.59 h Release leg (GCC Release, one machine, 2026-09-18). A hosted runner
+  # is slower and has fewer cores than the development machine, so the wall
+  # clock is bounded by the longest single case rather than by -j. -j is still
+  # the right call - the category is a bag of independent tests, the count each
+  # line asks for is its runner's own, and the cap-family cases carry RUN_SERIAL
+  # so they never overlap anything - and timeout-minutes is stated rather than
+  # left at the 360 default: this job is slow on purpose, and a silent platform
+  # timeout is a red leg nobody can read.
+  #
+  # THIS IS THE ONLY PLACE IN CI THAT SETS QCX_ENABLE_LARGE_TESTS. The option is
+  # default-OFF and gates target REGISTRATION, so the category does not exist in
+  # any per-push configuration - a routine run cannot fail open into it, which
+  # is the whole point of the mechanism (see the root CMakeLists' block for the
+  # reasoning).
+  # ---------------------------------------------------------------------------
+  large-tests:
+    name: large ${{ matrix.system }}/${{ matrix.arch }} (the long-test category)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The covering set, one line per system, each with the architecture it
+          # carries. See the job note above for why these two lines and not a
+          # grid, and why neither is an arm64 line. There is no `jobs:` key:
+          # each line's -j comes from the runner itself, on the Build and Test
+          # steps below.
+          - system: windows
+            arch: x64
+            runner: windows-latest
+            build_dir: build/windows-large
+          - system: linux
+            arch: x64
+            runner: ubuntu-latest
+            build_dir: build/wsl-gcc-release
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      # One toolchain step per system rather than one step with a conditional
+      # command: the two package managers have nothing in common, and a step
+      # named for its system is the one that shows up red when it breaks.
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache libboost-dev libboost-graph-dev libhdf5-dev
+      - name: Restore ccache (Linux)
+        if: runner.os == 'Linux'
+        # Same ccache-gcc- prefix as the gcc legs in ci.yml: ccache keys on the
+        # compile flags internally, so one cache serves all of them. Without it
+        # this line pays a cold Release build before it runs a single test.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-gcc-${{ github.sha }}
+          restore-keys: |
+            ccache-gcc-
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+        if: runner.os == 'Windows'
+      - name: Restore vcpkg tree (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed\x64-windows
+            C:\vcpkg\packages
+          key: vcpkg-classic-x64-windows-v1-${{ hashFiles('.github/workflows/ci.yml', '.github/workflows/ci-windows-release.yml') }}
+      - name: Install Boost.Graph (Windows)
+        if: runner.os == 'Windows'
+        run: vcpkg install boost-graph:x64-windows
+      # The gate is turned ON here and nowhere else (see the job note).
+      #
+      # The Linux line keeps the wsl-gcc-release preset: that is the geometry
+      # the measured cost above was taken under and the configuration ci.yml's
+      # per-push Release leg builds. The Windows line configures bare, the way
+      # its per-push leg does, and like that leg it names no
+      # QCX_INTEGRALS_LMAX - the preset and the bare configure both take the
+      # shipped default, so neither line builds a narrower class matrix than
+      # the release does.
+      - name: Configure (large targets registered)
+        if: runner.os == 'Linux'
+        run: cmake --preset wsl-gcc-release -DQCX_ENABLE_LARGE_TESTS=ON
+      - name: Configure (large targets registered)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build/windows-large -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_ENABLE_IO=OFF -DQCX_ENABLE_LARGE_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+      # -j is the runner's own processor count on both lines, in the form each
+      # system provides it, and never a fixed number: this job's cost is
+      # measured in hours, so a count that under-uses a bigger runner (or
+      # oversubscribes a smaller one) is the difference between a leg that
+      # finishes and one that is cut off by its timeout.
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build ${{ matrix.build_dir }} -j"$(nproc)"
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build ${{ matrix.build_dir }} -j $env:NUMBER_OF_PROCESSORS
+      - name: ccache stats
+        if: runner.os == 'Linux'
+        run: ccache -s
+      # Assert the gate actually did something, before spending hours on
+      # the selection. A default-OFF option that silently stopped being read
+      # would make this job a green no-op - it would run zero tests and report
+      # success - which is the one failure mode a coverage lane must not have.
+      - name: Assert the category is registered (not an empty selection)
+        # bash on both lines: the check is one pipeline, and a per-shell
+        # copy of it would be a second thing to keep correct.
+        shell: bash
+        run: |
+          n=$(ctest --test-dir ${{ matrix.build_dir }} -N -L large 2>/dev/null \
+              | grep -c '^[[:space:]]*Test #[0-9]')
+          echo "large category on ${{ matrix.system }}/${{ matrix.arch }}: $n test(s)"
+          if [ -z "$n" ] || [ "$n" -lt 10 ]; then
+            echo "QCX_ENABLE_LARGE_TESTS=ON produced $n large tests; the category is"
+            echo "expected to hold 19. Either the option is no longer read or the"
+            echo "manifests were dropped - fix that instead of removing this check."
+            exit 1
+          fi
+      # --output-on-failure: a red case must carry its own evidence, because
+      # nobody is watching this job in real time.
+      - name: The large category (Linux)
+        if: runner.os == 'Linux'
+        run: ctest --test-dir ${{ matrix.build_dir }} -L large -j"$(nproc)" --output-on-failure
+      - name: The large category (Windows)
+        if: runner.os == 'Windows'
+        run: ctest --test-dir ${{ matrix.build_dir }} -L large -j $env:NUMBER_OF_PROCESSORS --output-on-failure
+

@@ -1,0 +1,64 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPPD
+# Description: def2-TZVPPD
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# rappoport2010a
+#     Rappoport, Dmitrij, Furche, Filipp
+#     Property-optimized Gaussian basis sets for molecular response
+#             calculations
+#     J. Chem. Phys. 133, 134105 (2010)
+#     10.1063/1.3484283
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,7p,3d,1f) -> [6s,4p,3d,1f]
+Ne    S
+  45069.4640220              0.21687155182E-03
+   6755.9768656              0.16812736757E-02
+   1537.6502864              0.87356062782E-02
+    435.51697667             0.35361266922E-01
+    142.28655638             0.11321521454
+     51.692153804            0.26654653104
+Ne    S
+     20.315870490            0.39631959951
+      8.2021942646           0.25582811251
+Ne    S
+      1.9681276278           1.0000000
+Ne    S
+      0.77904756001          1.0000000
+Ne    S
+      0.30229502043          1.0000000
+Ne    S
+      0.11246533684          1.0000000
+Ne    P
+     99.782996032            0.65569234163E-02
+     23.176124101            0.45888009138E-01
+      7.1163945872           0.17331287812
+      2.4418711435           0.36475267512
+Ne    P
+      0.83389605766           .43831075171
+Ne    P
+      0.26607311301           .24160029835
+Ne    P
+      0.71067552401E-01      1.0000000
+Ne    D
+      4.01400000             1.0000000
+Ne    D
+      1.09600000             1.0000000
+Ne    D
+      0.23044808390          1.0000000
+Ne    F
+      2.54400000             1.0000000
+END

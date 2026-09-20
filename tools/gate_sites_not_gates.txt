@@ -1,0 +1,46 @@
+# The registered NON-GATES - sites the gate-tolerance checker's two shapes match,
+# which configure no run at all.
+#
+# Read by tools/check_gate_tolerances.py, which skips them BEFORE judging them
+# against the ladder. This is a SCOPE narrowing, and it is a different statement
+# from a line in tools/gate_sites_allowlist.txt:
+#
+#   allowlist      "the ladder cannot assert this, the OWNER signed off on the
+#                    off-ladder value" - a tolerance-policy act.
+#   this register  "this is not a tolerance in force" - a reading act, which the
+#                    owner does not have to make, because no value is at stake.
+#
+# Putting these lines on the allowlist would say the owner had approved an
+# off-ladder gate. Nobody approves a predicate operand.
+#
+# One line per leg: `path :: field :: value`, the same key format the allowlist
+# uses. The REASON does not live here - it lives in the code, in a comment above
+# the site, and the checker requires it in the same 25-line window a declaration
+# is held to. A registration whose reason is deleted FAILS, because a register
+# that silently widens is a hole rather than a narrowing.
+#
+# A line here is never an exemption from the ladder: it removes the site from the
+# checker's scope. If such a value ever becomes a run's configuration, deleting
+# the line is what puts it back under the ladder's judgement.
+#
+# WHY THIS EXISTS, measured 2026-09-16. The checker is a shape test - a tolerance
+# NAME bound to a numeric literal - and a shape cannot tell a run's configuration
+# from an operand of the predicate under test. The live proof is a pair of
+# assignments in ONE file that are syntactically identical, differing only in the
+# name of the object they are set on:
+#
+#   options.energyTolerance = 1e-10;   <- a real run gate, declared on the allowlist
+#   twoWay.energyTolerance  = 1e-6;    <- a truth-table operand, registered here
+#
+# No shape rule separates them, and moving the second onto the ladder is not
+# available either: that test's four other constants are derived from its gate
+# (dE 5e-7 "below the energy tolerance", tightenedRms "passes the two-way 1e-6,
+# fails the robust 1e-8"), and neither kNormal nor kLoose reproduces those
+# relations. The separation therefore has to be stated per site by a reader.
+#
+# Line numbers are deliberately NOT cited above or below: this file's own subject
+# is a checker whose failure mode was a value decaying after the line under it
+# moved, and retyping one here would repeat it.
+
+scf/tests/robustness_uhf_test.cpp :: energyTolerance :: 1e-06
+scf/tests/robustness_uhf_test.cpp :: densityTolerance :: 1e-06

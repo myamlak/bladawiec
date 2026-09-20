@@ -1,0 +1,70 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: cc-pVTZ-JKFIT
+# Description: JK Fitting basis for use with cc-pVTZ
+#        Role: jkfit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2002b
+#     Weigend, Florian
+#     A fully direct RI-HF algorithm: Implementation, optimised auxiliary
+#             basis sets, demonstration of accuracy and efficiency
+#     Phys. Chem. Chem. Phys. 4, 4285-4291 (2002)
+#     10.1039/B204199P
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (10s,7p,5d,2f,1g) -> [10s,7p,5d,2f,1g]
+O    S
+   1517.8667506              1.0000000
+O    S
+    489.67952008             1.0000000
+O    S
+    176.72118665             1.0000000
+O    S
+     63.792233137            1.0000000
+O    S
+     25.366499130            1.0000000
+O    S
+      9.9135491200           1.0000000
+O    S
+      4.4645306584           1.0000000
+O    S
+      1.8017743661           1.0000000
+O    S
+      0.80789710965          1.0000000
+O    S
+      0.33864326862          1.0000000
+O    P
+    120.16030921             1.0000000
+O    P
+     34.409622474            1.0000000
+O    P
+     12.581148610            1.0000000
+O    P
+      5.0663824249           1.0000000
+O    P
+      2.0346927092           1.0000000
+O    P
+      0.86092967212          1.0000000
+O    P
+      0.36681356726          1.0000000
+O    D
+     19.043062805            1.0000000
+O    D
+      5.8060381104           1.0000000
+O    D
+      2.1891841580           1.0000000
+O    D
+      0.87794613558          1.0000000
+O    D
+      0.35623646700          1.0000000
+O    F
+      2.49391478813500000000 1.0000000
+O    F
+       .82491478813500000000 1.0000000
+O    G
+      1.60791478813500000000 1.0000000
+END

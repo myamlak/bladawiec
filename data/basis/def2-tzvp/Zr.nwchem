@@ -1,0 +1,84 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVP
+# Description: def2-TZVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,7p,5d,1f) -> [6s,4p,3d,1f]
+Zr    S
+     11.000000000           -0.19075595257
+      9.5000000000           0.33895588754
+Zr    S
+      3.6383667759           1.0000000
+Zr    S
+      0.76822026698          1.0000000
+Zr    S
+      0.34036824036          1.0000000
+Zr    S
+      0.75261298085E-01      1.0000000
+Zr    S
+      0.30131404705E-01      1.0000000
+Zr    P
+      8.6066305543           0.40404260236E-01
+      4.4400979958          -0.21187745201
+      1.1281026946           0.49164266891
+      0.54346076310          0.57303370658
+Zr    P
+      0.25022406048          1.0000000
+Zr    P
+      0.85000000000E-01      1.0000000
+Zr    P
+      0.29000000000E-01      1.0000000
+Zr    D
+      4.5567957795          -0.96190569023E-02
+      1.2904939797           0.20569990155
+      0.51646987222          0.41831381851
+Zr    D
+      0.19349797794          1.0000000
+Zr    D
+      0.67309809967E-01      1.0000000
+Zr    F
+      0.3926100              1.0000000
+END
+
+
+ECP
+Zr nelec 28
+Zr ul
+2       7.5400000            -21.09377605
+2       3.7700000             -3.08069427
+Zr S
+2       8.2000000            150.26759106
+2       4.0897278             18.97621650
+2       7.5400000             21.09377605
+2       3.7700000              3.08069427
+Zr P
+2       7.1100000             99.62212372
+2       3.5967980             14.16873329
+2       7.5400000             21.09377605
+2       3.7700000              3.08069427
+Zr D
+2       5.3500000             35.04512355
+2       2.4918215              6.11125948
+2       7.5400000             21.09377605
+2       3.7700000              3.08069427
+END

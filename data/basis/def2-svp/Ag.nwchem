@@ -1,0 +1,80 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-SVP
+# Description: def2-SVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,6p,5d,1f) -> [5s,3p,2d,1f]
+Ag    S
+      9.0884420000          -1.9808918797
+      7.5407310000           2.7554513347
+      2.7940050000           0.22715408381
+Ag    S
+      1.4918135849           1.0000000
+Ag    S
+      0.63579159445          1.0000000
+Ag    S
+      0.10368414161          1.0000000
+Ag    S
+      0.37460004363E-01      1.0000000
+Ag    P
+      4.4512400000          -0.99352103771
+      3.6752630000           1.0500525237
+      1.2610620905           0.64747532537
+      0.54212477498          0.25621550723
+Ag    P
+      0.20221617026          1.0000000
+Ag    P
+      0.0412000              1.0000000
+Ag    D
+      7.7956672292          -0.17042912377E-01
+      2.8926510238           0.23446154803
+      1.2474273203           0.44765877533
+      0.49313817671          0.39064954560
+Ag    D
+      0.17285032603          1.0000000
+Ag    F
+      1.3971100              1.0000000
+END
+
+
+ECP
+Ag nelec 28
+Ag ul
+2      14.2200000            -33.68992012
+2       7.1100000             -5.53112021
+Ag S
+2      13.1300000            255.13936452
+2       6.5100000             36.86612154
+2      14.2200000             33.68992012
+2       7.1100000              5.53112021
+Ag P
+2      11.7400000            182.18186871
+2       6.2000000             30.35775148
+2      14.2200000             33.68992012
+2       7.1100000              5.53112021
+Ag D
+2      10.2100000             73.71926087
+2       4.3800000             12.50211712
+2      14.2200000             33.68992012
+2       7.1100000              5.53112021
+END

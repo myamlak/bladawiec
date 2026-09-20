@@ -1,0 +1,43 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 3-21G
+# Description: 3-21G Split-valence basis set
+#        Role: orbital
+#     Version: 1  (Data from Gaussian 09)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# dobbs1987a
+#     Dobbs, K. D., Hehre, W. J.
+#     Molecular orbital theory of the properties of inorganic and
+#             organometallic compounds 5. Extended basis sets for first-row
+#             transition metals
+#     J. Comput. Chem. 8, 861-879 (1987)
+#     10.1002/jcc.540080614
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,9p,3d) -> [5s,4p,2d]
+Fe    S
+      0.3299183700E+04       0.6358589971E-01
+      0.4990885600E+03       0.3762015983E+00
+      0.1091613700E+03       0.6817844969E+00
+Fe    SP
+      0.1434651730E+03      -0.1105517190E+00       0.1411006120E+00
+      0.3116857540E+02       0.9684680919E-01       0.5603873671E+00
+      0.9483612400E+01       0.9587974389E+00       0.4676443540E+00
+Fe    SP
+      0.9464564900E+01      -0.2920555188E+00       0.2376201300E-01
+      0.3100373440E+01       0.3375235918E+00       0.4689112821E+00
+      0.9864930090E+00       0.8519416294E+00       0.6083112671E+00
+Fe    SP
+      0.8534123410E+00      -0.2279441130E+00      -0.4262652045E-03
+      0.9881221800E-01       0.1088287380E+01       0.1000123759E+01
+Fe    SP
+      0.3644213760E-01       0.1000000000E+01       0.1000000000E+01
+Fe    D
+      0.1235448930E+02       0.2686109881E+00
+      0.3055605300E+01       0.8492716654E+00
+Fe    D
+      0.7385908900E+00       1.0000000
+END

@@ -1,0 +1,55 @@
+# Build outputs
+/build/
+
+# Visual Studio IDE files
+/.vs/
+
+# Python caches
+__pycache__/
+
+# Comparative-benchmark captures (raw per-rep rows live here and are
+# never committed).
+# The dir carries its own tracked .gitignore (self-protecting rule).
+tools/bench/out/*
+!tools/bench/out/.gitignore
+
+# Pre-push self-review marker (written before a push is allowed, read by the
+# PreToolUse hook) and the personal unfinished-goals ledger.
+.claude/.self-review-pass
+TODO-leftovers.md
+
+# Scratch: probes, logs, run trees, detached-run sentinels. This is
+# working state, not evidence - it stays on disk and is never in the repo.
+# 200 files were tracked here before 2026-09-13 (owner ruling), which is how a
+# 2.3 GB scratch tree became a git-status walk on every command.
+.claude/tmp/
+
+# Pause-window run captures (ctest logs and per-run sentinels, ~1 MB/day). Same
+# class as the scratch tree above: a run's FINDINGS are kept as prose in the
+# project's own records; the raw logs are working state and are never evidence.
+.claude/pause-runs/
+
+# Cursor mirror entries are junctions into the harness tree (see
+# tools/setup_cursor_harness.py) - one source of truth, never two copies.
+.cursor/agents/
+.cursor/skills/qcx-basis-refresh/
+.cursor/skills/qcx-new-module/
+.cursor/skills/qcx-push/
+.cursor/skills/qcx-self-review/
+.cursor/skills/qcx-verify/
+
+# Harness working records: kept on disk, deliberately not tracked.
+# The instructions and gates stay tracked (the hooks, the skills and the agents
+# re-included below). Everything else directly under the harness directory is a
+# record of work done — status notes, session reports, probe output — and
+# belongs to the machine, not to the repository.
+.claude/*
+!.claude/hooks
+!.claude/skills
+!.claude/agents
+
+# The external material — papers in progress, journal correspondence, the
+# reviewers' contact list — lives in its own private repository
+# (myamlak/bladawiec-external), checked out at bladawiec-external/. It stays
+# on disk here as a working checkout; only its tracking goes.
+bladawiec-external/

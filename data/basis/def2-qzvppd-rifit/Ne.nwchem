@@ -1,0 +1,103 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVPPD-RIFIT
+# Description: def2-QZVPPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (10s,9p,8d,6f,3g,1h) -> [10s,9p,8d,6f,3g,1h]
+Ne    S
+    522.238                  1.0000000
+Ne    S
+    110.000                  1.0000000
+Ne    S
+     55.2844                 1.0000000
+Ne    S
+     19.0692                 1.0000000
+Ne    S
+      6.02475                1.0000000
+Ne    S
+      3.27601                1.0000000
+Ne    S
+      1.4991                 1.0000000
+Ne    S
+      0.70479                1.0000000
+Ne    S
+      0.335473               1.0000000
+Ne    S
+      0.187819               1.0000000
+Ne    P
+    136.169                  1.0000000
+Ne    P
+     39.5257                 1.0000000
+Ne    P
+     21.0177                 1.0000000
+Ne    P
+      7.20186                1.0000000
+Ne    P
+      3.91497                1.0000000
+Ne    P
+      2.11148                1.0000000
+Ne    P
+      1.07553                1.0000000
+Ne    P
+      0.611671               1.0000000
+Ne    P
+      0.303425               1.0000000
+Ne    D
+     38.1967                 1.0000000
+Ne    D
+     16.0637                 1.0000000
+Ne    D
+      6.74951                1.0000000
+Ne    D
+      3.70209                1.0000000
+Ne    D
+      1.87989                1.0000000
+Ne    D
+      0.937028               1.0000000
+Ne    D
+      0.41005                1.0000000
+Ne    D
+      0.304615               1.0000000
+Ne    F
+     13.3090                 1.0000000
+Ne    F
+      6.59876                1.0000000
+Ne    F
+      3.04656                1.0000000
+Ne    F
+      2.09380                1.0000000
+Ne    F
+      1.03607                1.0000000
+Ne    F
+      0.44521                1.0000000
+Ne    G
+      8.28581                1.0000000
+Ne    G
+      4.24027                1.0000000
+Ne    G
+      2.29250                1.0000000
+Ne    H
+      4.49231                1.0000000
+END

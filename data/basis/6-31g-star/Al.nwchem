@@ -1,0 +1,50 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-31G*
+# Description: 6-31G + polarization on heavy atoms
+#        Role: orbital
+#     Version: 1  (Data from Gaussian 09/GAMESS)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# gordon1982a
+#     Gordon, Mark S., Binkley, J. Stephen, Pople, John A., Pietro, William
+#             J., Hehre, Warren J.
+#     Self-consistent molecular-orbital methods. 22. Small split-valence
+#             basis sets for second-row elements
+#     J. Am. Chem. Soc. 104, 2797-2803 (1982)
+#     10.1021/ja00374a017
+# francl1982a
+#     Francl, Michelle M., Pietro, William J., Hehre, Warren J., Binkley, J.
+#             Stephen, Gordon, Mark S., DeFrees, Douglas J., Pople, John A.
+#     Self-consistent molecular orbital methods. XXIII. A polarization-type
+#             basis set for second-row elements
+#     J. Chem. Phys. 77, 3654-3665 (1982)
+#     10.1063/1.444267
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (16s,10p,1d) -> [4s,3p,1d]
+Al    S
+      0.1398310000E+05       0.1942669947E-02
+      0.2098750000E+04       0.1485989959E-01
+      0.4777050000E+03       0.7284939800E-01
+      0.1343600000E+03       0.2468299932E+00
+      0.4287090000E+02       0.4872579866E+00
+      0.1451890000E+02       0.3234959911E+00
+Al    SP
+      0.2396680000E+03      -0.2926190028E-02       0.4602845582E-02
+      0.5744190000E+02      -0.3740830036E-01       0.3319896813E-01
+      0.1828590000E+02      -0.1144870011E+00       0.1362818692E+00
+      0.6599140000E+01       0.1156350011E+00       0.3304756828E+00
+      0.2490490000E+01       0.6125950058E+00       0.4491455689E+00
+      0.9445450000E+00       0.3937990037E+00       0.2657037450E+00
+Al    SP
+      0.1277900000E+01      -0.2276069245E+00      -0.1751260189E-01
+      0.3975900000E+00       0.1445835873E-02       0.2445330264E+00
+      0.1600950000E+00       0.1092794439E+01       0.8049340867E+00
+Al    SP
+      0.5565770000E-01       0.1000000000E+01       0.1000000000E+01
+Al    D
+      0.3250000000E+00       1.0000000
+END

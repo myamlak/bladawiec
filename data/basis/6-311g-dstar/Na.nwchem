@@ -1,0 +1,62 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# mclean1980a
+#     McLean, A. D., Chandler, G. S.
+#     Contracted Gaussian basis sets for molecular calculations. I. Second
+#             row atoms, Z=11-18
+#     J. Chem. Phys. 72, 5639-5648 (1980)
+#     10.1063/1.438980
+# francl1982a
+#     Francl, Michelle M., Pietro, William J., Hehre, Warren J., Binkley, J.
+#             Stephen, Gordon, Mark S., DeFrees, Douglas J., Pople, John A.
+#     Self-consistent molecular orbital methods. XXIII. A polarization-type
+#             basis set for second-row elements
+#     J. Chem. Phys. 77, 3654-3665 (1982)
+#     10.1063/1.444267
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (13s,9p,1d) -> [6s,5p,1d]
+Na    S
+  36166.4                    0.001032
+   5372.58                   0.008071
+   1213.21                   0.042129
+    339.623                  0.169789
+    109.553                  0.514621
+     38.7773                 0.379817
+Na    S
+     38.7773                 0.374762
+     14.5759                 0.575769
+      5.26993                0.112933
+Na    S
+      1.82777                1.000000
+Na    S
+      0.619948               1.000000
+Na    S
+      0.057240               1.000000
+Na    S
+      0.024048               1.000000
+Na    P
+    144.645                  0.011485
+     33.9074                 0.082383
+     10.6285                 0.319658
+      3.82389                0.701295
+Na    P
+      1.44429                0.638506
+      0.552621               0.425365
+Na    P
+      0.188720               1.000000
+Na    P
+      0.046501               1.000000
+Na    P
+      0.016285               1.000000
+Na    D
+      0.1750000              1.0000000
+END

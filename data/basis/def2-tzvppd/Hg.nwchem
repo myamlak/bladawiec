@@ -1,0 +1,96 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPPD
+# Description: def2-TZVPPD
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# rappoport2010a
+#     Rappoport, Dmitrij, Furche, Filipp
+#     Property-optimized Gaussian basis sets for molecular response
+#             calculations
+#     J. Chem. Phys. 133, 134105 (2010)
+#     10.1063/1.3484283
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (8s,9p,6d,2f,1g) -> [6s,6p,3d,2f,1g]
+Hg    S
+     48.013786990            0.58008164912E-02
+     21.239875095           -0.17328165235
+     15.876100879            0.36416685034
+Hg    S
+      5.5180531820           1.0000000
+Hg    S
+      1.5099145479           1.0000000
+Hg    S
+      0.70683482159          1.0000000
+Hg    S
+      0.16266265576          1.0000000
+Hg    S
+      0.56960589112E-01      1.0000000
+Hg    P
+     17.500000000           -0.86457187331E-01
+     15.252594855            0.15327318234
+      6.4404715169          -0.30274955249
+      1.8180159920           0.54361285026
+Hg    P
+      0.90067981801          1.0000000
+Hg    P
+      0.41304540122          1.0000000
+Hg    P
+      0.11845702655          1.0000000
+Hg    P
+      0.60299307803E-01      1.0000000
+Hg    P
+      0.36087619349E-01      1.0000000
+Hg    D
+     10.028197701            0.39922353165E-01
+      7.5920661493          -0.94774230522E-01
+      1.9144256118           0.31164157463
+      0.88641552102          0.45567078406
+Hg    D
+      0.38154235320          1.0000000
+Hg    D
+      0.14880740086          1.0000000
+Hg    F
+      1.5521700              1.0000000
+Hg    F
+      0.5243100              1.0000000
+Hg    G
+      1.2895000              1.0000000
+END
+
+
+ECP
+Hg nelec 60
+Hg ul
+2       3.88579112            30.36499643
+Hg S
+2      12.98154870           275.73721174
+2       6.49077440            49.08921249
+2       3.88579112           -30.36499643
+Hg P
+2      10.53809580           241.54007398
+2       5.26904790            27.39659081
+2       3.88579112           -30.36499643
+Hg D
+2       8.10172051           127.86700761
+2       4.05086026            16.60831151
+2       3.88579112           -30.36499643
+END

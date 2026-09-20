@@ -1,0 +1,57 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: cc-pVDZ-RIFIT
+# Description: RI Fitting basis for use with cc-pVDZ
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,5p,4d,2f) -> [7s,5p,4d,2f]
+Li    S
+     30.4075                 1.0000000
+Li    S
+      7.58805                1.0000000
+Li    S
+      2.5668                 1.0000000
+Li    S
+      0.787336               1.0000000
+Li    S
+      0.345354               1.0000000
+Li    S
+      0.160474               1.0000000
+Li    S
+      0.0923455              1.0000000
+Li    P
+      6.71598                1.0000000
+Li    P
+      2.33264                1.0000000
+Li    P
+      0.772809               1.0000000
+Li    P
+      0.183739               1.0000000
+Li    P
+      0.0783946              1.0000000
+Li    D
+      1.49284                1.0000000
+Li    D
+      0.575267               1.0000000
+Li    D
+      0.241521               1.0000000
+Li    D
+      0.142015               1.0000000
+Li    F
+      1.61775                1.0000000
+Li    F
+      0.361631               1.0000000
+END

@@ -1,0 +1,10 @@
+# Line endings: LF in the repository and in the working tree, on every OS.
+# This is the source of truth; .githooks/pre-commit enforces it at commit time.
+* text=auto eol=lf
+
+# Never mangle binaries.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pdf binary

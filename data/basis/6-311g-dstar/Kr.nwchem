@@ -1,0 +1,73 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# curtiss1995a
+#     Curtiss, Larry A., McGrath, Mark P., Blaudeau, Jean-Philippe, Davis,
+#             Nancy E., Binning, Robert C., Radom, Leo
+#     Extension of Gaussian-2 theory to molecules containing third-row atoms
+#             Ga-Kr
+#     J. Chem. Phys. 103, 6104-6113 (1995)
+#     10.1063/1.470438
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (15s,13p,6d) -> [8s,7p,3d]
+Kr    S
+ 456200.0                    0.0008111
+  68460.00                   0.0062552
+  15650.00                   0.0320220
+   4500.000                  0.1254600
+   1497.000                  0.3866600
+    550.5000                 0.5518800
+Kr    S
+    550.5000                 0.1771100
+    218.2000                 0.6224800
+     92.97000                0.2527900
+Kr    S
+     34.59                   1.000000
+Kr    S
+     15.12                   1.000000
+Kr    S
+      5.346                  1.000000
+Kr    S
+      2.273                  1.000000
+Kr    S
+      0.4841                 1.000000
+Kr    S
+      0.1849                 1.000000
+Kr    P
+   3074.000                  0.021998
+    725.7000                 0.181020
+    231.5000                 0.862230
+Kr    P
+     86.45000                0.341550
+     35.55000                0.502550
+     15.14000                0.264530
+Kr    P
+     15.14000                0.071670
+      8.031000               0.39708
+      3.799000               0.58762
+Kr    P
+      1.849000               1.000000
+Kr    P
+      0.867600               1.000000
+Kr    P
+      0.332900               1.000000
+Kr    P
+      0.119900               1.000000
+Kr    D
+    122.5000                 0.023377
+     35.37000                0.14610
+     12.39000                0.42230
+      4.496000               0.59452
+Kr    D
+      1.546000               1.000000
+Kr    D
+      0.395000               1.000000
+END

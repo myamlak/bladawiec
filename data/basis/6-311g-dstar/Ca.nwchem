@@ -1,0 +1,67 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# blaudeau1997a
+#     Blaudeau, Jean-Philippe, McGrath, Mark P., Curtiss, Larry A., Radom,
+#             Leo
+#     Extension of Gaussian-2 (G2) theory to molecules containing third-row
+#             atoms K and Ca
+#     J. Chem. Phys. 107, 5016-5021 (1997)
+#     10.1063/1.474865
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (14s,11p,4d) -> [8s,7p,2d]
+Ca    S
+ 202699.                     0.000222964
+  30382.5                    0.00172932
+   6915.08                   0.00900226
+   1959.02                   0.0366699
+    640.936                  0.119410
+    233.977                  0.291825
+Ca    S
+     92.2892                 0.404415
+     37.2545                 0.296313
+Ca    S
+      9.13198                1.000000
+Ca    S
+      3.81779                1.000000
+Ca    S
+      1.04935                1.000000
+Ca    S
+      0.428660               1.000000
+Ca    S
+      0.0628226              1.000000
+Ca    S
+      0.0260162              1.000000
+Ca    P
+   1019.76                   0.00205986
+    241.596                  0.01665010
+     77.6370                 0.07776460
+Ca    P
+     29.1154                 0.241806
+     11.7626                 0.432578
+      4.92289                0.367325
+Ca    P
+      1.90645                1.000000
+Ca    P
+      0.73690                1.000000
+Ca    P
+      0.27642                1.000000
+Ca    P
+      0.06027                1.000000
+Ca    P
+      0.01791                1.000000
+Ca    D
+     15.08                   0.0368947
+      3.926                  0.1778200
+      1.233                  0.4255130
+Ca    D
+      0.260000               1.000000
+END

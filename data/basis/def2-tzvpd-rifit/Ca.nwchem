@@ -1,0 +1,81 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend1998a
+#     Weigend, Florian, Häser, Marco, Patzelt, Holger, Ahlrichs, Reinhart
+#     RI-MP2: optimized auxiliary basis sets and demonstration of efficiency
+#     Chem. Phys. Lett. 294, 143-152 (1998)
+#     10.1016/S0009-2614(98)00862-8
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (11s,8p,7d,5f) -> [11s,8p,7d,5f]
+Ca    S
+     84.4903                 1.0000000
+Ca    S
+     34.3316                 1.0000000
+Ca    S
+     15.8493                 1.0000000
+Ca    S
+      6.78337                1.0000000
+Ca    S
+      2.15768                1.0000000
+Ca    S
+      1.17541                1.0000000
+Ca    S
+      0.640316               1.0000000
+Ca    S
+      0.348817               1.0000000
+Ca    S
+      0.190021               1.0000000
+Ca    S
+      0.0985136              1.0000000
+Ca    S
+      0.0579322              1.0000000
+Ca    P
+     17.1429                 1.0000000
+Ca    P
+      7.12441                1.0000000
+Ca    P
+      2.52498                1.0000000
+Ca    P
+      1.39947                1.0000000
+Ca    P
+      0.81539                1.0000000
+Ca    P
+      0.317879               1.0000000
+Ca    P
+      0.126217               1.0000000
+Ca    P
+      0.0593673              1.0000000
+Ca    D
+     48.4814                 1.0000000
+Ca    D
+     17.7229                 1.0000000
+Ca    D
+      8.88056                1.0000000
+Ca    D
+      2.15678                1.0000000
+Ca    D
+      0.821329               1.0000000
+Ca    D
+      0.385113               1.0000000
+Ca    D
+      0.11487                1.0000000
+Ca    F
+     24.6583                 1.0000000
+Ca    F
+      2.87769                1.0000000
+Ca    F
+      1.3935                 1.0000000
+Ca    F
+      0.775054               1.0000000
+Ca    F
+      0.357715               1.0000000
+END

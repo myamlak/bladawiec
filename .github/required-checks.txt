@@ -1,0 +1,48 @@
+# The CI legs branch protection requires on main, one check name per line.
+#
+# This file is the single source of truth for the branch protection rule
+# itself (required_status_checks.contexts, set through the API by the owner -
+# this file is the input to that call, not the call). Adding a leg to ci.yml
+# does NOT require it; adding a name here does not create a leg.
+#
+# Names are the rendered job names from a completed run. ci.yml spells them
+# explicitly (`name: linux-x86 ${{ matrix.compiler }} ${{ matrix.build_type }}`,
+# `name: docs (zero-warning Doxygen gate)`) rather than leaving them to GitHub's
+# matrix rendering, so this list is readable against the workflow file with no
+# guessing: every name below IS a `name:` value in .github/workflows/ci.yml with
+# the matrix placeholders substituted.
+#
+# A NAME THAT MATCHES NOTHING IS SILENTLY UNENFORCED, and a name that never
+# reports blocks every pull request - the two ways this file fails. Both are
+# avoided the same way: add a name only from a leg that has reported.
+#
+# PROVENANCE, because two of these spellings are new:
+#   * linux-x86 gcc Debug / clang Debug / gcc Release - these three LEGS are
+#     proven: run 33204849605 (2026-08-28, sha cd8b07a) carried all three
+#     (presets wsl-gcc, wsl-clang, wsl-gcc-release) and every job was green,
+#     under GitHub's matrix rendering of that revision's file, which is why the
+#     names there read `linux (gcc, wsl-gcc, Debug)` and so on.
+#   * windows-msvc Release - the SHAPE is proven: run 31994157028 (2026-08-17)
+#     ran windows-latest + msvc-dev-cmd + vcpkg boost-graph + Ninja Release and
+#     was green end to end. That job's own context was `windows-msvc-release`;
+#     this leg is the same build at the same flags under a name that does not
+#     collide with the weekly workflow's job of that name.
+#   * docs (zero-warning Doxygen gate) - the JOB is proven (run 33204849605,
+#     context `docs`) and the gate itself was re-checked on 2026-09-18 against a
+#     code-only copy of the tree: exit 0, zero warnings, index.html produced.
+#
+# NOTHING HAS RUN SINCE 2026-08-28. Every run after that (through 2026-09-17,
+# sha 348e027) failed with zero steps and no runner assigned - the private
+# repo's Actions budget, not a code defect - so NO name below has been observed
+# on the current ci.yml. Before wiring branch protection, push once and read the
+# check list off that run: every name here must appear in it, spelled exactly.
+# A leg deliberately NOT here is not a gate: the weekly legs
+# (ci-windows-release.yml: clang-tidy, the peak-memory tripwire) are
+# alert-only or cadence-bound, and the two QFMM chain pins are run by hand
+# rather than in CI.
+
+linux-x86 gcc Debug
+linux-x86 clang Debug
+linux-x86 gcc Release
+windows-msvc Release
+docs (zero-warning Doxygen gate)

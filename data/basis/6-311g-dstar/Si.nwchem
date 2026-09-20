@@ -1,0 +1,62 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# mclean1980a
+#     McLean, A. D., Chandler, G. S.
+#     Contracted Gaussian basis sets for molecular calculations. I. Second
+#             row atoms, Z=11-18
+#     J. Chem. Phys. 72, 5639-5648 (1980)
+#     10.1063/1.438980
+# francl1982a
+#     Francl, Michelle M., Pietro, William J., Hehre, Warren J., Binkley, J.
+#             Stephen, Gordon, Mark S., DeFrees, Douglas J., Pople, John A.
+#     Self-consistent molecular orbital methods. XXIII. A polarization-type
+#             basis set for second-row elements
+#     J. Chem. Phys. 77, 3654-3665 (1982)
+#     10.1063/1.444267
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (13s,9p,1d) -> [6s,5p,1d]
+Si    S
+  69379.230                  0.000757
+  10354.940                  0.005932
+   2333.8796                 0.031088
+    657.14295                0.124967
+    214.30113                0.386897
+     77.629168               0.554888
+Si    S
+     77.629168               0.177881
+     30.630807               0.627765
+     12.801295               0.247623
+Si    S
+      3.9268660              1.000000
+Si    S
+      1.4523430              1.000000
+Si    S
+      0.256234               1.000000
+Si    S
+      0.094279               1.000000
+Si    P
+    335.48319                0.008866
+     78.900366               0.068299
+     24.988150               0.290958
+      9.2197110              0.732117
+Si    P
+      3.6211400              0.619879
+      1.4513100              0.439148
+Si    P
+      0.504977               1.000000
+Si    P
+      0.186317               1.000000
+Si    P
+      0.065432               1.000000
+Si    D
+      0.4500000              1.0000000
+END

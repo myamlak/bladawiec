@@ -1,0 +1,84 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD
+# Description: def2-TZVPD
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,7p,5d,1f) -> [6s,4p,3d,1f]
+Mo    S
+     14.000000000           -0.22490043406
+     12.500000000            0.33151248555
+Mo    S
+      4.0921501803           1.0000000
+Mo    S
+      0.97053602586          1.0000000
+Mo    S
+      0.44217620170          1.0000000
+Mo    S
+      0.92915024334E-01      1.0000000
+Mo    S
+      0.35016314389E-01      1.0000000
+Mo    P
+      8.8931117915           0.69994449475E-01
+      5.4689112270          -0.23547141883
+      1.3548473007           0.46315460007
+      0.65494867461          0.48820184710
+Mo    P
+      0.30428197472          1.0000000
+Mo    P
+      0.10000000000          1.0000000
+Mo    P
+      0.33000000000E-01      1.0000000
+Mo    D
+      5.0044445497          -0.21587364862E-01
+      1.7736823324           0.20958680086
+      0.76950591696          0.43730880599
+Mo    D
+      0.31530878939          1.0000000
+Mo    D
+      0.11754374390          1.0000000
+Mo    F
+      0.6554500              1.0000000
+END
+
+
+ECP
+Mo nelec 28
+Mo ul
+2       9.4500000            -24.80517707
+2       4.7200000             -4.15378155
+Mo S
+2       9.7145938            180.10310850
+2       4.6805004             24.99722791
+2       9.4500000             24.80517707
+2       4.7200000              4.15378155
+Mo P
+2       8.1421366            123.77275231
+2       4.6259863             19.53022800
+2       9.4500000             24.80517707
+2       4.7200000              4.15378155
+Mo D
+2       6.6184148             48.37502229
+2       3.2487516              8.89205274
+2       9.4500000             24.80517707
+2       4.7200000              4.15378155
+END

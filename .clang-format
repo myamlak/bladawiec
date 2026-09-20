@@ -1,0 +1,65 @@
+# clang-format config for qcx (requires clang-format >= 15)
+# Base: LLVM, modernized: 4-space indent, 100 columns, no bin-packing.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+AccessModifierOffset: -4
+
+BreakBeforeBraces: Custom
+BraceWrapping:
+  # User rule (2026-08-16): the brace of every control statement (if, else,
+  # for, while, do, switch) goes on its own line, even for one-line bodies;
+  # InsertBraces + the AllowShort* rules below remove one-liners entirely.
+  # Functions, classes, and namespaces stay attached.
+  AfterControlStatement: Always
+NamespaceIndentation: None
+FixNamespaceComments: true
+IndentCaseLabels: false
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+InsertBraces: true
+
+AlignTrailingComments: false
+SpacesBeforeTrailingComments: 1
+
+SortIncludes: true
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<'
+    Priority: 2
+
+# Blank lines: allow one between logical blocks, before access modifiers,
+# and between top-level definitions.
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+EmptyLineBeforeAccessModifier: LogicalBlock
+SeparateDefinitionBlocks: Always
+
+BreakConstructorInitializers: AfterColon
+ConstructorInitializerIndentWidth: 4
+
+PenaltyReturnTypeOnItsOwnLine: 200
+SpaceAfterTemplateKeyword: true
+SpaceBeforeParens: ControlStatements

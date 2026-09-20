@@ -1,0 +1,40 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: cc-pVTZ-JKFIT
+# Description: JK Fitting basis for use with cc-pVTZ
+#        Role: jkfit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2002b
+#     Weigend, Florian
+#     A fully direct RI-HF algorithm: Implementation, optimised auxiliary
+#             basis sets, demonstration of accuracy and efficiency
+#     Phys. Chem. Chem. Phys. 4, 4285-4291 (2002)
+#     10.1039/B204199P
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (4s,3p,2d,1f) -> [4s,3p,2d,1f]
+H    S
+      9.5302493327           1.0000000
+H    S
+      1.9174506246           1.0000000
+H    S
+      0.68424049142          1.0000000
+H    S
+      0.28413255710          1.0000000
+H    P
+      2.9133232035           1.0000000
+H    P
+      1.2621205398           1.0000000
+H    P
+      0.50199775874          1.0000000
+H    D
+      2.3135329149           1.0000000
+H    D
+      0.71290724024          1.0000000
+H    F
+      1.6565726132           1.0000000
+END

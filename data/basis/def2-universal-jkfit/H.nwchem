@@ -1,0 +1,34 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-universal-JKFIT
+# Description: Coulomb/Exchange fitting auxiliary basis for def2 basis
+#                    sets
+#        Role: jkfit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2008a
+#     Weigend, Florian
+#     Hartree-Fock exchange fitting basis sets for H to Rn
+#     J. Comput. Chem. 29, 167-175 (2008)
+#     10.1002/jcc.20702
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (4s,2p,2d) -> [2s,2p,2d]
+H    S
+     22.0683430000           0.0530339860
+      4.3905712000           0.3946522022
+      1.0540787000           0.9172987712
+H    S
+      0.2717874000           1.0000000
+H    P
+      1.8529979000           1.0000000
+H    P
+      0.3881034000           1.0000000
+H    D
+      2.5579933000           1.0000000
+H    D
+      0.3292649000           1.0000000
+END

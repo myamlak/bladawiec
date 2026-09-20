@@ -1,0 +1,73 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# curtiss1995a
+#     Curtiss, Larry A., McGrath, Mark P., Blaudeau, Jean-Philippe, Davis,
+#             Nancy E., Binning, Robert C., Radom, Leo
+#     Extension of Gaussian-2 theory to molecules containing third-row atoms
+#             Ga-Kr
+#     J. Chem. Phys. 103, 6104-6113 (1995)
+#     10.1063/1.470438
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (15s,13p,6d) -> [8s,7p,3d]
+Ga    S
+ 333800.0                    0.00083805
+  50100.00                   0.00624660
+  11510.00                   0.03202800
+   3292.000                  0.12709000
+   1089.000                  0.39092000
+    401.0000                 0.54643000
+Ga    S
+    401.0                    0.18078
+    159.3                    0.62239
+     67.59                   0.24953
+Ga    S
+     24.89                   1.000000
+Ga    S
+     10.68                   1.000000
+Ga    S
+      3.386                  1.000000
+Ga    S
+      1.331                  1.000000
+Ga    S
+      0.1853                 1.000000
+Ga    S
+      0.06621                1.000000
+Ga    P
+   2181.0                    0.022565
+    515.40                   0.18363
+    164.80                   0.85984
+Ga    P
+     61.40                   0.34345
+     24.98                   0.50561
+     10.44                   0.26224
+Ga    P
+     10.44                   0.064130
+      5.589                  0.37884
+      2.517                  0.61669
+Ga    P
+      1.053000               1.000000
+Ga    P
+      0.291500               1.000000
+Ga    P
+      0.121000               1.000000
+Ga    P
+      0.039900               1.000000
+Ga    D
+     67.14                   0.030957
+     18.94                   0.17480
+      6.426                  0.44346
+      2.190                  0.56702
+Ga    D
+      0.672500               1.000000
+Ga    D
+      0.169000               1.000000
+END

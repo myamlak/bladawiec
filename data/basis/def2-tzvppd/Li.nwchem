@@ -1,0 +1,53 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPPD
+# Description: def2-TZVPPD
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# rappoport2010a
+#     Rappoport, Dmitrij, Furche, Filipp
+#     Property-optimized Gaussian basis sets for molecular response
+#             calculations
+#     J. Chem. Phys. 133, 134105 (2010)
+#     10.1063/1.3484283
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (11s,4p,1d) -> [5s,4p,1d]
+Li    S
+   6269.2628010              0.20540968826E-03
+    940.31612431             0.15916554089E-02
+    214.22107528             0.82869829707E-02
+     60.759840184            0.33856374249E-01
+     19.915152032            0.11103225876
+      7.3171509797           0.27449383329
+Li    S
+      2.9724674216           0.23792456411
+      1.2639852314           0.30765411924
+Li    S
+      0.51427489953          1.0000000
+Li    S
+      0.77030885901E-01      1.0000000
+Li    S
+      0.28938896433E-01      1.0000000
+Li    P
+      3.3270000              1.0000000
+Li    P
+      0.4000000              1.0000000
+Li    P
+      0.0600000              1.0000000
+Li    P
+      0.20097234766E-01      1.0000000
+Li    D
+      0.1319000              1.0000000
+END

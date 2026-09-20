@@ -1,0 +1,39 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: pcseg-1
+# Description: Segmented contracted version of the pc-1 basis
+#        Role: orbital
+#     Version: 1  (Data from Frank Jensen (2014))
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# jensen2014a
+#     Jensen, Frank
+#     Unifying General and Segmented Contracted Basis Sets. Segmented
+#             Polarization Consistent Basis Sets
+#     J. Chem. Theory Comput. 10, 1074-1085 (2014)
+#     10.1021/ct401026a
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (8s,4p,1d) -> [3s,2p,1d]
+O    S
+      0.228864E+04           0.585468E-02
+      0.344416E+03           0.437333E-01
+      0.782538E+02           0.194796E+00
+      0.217195E+02           0.500000E+00
+      0.655907E+01           0.484614E+00
+O    S
+      0.104656E+02          -0.713343E-01
+      0.964351E+00           0.500000E+00
+O    S
+      0.285127E+00           1.0000000
+O    P
+      0.170590E+02           0.474439E-01
+      0.368999E+01           0.242689E+00
+      0.992996E+00           0.500000E+00
+O    P
+      0.244924E+00           1.0000000
+O    D
+      0.100000E+01           1.0000000
+END

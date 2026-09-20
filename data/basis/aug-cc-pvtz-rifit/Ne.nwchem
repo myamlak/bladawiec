@@ -1,0 +1,76 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: aug-cc-pVTZ-RIFIT
+# Description: RI Fitting basis for use with aug-cc-pVTZ
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2002a
+#     Weigend, Florian, Köhn, Andreas, Hättig, Christof
+#     Efficient use of the correlation consistent basis sets in resolution
+#             of the identity MP2 calculations
+#     J. Chem. Phys. 116, 3175-3183 (2002)
+#     10.1063/1.1445115
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,7p,6d,4f,2g) -> [9s,7p,6d,4f,2g]
+Ne    S
+    665.389                  1.0000000
+Ne    S
+    136.778                  1.0000000
+Ne    S
+     37.474                  1.0000000
+Ne    S
+     17.2402                 1.0000000
+Ne    S
+      4.134                  1.0000000
+Ne    S
+      2.10468                1.0000000
+Ne    S
+      1.10095                1.0000000
+Ne    S
+      0.608061               1.0000000
+Ne    S
+      0.25533924399          1.0000000
+Ne    P
+     78.4885                 1.0000000
+Ne    P
+     22.7285                 1.0000000
+Ne    P
+      6.44089                1.0000000
+Ne    P
+      3.80884                1.0000000
+Ne    P
+      1.60398                1.0000000
+Ne    P
+      0.828899               1.0000000
+Ne    P
+      0.39641689912          1.0000000
+Ne    D
+     23.1267                 1.0000000
+Ne    D
+      7.85743                1.0000000
+Ne    D
+      4.83955                1.0000000
+Ne    D
+      1.92337                1.0000000
+Ne    D
+      0.776576               1.0000000
+Ne    D
+      0.33257330099          1.0000000
+Ne    F
+      8.17892                1.0000000
+Ne    F
+      3.88687                1.0000000
+Ne    F
+      1.84607                1.0000000
+Ne    F
+      0.73705250831          1.0000000
+Ne    G
+      4.11088                1.0000000
+Ne    G
+      1.5785006538           1.0000000
+END

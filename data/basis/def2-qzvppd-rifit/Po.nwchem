@@ -1,0 +1,134 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVPPD-RIFIT
+# Description: def2-QZVPPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hellweg2007a
+#     Hellweg, Arnim, Hättig, Christof, Höfener, Sebastian, Klopper, Wim
+#     Optimized accurate auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations for the atoms Rb to Rn
+#     Theor. Chem. Acc. 117, 587-597 (2007)
+#     10.1007/s00214-007-0250-5
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (11s,11p,10d,9f,6g,4h,2i) -> [11s,11p,10d,9f,6g,4h,2i]
+Po    S
+      9.60456                1.0000000
+Po    S
+      7.80202                1.0000000
+Po    S
+      6.04404                1.0000000
+Po    S
+      4.05935                1.0000000
+Po    S
+      1.62309                1.0000000
+Po    S
+      0.95939                1.0000000
+Po    S
+      0.678257               1.0000000
+Po    S
+      0.322132               1.0000000
+Po    S
+      0.191167               1.0000000
+Po    S
+      0.095106               1.0000000
+Po    S
+      0.0331033              1.0000000
+Po    P
+     12.4256                 1.0000000
+Po    P
+      8.9421                 1.0000000
+Po    P
+      6.71804                1.0000000
+Po    P
+      4.50956                1.0000000
+Po    P
+      2.51359                1.0000000
+Po    P
+      1.53927                1.0000000
+Po    P
+      0.702761               1.0000000
+Po    P
+      0.469566               1.0000000
+Po    P
+      0.268388               1.0000000
+Po    P
+      0.154651               1.0000000
+Po    P
+      0.0645048              1.0000000
+Po    D
+     10.6139                 1.0000000
+Po    D
+      6.37567                1.0000000
+Po    D
+      4.42561                1.0000000
+Po    D
+      2.68244                1.0000000
+Po    D
+      1.20952                1.0000000
+Po    D
+      0.720125               1.0000000
+Po    D
+      0.426979               1.0000000
+Po    D
+      0.237004               1.0000000
+Po    D
+      0.113446               1.0000000
+Po    D
+      0.0456818              1.0000000
+Po    F
+      8.91123                1.0000000
+Po    F
+      7.47933                1.0000000
+Po    F
+      4.32692                1.0000000
+Po    F
+      2.44528                1.0000000
+Po    F
+      1.51751                1.0000000
+Po    F
+      0.680957               1.0000000
+Po    F
+      0.403982               1.0000000
+Po    F
+      0.200098               1.0000000
+Po    F
+      0.084643               1.0000000
+Po    G
+      7.94586                1.0000000
+Po    G
+      4.95967                1.0000000
+Po    G
+      2.66905                1.0000000
+Po    G
+      1.39615                1.0000000
+Po    G
+      0.682467               1.0000000
+Po    G
+      0.330872               1.0000000
+Po    H
+      4.46842                1.0000000
+Po    H
+      2.52396                1.0000000
+Po    H
+      1.20248                1.0000000
+Po    H
+      0.567366               1.0000000
+Po    I
+      2.36042                1.0000000
+Po    I
+      0.987606               1.0000000
+END

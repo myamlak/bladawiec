@@ -1,0 +1,80 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-TZVPD-RIFIT
+# Description: def2-TZVPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend1998a
+#     Weigend, Florian, Häser, Marco, Patzelt, Holger, Ahlrichs, Reinhart
+#     RI-MP2: optimized auxiliary basis sets and demonstration of efficiency
+#     Chem. Phys. Lett. 294, 143-152 (1998)
+#     10.1016/S0009-2614(98)00862-8
+# hellweg2015a
+#     Hellweg, Arnim, Rappoport, Dmitrij
+#     Development of new auxiliary basis functions of the Karlsruhe
+#             segmented contracted basis sets including diffuse basis
+#             functions (def2-SVPD, def2-TZVPPD, and def2-QVPPD) for RI-MP2
+#             and RI-CC calculations
+#     Phys. Chem. Chem. Phys. 17, 1010-1017 (2015)
+#     10.1039/C4CP04286G
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,7p,6d,4f,1g) -> [9s,7p,5d,4f,1g]
+N    S
+    291.18394257              .56533084
+N    S
+     62.03053238             1.37490932
+N    S
+     21.98113229              .28294012
+N    S
+      9.06711534             1.0000000
+N    S
+      3.60654848             1.0000000
+N    S
+      1.37284474             1.0000000
+N    S
+       .63709085             1.0000000
+N    S
+       .26907231             1.0000000
+N    S
+      0.11793                1.0000000
+N    P
+     34.12169197             1.03739350
+N    P
+      8.66927085              .98879118
+N    P
+      3.96958444             1.0000000
+N    P
+      1.67569027             1.0000000
+N    P
+       .69769401             1.0000000
+N    P
+       .33582544             1.0000000
+N    P
+      0.210229               1.0000000
+N    D
+     12.72717340              .53636257
+      5.02916611             1.31247449
+N    D
+      2.09125025             1.0000000
+N    D
+       .85902043             1.0000000
+N    D
+       .35068479             1.0000000
+N    D
+      0.139219               1.0000000
+N    F
+      3.46865369              .90354051
+N    F
+      1.66865042             1.65562725
+N    F
+       .80947600              .24984638
+N    F
+      0.290095               1.0000000
+N    G
+      1.78131415             1.0000000
+END

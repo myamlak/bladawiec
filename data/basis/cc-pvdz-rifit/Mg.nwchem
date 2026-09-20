@@ -1,0 +1,69 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: cc-pVDZ-RIFIT
+# Description: RI Fitting basis for use with cc-pVDZ
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,7p,5d,3f) -> [9s,7p,5d,3f]
+Mg    S
+    200.427                  1.0000000
+Mg    S
+     44.0693                 1.0000000
+Mg    S
+     11.9447                 1.0000000
+Mg    S
+      6.90059                1.0000000
+Mg    S
+      2.30732                1.0000000
+Mg    S
+      0.79142                1.0000000
+Mg    S
+      0.442013               1.0000000
+Mg    S
+      0.194707               1.0000000
+Mg    S
+      0.0832303              1.0000000
+Mg    P
+     59.6825                 1.0000000
+Mg    P
+      9.00677                1.0000000
+Mg    P
+      3.761                  1.0000000
+Mg    P
+      1.17635                1.0000000
+Mg    P
+      0.594066               1.0000000
+Mg    P
+      0.210529               1.0000000
+Mg    P
+      0.0895356              1.0000000
+Mg    D
+     22.3994                 1.0000000
+Mg    D
+      6.43683                1.0000000
+Mg    D
+      1.18113                1.0000000
+Mg    D
+      0.749498               1.0000000
+Mg    D
+      0.259159               1.0000000
+Mg    F
+      2.891                  1.0000000
+Mg    F
+      0.928774               1.0000000
+Mg    F
+      0.326783               1.0000000
+END

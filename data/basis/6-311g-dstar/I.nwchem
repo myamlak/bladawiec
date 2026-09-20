@@ -1,0 +1,78 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# glukhovstev1995a
+#     Glukhovtsev, Mikhail N., Pross, Addy, McGrath, Mark P., Radom, Leo
+#     Extension of Gaussian-2 (G2) theory to bromine- and iodine-containing
+#             molecules: Use of effective core potentials
+#     J. Chem. Phys. 103, 1878-1885 (1995)
+#     10.1063/1.469712
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (15s,12p,7d) -> [10s,9p,5d]
+I    S
+ 444750.0                    0.00089
+  66127.00                   0.00694
+  14815.00                   0.03609
+   4144.900                  0.13568
+   1361.200                  0.33878
+I    S
+    508.4400                 0.43659
+    209.5900                 0.18375
+I    S
+     81.959                  1.00000
+I    S
+     36.805                  1.00000
+I    S
+     13.495                  1.00000
+I    S
+      6.8859                 1.00000
+I    S
+      2.5520                 1.00000
+I    S
+      1.2088                 1.00000
+I    S
+      0.2734                 1.00000
+I    S
+      0.1009                 1.00000
+I    P
+   2953.600                  0.01221
+    712.6100                 0.08587
+    236.7100                 0.29493
+     92.63100                0.47849
+I    P
+     39.73200                1.00000
+I    P
+     17.27300                1.000000
+I    P
+      7.957000               1.000000
+I    P
+      3.152900               1.000000
+I    P
+      1.332800               1.000000
+I    P
+      0.494700               1.000000
+I    P
+      0.216000               1.000000
+I    P
+      0.082930               1.000000
+I    D
+    261.9500                 0.03144
+     76.73400                0.19028
+     27.55100                0.47247
+I    D
+     10.60600                1.000000
+I    D
+      3.421700               1.000000
+I    D
+      1.137000               1.000000
+I    D
+      0.302000               1.000000
+END

@@ -1,0 +1,194 @@
+#!/bin/sh
+# Pre-commit hook: the checks that hold for anyone who has this tree.
+#
+# Every check here reads the staged commit, the tracked tree or the build
+# configuration - nothing this repository keeps to itself - so the hook runs
+# unchanged in a fresh clone. Enable it with:
+#
+#     git config core.hooksPath .githooks
+#
+# Two checks are skipped rather than failed when their tool is missing: a host
+# without python loses the python checks, a host without clang-format loses the
+# format check. Each says so on stderr, so a silent pass is not one of the
+# outcomes.
+#
+# The CRLF pass below REWRITES the index and always succeeds; everything after
+# it reads the normalized blobs, which is the order they are in.
+
+# The interpreter, if this host has one. `python3` is the name on most Unix
+# hosts and `python` on Windows, and the checks are the same either way.
+PY=""
+if command -v python >/dev/null 2>&1; then
+    PY=python
+elif command -v python3 >/dev/null 2>&1; then
+    PY=python3
+fi
+
+# Index precondition (tools/check_index_precondition.py). Every check below
+# reads the STAGED state, so an index that cannot describe the commit disables
+# them all without a sound. Measured: with GIT_INDEX_FILE naming a path that
+# does not exist, `git diff --cached --name-only --diff-filter=ACMR` returns 0
+# entries against a whole tree (every file reads as a deletion, and the filter
+# drops deletions), so the format check and the style guards inspect nothing,
+# print nothing and exit 0 - and a bare commit in that state LANDS a tree with
+# zero files, deleting every tracked file with every guard green. The
+# precondition refuses that here, first, before anything else runs. Scope,
+# measured: the silent path needs a bare commit; a path-limited commit
+# (`git commit <paths>`) hands the hook git's own temporary index built from
+# HEAD plus the pathspec, so this passes there by construction.
+if [ -z "$PY" ]; then
+    echo "pre-commit: python not found, skipping the index precondition" >&2
+else
+    "$PY" tools/check_index_precondition.py || { echo "pre-commit: index precondition failed"; exit 1; }
+fi
+
+crlf_in () {
+    # Streams the blob; any 0d byte pair means CRLF (or stray CR) present.
+    od -An -tx1 | grep -q "0d"
+}
+
+fix_crlf () {
+    git diff --cached --name-only --diff-filter=ACMR -z |
+    while IFS= read -r -d "" file; do
+        case "$file" in
+            *.cpp|*.hpp|*.h|*.cc|*.cxx|*.c|*.inl|*.cmake|*.md|*.txt|*.json|*.yml|*.yaml|*.toml|*.ini|*.cfg|*.sh|*.py|\
+            CMakeLists.txt|.clang-format|.clang-tidy|.editorconfig|.gitattributes|.gitignore)
+                ;;
+            *) continue ;;
+        esac
+
+        if git cat-file blob ":$file" | crlf_in; then
+            tmp=$(mktemp) || exit 1
+            git cat-file blob ":$file" | sed 's/\r$//' > "$tmp"
+            hash=$(git hash-object -w "$tmp")
+            rm -f "$tmp"
+            mode=$(git ls-files --stage -- "$file" | awk '{print $1}')
+            git update-index --cacheinfo "$mode,$hash,$file" || exit 1
+            echo "pre-commit: normalized CRLF to LF: $file"
+        fi
+    done
+}
+
+# Normalize staged text files to LF (the repository line ending, per
+# .gitattributes). Only the staged (index) copy is corrected - the working tree
+# is never modified, so an in-progress edit is never touched.
+fix_crlf
+
+# Format check: staged C++ files must already be formatted per the repository
+# .clang-format. The staged (index) copy is verified, not the working tree, and
+# the commit fails with the fix command when a file would be reformatted.
+# Skipped with a warning when clang-format is absent.
+cf=""
+for candidate in \
+    "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-format.exe" \
+    "$(command -v clang-format 2>/dev/null)"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        cf="$candidate"
+        break
+    fi
+done
+if [ -z "$cf" ]; then
+    echo "pre-commit: clang-format not found, skipping format check" >&2
+else
+    unformatted=$(mktemp) || exit 1
+    # The staged blob is written to a temp file outside the repository, so point
+    # --style at the repository .clang-format explicitly (a bare --style=file
+    # would resolve from the temp directory and fall back to LLVM defaults) and
+    # give the temp file the real basename - clang-format's main-header
+    # detection keys off the actual path, and a temp name would change
+    # include-sort output.
+    root=$(git rev-parse --show-toplevel) || exit 1
+    git diff --cached --name-only --diff-filter=ACMR -z |
+    while IFS= read -r -d "" file; do
+        case "$file" in
+            *.cpp|*.hpp|*.h|*.cu|*.cc|*.cxx|*.inl) ;;
+            *) continue ;;
+        esac
+        tmpdir=$(mktemp -d) || exit 1
+        orig="$tmpdir/$(basename "$file")"
+        formatted="$tmpdir/formatted"
+        git cat-file blob ":$file" > "$orig" || { rm -rf "$tmpdir"; exit 1; }
+        if ! "$cf" --style=file:"$root/.clang-format" "$orig" > "$formatted" 2>/dev/null; then
+            rm -rf "$tmpdir"
+            continue  # unparseable file - let the compiler and clang-tidy deal with it
+        fi
+        if ! cmp -s "$orig" "$formatted"; then
+            echo "$file" >> "$unformatted"
+        fi
+        rm -rf "$tmpdir"
+    done
+    if [ -s "$unformatted" ]; then
+        echo "pre-commit: staged files are not clang-format-clean:" >&2
+        cat "$unformatted" >&2
+        echo "Fix with: \"$cf\" -i <files>" >&2
+        rm -f "$unformatted"
+        exit 1
+    fi
+    rm -f "$unformatted"
+fi
+
+# Module DAG (tools/check_dag.py): a module may not reference one that comes
+# after it in the dependency order, and every module's public headers must be
+# inside the API-documentation gate's INPUT list.
+if [ -z "$PY" ]; then
+    echo "pre-commit: python not found, skipping the DAG and docs-gate checks" >&2
+else
+    "$PY" tools/check_dag.py || { echo "pre-commit: DAG check failed"; exit 1; }
+    "$PY" tools/check_docs_gate.py || { echo "pre-commit: docs-gate check failed"; exit 1; }
+fi
+
+# Convergence-gate check (tools/check_gate_tolerances.py). One ladder of
+# (energy, density) presets is the ruled set - every rung's density leg is 10^2
+# looser than its energy leg - and a gate site in a test, a benchmark or a tool
+# must either be a rung of that ladder or be declared off it, with the reason
+# written beside the site. A sweep alone cannot hold this: a value replaced by a
+# later ruling stays in whatever file nothing compares against the ruling.
+#
+# Blast radius, stated because it is a deliberate trade-off: the check reads the
+# staged blobs and fails only an off-ladder gate on a line THIS COMMIT ADDS; a
+# pre-existing one in a file the commit happens to touch is printed, not failed.
+# A whole-tree failure mode would block every commit for one author's state.
+if [ -z "$PY" ]; then
+    echo "pre-commit: python not found, skipping the gate-tolerance check" >&2
+else
+    "$PY" tools/check_gate_tolerances.py || { echo "pre-commit: gate-tolerance check failed"; exit 1; }
+fi
+
+# Style guards (tools/check_style_guards.py) over the staged blobs: the
+# blank-line rule before and after a multi-line control statement, the
+# snake_case scan, the macro audit (the sanctioned Qcx* set only), the
+# raw-array-in-public-headers scan, and the internal-linkage guard - a free
+# function declared in a public header must not be defined with internal
+# linkage, which a static library never link-checks.
+if [ -z "$PY" ]; then
+    echo "pre-commit: python not found, skipping the style guards" >&2
+else
+    "$PY" tools/check_style_guards.py || { echo "pre-commit: style guards failed"; exit 1; }
+fi
+
+# Vocabulary contract (tools/check_vocabulary_contract.py). One fact - which
+# builder kinds exist, which words spell them, which of them the driver actually
+# runs - lives in five places: the enumerator, the parser, the driver, the
+# integrals registry and the run record. Nothing else holds the five against
+# each other, so an enumerator whose comment claims it is unwired while the
+# driver carries wiring evidence for it fails here, by name.
+if [ -z "$PY" ]; then
+    echo "pre-commit: python not found, skipping the vocabulary contract" >&2
+else
+    "$PY" tools/check_vocabulary_contract.py || { echo "pre-commit: vocabulary contract failed"; exit 1; }
+fi
+
+# Workspace-grant cohesion (tools/check_workspace_grant.py). One quantity - the
+# memory cap minus the run's reserve - is what every budget site must be handed,
+# because it is both the pre-gate admission floor and the reservation that turns
+# a cap into a workspace grant. A budget site that computes its own grant makes
+# the cheaper engine rungs unreachable at every cap, and no test names the site
+# that did it. The check reads driver/src/run_driver.cpp, the only file that
+# builds the driver's workspace budgets.
+if [ -z "$PY" ]; then
+    echo "pre-commit: python not found, skipping the workspace-grant check" >&2
+else
+    "$PY" tools/check_workspace_grant.py || { echo "pre-commit: workspace-grant check failed"; exit 1; }
+fi
+
+exit 0

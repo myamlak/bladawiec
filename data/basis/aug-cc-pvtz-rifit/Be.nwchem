@@ -1,0 +1,77 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: aug-cc-pVTZ-RIFIT
+# Description: RI Fitting basis for use with aug-cc-pVTZ
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,7p,6d,4f,2g) -> [9s,7p,6d,4f,2g]
+Be    S
+    115.41                   1.0000000
+Be    S
+     27.4201                 1.0000000
+Be    S
+      8.95789                1.0000000
+Be    S
+      3.30036                1.0000000
+Be    S
+      1.07939                1.0000000
+Be    S
+      0.450645               1.0000000
+Be    S
+      0.186293               1.0000000
+Be    S
+      0.102049               1.0000000
+Be    S
+      0.0559                 1.0000000
+Be    P
+     12.9585                 1.0000000
+Be    P
+      3.56324                1.0000000
+Be    P
+      1.15263                1.0000000
+Be    P
+      0.550086               1.0000000
+Be    P
+      0.2445                 1.0000000
+Be    P
+      0.107562               1.0000000
+Be    P
+      0.047319               1.0000000
+Be    D
+      5.02291                1.0000000
+Be    D
+      1.698                  1.0000000
+Be    D
+      0.488912               1.0000000
+Be    D
+      0.265357               1.0000000
+Be    D
+      0.100698               1.0000000
+Be    D
+      0.038213               1.0000000
+Be    F
+      1.67053                1.0000000
+Be    F
+      0.452696               1.0000000
+Be    F
+      0.254672               1.0000000
+Be    F
+      0.152565               1.0000000
+Be    G
+      0.5                    1.0000000
+Be    G
+      0.177348               1.0000000
+END

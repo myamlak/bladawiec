@@ -1,0 +1,82 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-SVP
+# Description: def2-SVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# dolg1989a
+#     Dolg, M., Stoll, H., Savin, A., Preuss, H.
+#     Energy-adjusted pseudopotentials for the rare earth elements
+#     Theor. Chim. Acta 75, 173-194 (1989)
+#     10.1007/BF00528565
+# dolg1993b
+#     Dolg, M., Stoll, H., Preuss, H.
+#     A combination of quasirelativistic pseudopotential and ligand field
+#             calculations for lanthanoid compounds
+#     Theor. Chim. Acta 85, 441-450 (1993)
+#     10.1007/BF01112983
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,6p,5d,1f) -> [6s,3p,2d,1f]
+La    S
+      5.0873990000          -0.44173707857
+      4.2709780000           0.85812489720
+La    S
+      2.1823803999           1.0000000
+La    S
+      0.48954926461          1.0000000
+La    S
+      0.23292032550          1.0000000
+La    S
+      0.55595529876E-01      1.0000000
+La    S
+      0.22795184937E-01      1.0000000
+La    P
+      3.0251610000          -0.28580266654872E+00
+      2.3820950000           0.51718364643673E+00
+      0.67246658081         -0.44823115995325E+00
+      0.32519427171         -0.58864843929619E+00
+La    P
+      0.13635489374          1.0000000
+La    P
+      0.0251000              1.0000000
+La    D
+      1.2667182018          -0.17445579381106E+00
+      0.89049882672          0.25137236211233E+00
+      0.32947291040          0.44604068239531E+00
+      0.13398788830          0.44878277154181E+00
+La    D
+      0.51275503081E-01      1.0000000
+La    F
+      0.2568300              1.0000000
+END
+
+
+ECP
+La nelec 46
+La ul
+2       4.0286000            -36.0100160
+La S
+2       3.3099000             91.9321770
+2       1.6550000             -3.7887640
+2       4.0286000             36.0100160
+La P
+2       2.8368000             63.7594860
+2       1.4184000             -0.6479580
+2       4.0286000             36.0100160
+La D
+2       2.0213000             36.1161730
+2       1.0107000              0.2191140
+2       4.0286000             36.0100160
+END

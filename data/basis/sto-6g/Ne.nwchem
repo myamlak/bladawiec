@@ -1,0 +1,41 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: STO-6G
+# Description: STO-6G Minimal Basis (6 functions/AO)
+#        Role: orbital
+#     Version: 1  (Data from Gaussian09)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hehre1969a
+#     Hehre, W. J., Stewart, R. F., Pople, J. A.
+#     Self-Consistent Molecular-Orbital Methods. I. Use of Gaussian
+#             Expansions of Slater-Type Atomic Orbitals
+#     J. Chem. Phys. 51, 2657-2664 (1969)
+#     10.1063/1.1672392
+# hehre1970a
+#     Hehre, W. J., Ditchfield, R., Stewart, R. F., Pople, J. A.
+#     Self-Consistent Molecular Orbital Methods. IV. Use of Gaussian
+#             Expansions of Slater-Type Orbitals. Extension to Second-Row
+#             Molecules
+#     J. Chem. Phys. 52, 2769-2773 (1970)
+#     10.1063/1.1673374
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,6p) -> [2s,1p]
+Ne    S
+      0.2146955475E+04       0.9163596281E-02
+      0.3936419362E+03       0.4936149294E-01
+      0.1101268283E+03       0.1685383049E+00
+      0.3783153777E+02       0.3705627997E+00
+      0.1469109318E+02       0.4164915298E+00
+      0.6050603466E+01       0.1303340841E+00
+Ne    SP
+      0.8550442919E+02      -0.1325278809E-01       0.3759696623E-02
+      0.1692355799E+02      -0.4699171014E-01       0.3767936984E-01
+      0.5259829210E+01      -0.3378537151E-01       0.1738967435E+00
+      0.2023645885E+01       0.2502417861E+00       0.4180364347E+00
+      0.8788707870E+00       0.5951172526E+00       0.4258595477E+00
+      0.4028507849E+00       0.2407061763E+00       0.1017082955E+00
+END

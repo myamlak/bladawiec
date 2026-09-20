@@ -1,0 +1,37 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-311G**
+# Description: VTZ Valence Triple Zeta: 3 Funct.'s/Valence AO
+#        Role: orbital
+#     Version: 0  (Data from the Original Basis Set Exchange)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# krishnan1980a
+#     Krishnan, R., Binkley, J. S., Seeger, R., Pople, J. A.
+#     Self-consistent molecular orbital methods. XX. A basis set for
+#             correlated wave functions
+#     J. Chem. Phys. 72, 650-654 (1980)
+#     10.1063/1.438955
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (11s,5p,1d) -> [4s,3p,1d]
+N    S
+   6293.480                  0.00196979
+    949.0440                 0.0149613
+    218.7760                 0.0735006
+     63.69160                0.2489370
+     18.82820                0.6024600
+      2.720230               0.2562020
+N    SP
+     30.63310                0.111906               0.0383119
+      7.026140               0.921666               0.237403
+      2.112050              -0.00256919             0.817592
+N    SP
+      0.684009               1.000000               1.000000
+N    SP
+      0.200878               1.000000               1.000000
+N    D
+      0.913                  1.000000
+END

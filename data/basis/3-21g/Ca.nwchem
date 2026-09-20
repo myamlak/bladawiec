@@ -1,0 +1,38 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 3-21G
+# Description: 3-21G Split-valence basis set
+#        Role: orbital
+#     Version: 1  (Data from Gaussian 09)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# dobbs1986a
+#     Dobbs, K. D., Hehre, W. J.
+#     Molecular orbital theory of the properties of inorganic and
+#             organometallic compounds 4. Extended basis sets for third-and
+#             fourth-row, main-group elements
+#     J. Comput. Chem. 7, 359-378 (1986)
+#     10.1002/jcc.540070313
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (12s,9p) -> [5s,4p]
+Ca    S
+      0.1915434800E+04       0.6462369791E-01
+      0.2895332400E+03       0.3798375877E+00
+      0.6310635200E+02       0.6783293781E+00
+Ca    SP
+      0.8039744200E+02      -0.1093027800E+00       0.1354331590E+00
+      0.1733075030E+02       0.1088995760E+00       0.5372214579E+00
+      0.5083623800E+01       0.9492767537E+00       0.5018043829E+00
+Ca    SP
+      0.4782229420E+01      -0.2816073771E+00       0.1900927729E-01
+      0.1462557920E+01       0.3410510241E+00       0.4360377329E+00
+      0.4792229560E+00       0.8381044043E+00       0.6386709258E+00
+Ca    SP
+      0.4396824240E+00      -0.2697048570E+00       0.3081105070E-03
+      0.5913040160E-01       0.1113292710E+01       0.9998964139E+00
+Ca    SP
+      0.2389701170E-01       0.1000000000E+01       0.1000000000E+01
+END

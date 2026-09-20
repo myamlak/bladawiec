@@ -1,0 +1,81 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-SVP
+# Description: def2-SVP
+#        Role: orbital
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# weigend2005a
+#     Weigend, Florian, Ahlrichs, Reinhart
+#     Balanced basis sets of split valence, triple zeta valence and
+#             quadruple zeta valence quality for H to Rn: Design and
+#             assessment of accuracy
+#     Phys. Chem. Chem. Phys. 7, 3297 (2005)
+#     10.1039/b508541a
+# andrae1990a
+#     Andrae, D., Häußermann, U., Dolg, M., Stoll, H., Preuß, H.
+#     Energy-adjustedab initio pseudopotentials for the second and third row
+#             transition elements
+#     Theor. Chim. Acta 77, 123-141 (1990)
+#     10.1007/bf01114537
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (7s,6p,5d,1f) -> [6s,3p,2d,1f]
+Au    S
+     20.115299000           -0.15910719389
+     12.193477000            0.79105526778
+Au    S
+      6.0735294368           1.0000000
+Au    S
+      1.3174451569           1.0000000
+Au    S
+      0.58596768244          1.0000000
+Au    S
+      0.13875427354          1.0000000
+Au    S
+      0.48876985527E-01      1.0000000
+Au    P
+      8.6096650000           0.50053018599
+      7.3353260000          -0.72681584494
+      1.6575296365           0.57315511417
+      0.78159310216          0.49579068859
+Au    P
+      0.32384840661          1.0000000
+Au    P
+      0.0540000              1.0000000
+Au    D
+      4.1439490000          -0.37099566643
+      3.5682570000           0.40197233762
+      1.2345757130           0.46001988624
+      0.48190232338          0.46152130957882E+00
+Au    D
+      0.16490636769          1.0000000
+Au    F
+      0.7248200              1.0000000
+END
+
+
+ECP
+Au nelec 60
+Au ul
+2       4.78982000            30.49008890
+2       2.39491000             5.17107381
+Au S
+2      13.20510000           426.84667920
+2       6.60255000            37.00708285
+2       4.78982000           -30.49008890
+2       2.39491000            -5.17107381
+Au P
+2      10.45202000           261.19958038
+2       5.22601000            26.96249604
+2       4.78982000           -30.49008890
+2       2.39491000            -5.17107381
+Au D
+2       7.85110000           124.79066561
+2       3.92555000            16.30072573
+2       4.78982000           -30.49008890
+2       2.39491000            -5.17107381
+END

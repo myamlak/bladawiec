@@ -1,0 +1,1071 @@
+name: CI
+
+# THE PER-PUSH LANE, at the breadth a PUBLIC repository pays for.
+#
+# WHY THIS FILE CHANGED (2026-09-18). Every constraint its predecessor recorded
+# - the Debug-only matrix, the Windows legs off the push path, the test steps
+# removed outright - was a decision about PRIVATE-repo Actions minutes (2000/
+# month, Windows billed at 2x). That budget is why the last five runs of this
+# workflow (2026-09-13 .. 2026-09-17) failed with ZERO STEPS AND NO RUNNER
+# ASSIGNED: the jobs never reached a machine, so the red is billing, not code.
+# The repository is going public, where standard-runner minutes are free and
+# unlimited, so the constraint behind them is gone and the coverage they traded
+# away comes back.
+#
+# THE SHAPE IS TAKEN FROM A REVISION THAT ACTUALLY RAN GREEN: the workflow's
+# last green run (2026-08-28) carried a three-entry Linux matrix - gcc Debug,
+# clang Debug, gcc Release - plus a docs job, all four green. That matrix is
+# restored here, the Windows MSVC leg is added, and the Test step the Release
+# entry did not carry then now runs on every entry: no leg in this file is
+# build-only.
+#
+# EVIDENCE, PER LEG. The bar is "has this exact shape reported green", not
+# "does it look right" - no leg below is aspirational:
+#
+#   linux-x86 gcc Debug    green in that run: same preset (wsl-gcc), same
+#                          steps. The Test step there ran a plain ctest; this
+#                          file adds -LE large (everything except the
+#                          multi-hour `large` category) and the docs-gate check.
+#                          In Debug the long tests self-skip through the
+#                          fast-mode gate the build system defines for that
+#                          configuration, so the selection is the fast subset
+#                          either way.
+#   linux-x86 clang Debug  green in that run: same preset (wsl-clang), LLVM 21
+#                          from apt.llvm.org. Clang < 19 cannot see
+#                          std::expected in libstdc++, hence the version pin.
+#   linux-x86 gcc Release  green in that run as a build; the Test step is added
+#                          here. That run was green without one, and a Release
+#                          leg has no reason left to build and stop.
+#   windows-msvc Release   green on 2026-08-17: windows-latest, msvc-dev-cmd,
+#                          vcpkg boost-graph, Ninja Release configure, build
+#                          green. Locally, build/windows-msvc carries a complete
+#                          MSVC Release build of this tree (15 test binaries,
+#                          rebuilt 2026-09-18) at a WIDER configuration than
+#                          CI's - QCX_ENABLE_IO ON locally against OFF here - so
+#                          the CI compile is a subset of one that demonstrably
+#                          builds on this tree today. The integral ceiling is no
+#                          longer part of that difference: this leg names no
+#                          QCX_INTEGRALS_LMAX and takes the shipped default,
+#                          which is what the local build has always used.
+#   docs (Doxygen gate)    green in that run: Doxygen 1.18.0, apt deps,
+#                          configure + qcx-docs. The gate is additionally proven
+#                          on the code-only PUBLIC tree - see the note below.
+#
+# THE INTEGRAL CEILING CHANGED ON 2026-09-20 AND IT COSTS COMPILE MINUTES. Every
+# Release leg used to build a narrower class matrix than the release does - the
+# presets pinned QCX_INTEGRALS_LMAX to 2 and every bare configure repeated it,
+# so no CI leg had ever compiled the shipped 154-class matrix, and 55 routine
+# tests skipped on every leg for that reason alone. The Release legs now take the
+# shipped default and the Debug entries keep 2, for a reason measured on the test
+# sources; the numbers, the legs and the exception are recorded on the
+# windows-msvc job's Configure note, which is the one place this is written down.
+# The cost is real on every leg that changed: about two minutes eleven more
+# compile per full Release build, and essentially nothing in test time.
+#
+# THE FIVE LEGS ADDED 2026-09-19, AND WHAT EACH ONE HAS BEHIND IT. The bar the
+# block above sets - "has this exact shape reported green" - is NOT met by
+# these five: no run has happened since 2026-08-28, so none of them has
+# reported. What each does have is stated here, and none is claimed to be more
+# than it is:
+#
+#   linux-sanitizers asan+ubsan   CONFIGURE RUN LOCALLY, 2026-09-19: this
+#                         configure (gcc, Release, QCX_INTEGRALS_LMAX=2, the
+#                         sanitizer flags) completed on this tree with no
+#                         errors. The build and the test step below have not
+#                         been run anywhere; CI is their first run.
+#   linux-arm64 gcc Release  WRITTEN, NOT RUN - no arm64 machine exists here.
+#                         What is established instead: this tree's x86-only
+#                         constructs are excluded by ARCHITECTURE (see below),
+#                         and the assert step reads the probe's own answer
+#                         (QCX_ARCH_X86_64:INTERNAL=OFF) out of the cache, so
+#                         it proves the probe evaluated THIS TARGET as
+#                         non-x86-64 - which is the property this leg needs,
+#                         and the only one claimed. It does NOT compile the
+#                         non-x86 branches of the source guards: those read
+#                         the compiler's own macros, which no cache variable
+#                         can clear, so on an x86 host they stay live and
+#                         would fail under GCC with the per-file flags
+#                         withheld. What none of this proves is an arm64
+#                         target compile, and nothing here claims it does.
+#   windows-arm64 msvc Release  WRITTEN, NOT RUN, on the same basis. The arm64
+#                         MSVC toolchain and the arm64 vcpkg triplet are the
+#                         runner image's own.
+#   macos arm64 / x64     WRITTEN, NOT RUN. This pair differs from every other
+#                         leg in one way, stated at the step: AppleClang ships
+#                         no OpenMP runtime and the backend requires OpenMP, so
+#                         the leg installs one and hands CMake its flags and
+#                         library path. Boost comes from the same package
+#                         manager, because molecule's find_package needs its
+#                         CMake config files. The runner labels are the sibling
+#                         repos' pair, and both run there on every push. A third
+#                         entry, macOS Debug on Apple Silicon, joined them: the
+#                         job's own note carries the argument for the build type
+#                         and for stopping at one architecture.
+#
+# TWO MORE LEGS, ADDED LATER THE SAME DAY: `linux-x86 clang Release` and
+# `windows-msvc Debug`. Neither has reported either - the same sentence applies
+# to them - and what each has is stated in one line:
+#
+#   linux-x86 clang Release  the missing corner of the compiler x build-type
+#                         square. Both of its halves are already proven here:
+#                         clang Debug runs clang++-21 at LLVM 21 from
+#                         apt.llvm.org (the version pin the std::expected
+#                         support needs), and gcc Release runs the Release
+#                         build type. The pairing has not reported.
+#   windows-msvc Debug    the Release entry's own configure with the build type
+#                         changed, on the configuration the tree's Debug
+#                         machinery is built around. See that job's note for
+#                         why the build type is the subject and not a flag.
+#
+# NEITHER IS WIRED INTO BRANCH PROTECTION, and .github/required-checks.txt
+# states the rule that keeps it that way: a name goes in that file only once a
+# leg has reported. Adding a leg here and a name there are two changes.
+#
+# ARCHITECTURE, NOT COMPILER, and this is the whole point of the arm64 legs.
+# This tree's vector tiers are x86-only: the AVX2 micro-GEMMs, the CPUID
+# feature probe, and the AVX2 measurement lane of the host compute-profile
+# probe. Every one of them is now excluded by an ARCHITECTURE test - one CMake
+# probe (QCX_ARCH_X86_64) decides the per-file compile flags, and the sources
+# test the compiler's own architecture macros - rather than by a compiler
+# test, which would keep them on any other compiler for the same architecture.
+# A leg that only showed "clang accepts this" would not keep that property
+# true. An arm64 leg does, and it is the only thing that can.
+#
+# DEBUG COVERAGE IS ONE LEG PER SYSTEM, AND NO ARM64 LEG HAS ONE. Linux carries
+# gcc and clang Debug (both names are branch-protection checks), Windows carries
+# Debug, and macOS gained a Debug entry on Apple Silicon alone, for the reason
+# stated at that job. The two arm64 legs stay Release-only: one Debug leg per
+# system is what the compiled-out assertion class needs, and a second one on
+# arm64 would buy the cross-product rather than more of the check.
+#
+# EVERY LEG RUNS TESTS. The Debug legs run the fast subset - the heavy cases
+# self-skip in a Debug build, which is the only reason that limit exists and
+# is a correctness limit, not a cost one - and every other leg runs the full
+# routine selection with the `large` category excluded. That category is a
+# multi-hour run with its own release-cadence lane and its own covering set:
+# see .github/workflows/ci-windows-release.yml.
+#
+# THE ARM64 LEGS RUN THAT SELECTION SERIALLY (`-j 1`), and they are the only
+# legs that do: arm64 runners are slower per core than the x86 ones and the
+# test harness is not reliable there when its cases run concurrently. That
+# covers the two arm64 jobs and the macOS job's Apple Silicon entries, because
+# `macos-latest` is arm64 - while `macos-15-intel` is x86-64 and takes the
+# runner's count like every other x86 leg. The limit is on the TESTS only:
+# every build step, arm64 included, parallelizes like every other leg's.
+#
+# THIS FILE IS THE WHOLE PER-PUSH MATRIX. Three legs that used to run on a
+# separate release/weekly cadence - the peak-memory tripwire, the Windows
+# Release smoke, the whole-tree tidy sweep - run here, on every push, with
+# everything else; that cadence existed for a private repository's metered
+# Actions minutes, and nothing about any of the three is cadence-bound. The one
+# leg left on a separate cadence is the `large` category, which is hours of
+# runtime and stays off the path every commit pays for.
+#
+# -j IS THE RUNNER'S OWN COUNT EVERYWHERE, never a fixed number: `$(nproc)` on
+# the Linux legs, `$(sysctl -n hw.ncpu)` on the macOS legs, and
+# `$env:NUMBER_OF_PROCESSORS` on the Windows ones, each read by the step's own
+# shell. A fixed number silently under-uses a bigger runner and oversubscribes
+# a smaller one; the count comes from the machine the job actually landed on,
+# and no step asks for more than that. The arm64 test steps are the one
+# exception, and their exception is smaller, not larger.
+#
+# THE PUBLIC TREE IS CODE ONLY: the documentation trees, the agent scaffolding
+# and the project instructions are not part of it, and the docs gate is the one
+# step that could have failed on that cut. Checked, not assumed, on 2026-09-18:
+# the Doxyfile's INPUT names the 14 <module>/include directories plus README.md
+# and nothing else, and Doxygen 1.18.0 was run against a copy of the tree
+# carrying exactly those inputs and nothing else - exit 0, zero warnings under
+# WARN_AS_ERROR=YES, build/doxygen/html/index.html produced. TWO DEPENDENCIES
+# MUST HOLD for that to stay true, and neither is visible from this file:
+#   * the public tree keeps README.md. It is in INPUT and
+#     USE_MDFILE_AS_MAINPAGE names it, so dropping it reddens this gate.
+#   * the public tree keeps tools/check_dag.py and tools/check_docs_gate.py.
+#     Both are pure code-tree static checks - they read the Doxyfile and the
+#     module CMakeLists and nothing else - which is why they are the only two
+#     gates from tools/ that this workflow runs. The other tools/ gates are NOT
+#     CI's business: several of them read the documentation trees or the
+#     benchmark inputs, so they are private-tree mechanism, not public-tree CI.
+# No CMakeLists, .cmake or Doxyfile in this tree references a directory the cut
+# removes (checked 2026-09-18); the only mentions are prose in comments.
+#
+# WHAT CI DOES NOT COVER, stated plainly because the local matrix stays the
+# verification authority and CI is a second compiler, not the gate:
+#   * the `large` category, on this workflow: every leg here runs the routine
+#     selection with that category excluded (`ctest -LE large`), because it is
+#     a multi-hour run rather than a per-push cost. It has its own lane and its
+#     own covering set (.github/workflows/ci-windows-release.yml: v* tags and
+#     manual dispatch), and no configuration in THIS file sets
+#     QCX_ENABLE_LARGE_TESTS, so the category's targets do not exist here at
+#     all.
+#   * CUDA: no GPU runner, and no configuration here enables it.
+#   * the dev box's `-j` parallelism and its compiler versions, within the
+#     pins the presets state. `wsl-gcc`/`wsl-clang` are ordinary Linux presets
+#     (Ninja, g++/clang++-21), NOT WSL - CI reproduces the preset, not WSL.
+#   * an arm64 target compile for the two arm64 legs, and the whole macOS
+#     configure for the two macOS legs. Both are stated per leg above; the
+#     tests they run are the same selection as every other Release leg.
+#
+# ACTION PINS follow the sibling public repos (external/boys, external/excgrid)
+# and this file's own history: actions/checkout@v7.0.1, actions/cache@v4,
+# ilammy/msvc-dev-cmd@v1.13.0. Every `uses:` in this file carries one.
+#
+# NO PATH FILTER ON ANY TRIGGER, in either direction. A `paths:`/`paths-ignore`
+# filter is the one construct that turns a gate into a no-op: a push whose
+# changed-file set the filter cannot evaluate runs NOTHING and reports no
+# check-suite, and a pull request touching only ignored paths would report no
+# checks at all - so a required-checks rule over it could never be satisfied.
+# excgrid documents both failure modes from its own history ("a gate that looks
+# exactly like a gate and never runs"). The predecessor of this file had one;
+# it is gone rather than corrected, and a release cut with no common ancestor
+# to the previous tip is exactly the diff a filter cannot evaluate.
+on:
+  push:
+    branches: [main]
+  # Required status checks are reported on pull requests only when the workflow
+  # runs on pull_request: a checks-only branch-protection rule over a
+  # push-triggered workflow would block every PR on checks that never appear.
+  # This trigger is load-bearing for the protection rule on main.
+  pull_request:
+    branches: [main]
+  # Starts a run against ANY ref carrying this file, from the Actions UI or
+  # `gh workflow run ci.yml --ref <ref>`, with no push event involved - the
+  # route back to a green run for a ref whose push produced none.
+  workflow_dispatch:
+
+# Cancel a still-running older run when a newer push lands on the same ref.
+# Six rapid pushes cost one run instead of six.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: every job here reads the repository and nothing more.
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------------------
+  # ubuntu-latest, GCC and Clang. Every job name below is spelled for
+  # .github/required-checks.txt - renaming a job silently unenforces the check,
+  # so a rename here and the file there are one change, never two.
+  # -------------------------------------------------------------------------
+  linux:
+    # Explicit rather than matrix-rendered: the branch-protection context is
+    # this string with the matrix values substituted, and an explicit name is
+    # what required-checks.txt can be read against (the sibling repos' pattern).
+    name: linux-x86 ${{ matrix.compiler }} ${{ matrix.build_type }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            preset: wsl-gcc
+            build_type: Debug
+          - compiler: clang
+            preset: wsl-clang
+            build_type: Debug
+          - compiler: gcc
+            preset: wsl-gcc-release
+            build_type: Release
+          - compiler: clang
+            preset: wsl-clang-release
+            build_type: Release
+    env:
+      # ccache across pushes: the per-class MD instantiation TUs and the PCH
+      # surfaces dominate compile minutes; cache hits keep the legs near-
+      # incremental. The class matrix each entry compiles is the preset's: the
+      # two Release presets name no QCX_INTEGRALS_LMAX and so build the shipped
+      # default (6 - 154 classes), while the two Debug presets pin 2 (24
+      # classes) for the measured reason recorded on the windows-msvc job below.
+      # The split is by build type, not by leg: every leg that builds what ships
+      # builds the shipped ceiling.
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      # The key carries the build type as well as the compiler. Two matrix
+      # entries now share one compiler (gcc Debug + gcc Release, clang Debug +
+      # clang Release), and a key made of the compiler alone renders the SAME
+      # string for both: the second entry to finish finds its key taken and
+      # saves nothing, so one of each pair never contributes a cache. The
+      # trailing restore-key is the prefix this step always used, so the older
+      # caches still restore and the tripwire's gcc Release leg - whose key is
+      # ccache-gcc-<sha> with the same ccache-gcc- restore prefix - keeps
+      # restoring from these entries.
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.compiler }}-${{ matrix.build_type }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.compiler }}-${{ matrix.build_type }}-
+            ccache-${{ matrix.compiler }}-
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          # hdf5 serves the HighFive smoke test (QCX_ENABLE_IO). libboost-dev
+          # is the umbrella header package - noble has no modular dev packages
+          # for header-only Boost libs (uuid/interprocess headers only exist in
+          # the umbrella); graph-dev is modular and ships the BoostConfig
+          # component file molecule's find_package needs (CMake 4 CMP0167 =
+          # config mode only). ninja-build is the generator every wsl-* preset
+          # names. The pocl/OpenCL set this list used to carry is gone with
+          # VexCL: no VexCL reference remains in the tree or the submodules.
+          sudo apt-get install -y ninja-build wget ccache libboost-dev libboost-graph-dev libhdf5-dev
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            # Clang < 19 cannot see std::expected in libstdc++, so this leg
+            # takes LLVM 21 from apt.llvm.org. The preset names clang++-21, so
+            # an image-provided clang would not satisfy it. libomp-21-dev is
+            # the backend's OpenMP.
+            wget -q https://apt.llvm.org/llvm.sh
+            chmod +x llvm.sh
+            sudo ./llvm.sh 21
+            sudo apt-get install -y libomp-21-dev
+          fi
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build build/${{ matrix.preset }} -j"$(nproc)"
+      - name: ccache stats
+        run: ccache -s
+      # The static gates are NOT tests and are kept: they cost seconds and they
+      # are gates. Both read only the code tree (see the header).
+      - name: Check module DAG
+        run: python3 tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python3 tools/check_docs_gate.py
+      # Every entry runs tests. Debug and Release are not the same selection,
+      # and the difference is a property of the build rather than of this step:
+      # the fast-mode gate is the compile definition CMakeLists defines for
+      # $<CONFIG:Debug>, and the heavy numerical tests GTEST_SKIP themselves
+      # through qcx::testing::IsFastOnlyMode() - which is what makes a plain
+      # ctest on a Debug build the fast subset without any filter naming it. On
+      # Release the same command runs the full routine selection.
+      # -LE large applies to both, and it is the routine form every other leg
+      # uses too. This file never sets QCX_ENABLE_LARGE_TESTS, so the
+      # directory-held large targets do not exist here at all and the filter
+      # covers the manifest-held cases - the QFMM chain pins above all. That
+      # category has its own job and cadence, in ci-windows-release.yml.
+      # -j: the suite is independent tests and the count asked for is the
+      # runner's own ("$(nproc)"), so a bigger runner is used rather than
+      # half-used and a smaller one is not oversubscribed; the process-cap cases
+      # carry RUN_SERIAL so they never overlap anything.
+      - name: Test (large excluded; Debug runs the fast subset)
+        run: ctest --test-dir build/${{ matrix.preset }} -LE large -j"$(nproc)" --output-on-failure
+
+  # -------------------------------------------------------------------------
+  # windows-latest, MSVC, Debug + Release: every TU compiled by the other
+  # toolchain family this project ships on - and tested here, not built only.
+  #
+  # THE TEST STEP IS RESTORED, and the reversal is recorded rather than silent.
+  # It was removed on the ground that private-repository Actions minutes are
+  # budgeted and Windows minutes bill at double; the repository is going public,
+  # where standard-runner minutes are free, so that ground is gone - and the
+  # sibling repositories' Windows legs run their tests. The shape that reported
+  # green (2026-08-17) is build + the static gates, which is what this leg did
+  # before; the Test step below is new and has not reported.
+  #
+  # WHY DEBUG IS A SECOND ENTRY AND NOT A SECOND FLAG. The build type is the
+  # subject here, not a parameter of it. A Release build removes the whole
+  # assert-and-iterator class from the program at compile time: NDEBUG deletes
+  # the checks, and the optimiser is then free to fold away the paths that would
+  # have tripped them, so a Release-only matrix runs its tests against a program
+  # with less checking in it and reports the result as coverage. This tree has a
+  # Debug-only gate of its own on top of that - the heavy numerical cases
+  # GTEST_SKIP themselves under a Debug configuration - so the Debug entry also
+  # runs a DIFFERENT selection rather than a slower copy of the same one. The
+  # two entries differ in exactly one word of the configure command.
+  # -------------------------------------------------------------------------
+  windows-msvc:
+    name: windows-msvc ${{ matrix.build_type }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Quoted on purpose: an unquoted number is read as an integer by some
+          # YAML parsers and as a string by others, and this value is handed to
+          # timeout-minutes as a rendered string.
+          #
+          # The cap is per entry rather than one number for the job: an MSVC
+          # Debug build of this tree compiles several times slower than the
+          # Release one, and a cap sized for Release would end the Debug entry
+          # as a platform timeout - a red leg carrying no diagnostic.
+          #
+          # lmax_arg is the ceiling each entry asks for, and the empty string
+          # is not a shorthand for zero: it is the entry naming no ceiling at
+          # all, so the configure takes the value integrals/CMakeLists.txt
+          # ships. Read the Configure step's note before changing either.
+          - build_type: Release
+            timeout_minutes: '90'
+            lmax_arg: ''
+          - build_type: Debug
+            timeout_minutes: '150'
+            lmax_arg: '-DQCX_INTEGRALS_LMAX=2'
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+      # Path-based caching of the vcpkg classic tree (the runner's vcpkg has no
+      # x-gha cache backend, so the tree is cached as files). Both build-type
+      # entries share this key deliberately: the x64-windows triplet installs
+      # the release and the debug library together, so the tree is byte-for-byte
+      # the same whichever entry populated it, and one of the two finding the
+      # key already taken is the correct outcome rather than a lost cache.
+      - name: Restore vcpkg tree (cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed\x64-windows
+            C:\vcpkg\packages
+          key: vcpkg-classic-x64-windows-v1-${{ hashFiles('.github/workflows/ci.yml', '.github/workflows/ci-windows-release.yml') }}
+      # boost-graph only: the molecule module's find_package needs its
+      # BoostConfig component file.
+      - name: Install Boost.Graph
+        run: vcpkg install boost-graph:x64-windows
+      # Bare cmake rather than the windows-msvc preset on purpose: that preset
+      # is the developer's (generator "Visual Studio 18 2026", vcpkg toolchain,
+      # QCX_BUILD_BENCHMARKS=ON), and a hosted runner carries neither that
+      # generator version nor any reason to build benchmarks. The flags below
+      # are the ones the green run used: Ninja, the vcpkg toolchain,
+      # QCX_ENABLE_IO=OFF. The build type and the integral ceiling are the two
+      # things that vary between the entries; the build directory carries the
+      # first so the two never share a tree, and lmax_arg (see the matrix above)
+      # carries the second.
+      #
+      # THE RELEASE ENTRY NAMES NO CEILING AND THE DEBUG ENTRY PINS 2, and that
+      # asymmetry is measured rather than assumed. This note is where the whole
+      # measurement is written down; the other legs' notes point here rather
+      # than restating it.
+      #
+      # The Release entry takes the ceiling integrals/CMakeLists.txt ships: 6,
+      # 154 instantiated classes against the 24 a ceiling of 2 builds. It is the
+      # leg that reports green on the shipped configuration, so it must compile
+      # and test the shipped class matrix; naming `2` here used to make the only
+      # Windows leg that had ever reported green the one leg building a
+      # different program than the release does. The cost of that change on this
+      # machine (12 cores, g++, no ccache, 2026-09-20, Debug/Release only - CI's
+      # own timings are the linux-x86 gcc Release leg's) is about two minutes
+      # eleven more compile per full Release build (7m26s at 2, 9m37s at 6) and
+      # essentially nothing in test time (42m12s at 2, 42m40s at 6), for 55
+      # routine tests that skip at 2 and run at 6.
+      #
+      # The Debug entry stays at 2 because at 6 its test step stops skipping two
+      # footprint cases that carry no fast-mode gate - footprint_test.cpp is the
+      # file that note in grid/CMakeLists.txt names as having had zero
+      # IsFastOnlyMode() calls - and they are Debug-slow by two orders of
+      # magnitude, measured on this tree 2026-09-20 (12 cores, g++, -j12):
+      # RiFootprint.PrintsTheEngineCreateTimeFootprintAtC24H50Def2Svp passes at
+      # 830 s in Debug against 6.25 s on CI's Release leg, and
+      # Footprint.RiJkNestedExchangeReachesItsOwnLightRungOnTheCountedPreGate
+      # was still running past 1200 s in Debug against 27.6 s in Release. Both
+      # skip at 2. A Debug leg that newly runs them pays that per push to
+      # re-cover what the Release legs already cover, and the per-test cap is
+      # 2400 s (QCX_TEST_TIMEOUT_SECONDS), so one of them is a leg-long timeout
+      # waiting to happen. When those two cases get the fast-mode gate the rest
+      # of the suite has, or move to the large manifest, the Debug entry drops
+      # lmax_arg and follows the Release one; until then the pin is the
+      # deliberate exception, not a leftover.
+      - name: Configure
+        run: cmake -S . -B build/windows-msvc-ci-${{ matrix.build_type }} -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DQCX_ENABLE_IO=OFF ${{ matrix.lmax_arg }} -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+      - name: Build
+        run: cmake --build build/windows-msvc-ci-${{ matrix.build_type }} -j $env:NUMBER_OF_PROCESSORS
+      - name: Check module DAG
+        run: python tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python tools/check_docs_gate.py
+      # The routine selection, the same one every other leg in this file runs:
+      # no --output-on-failure noise for a passing run, and every failure
+      # carrying its own evidence. In Debug the heavy numerical cases skip
+      # themselves through the fast-mode gate the build defines for that
+      # configuration, so this one command IS the fast subset there without a
+      # filter naming it - the limit is a property of the build rather than of
+      # any flag in this file.
+      # -j is the runner's own processor count rather than a fixed 4:
+      # $env:NUMBER_OF_PROCESSORS is Windows' own count, read by this step's
+      # shell, so the step scales with whichever runner it lands on.
+      - name: Test (routine selection, large excluded; Debug runs the fast subset)
+        run: ctest --test-dir build/windows-msvc-ci-${{ matrix.build_type }} -LE large -j $env:NUMBER_OF_PROCESSORS --output-on-failure
+
+  # -------------------------------------------------------------------------
+  # THE FIVE LEGS THIS FILE GAINED (2026-09-19): the sanitizer lane, the two
+  # arm64 legs, and the macOS pair. What each one has behind it is in the
+  # header's per-leg evidence block. The shape is the sibling repositories'
+  # shape, translated to this tree's packages, presets and flags.
+  # -------------------------------------------------------------------------
+  linux-sanitizers:
+    name: linux-sanitizers asan+ubsan
+    runs-on: ubuntu-latest
+    # Above the neighbours' 90 on purpose: an instrumented build compiles and
+    # runs several times slower, and a silent platform timeout is a red leg
+    # nobody can read.
+    timeout-minutes: 180
+    env:
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      # Neither of these is decoration. UBSan only warns by default and ASan
+      # does not abort on every platform: a finding that neither aborts nor
+      # fails the run is a finding nobody reads in a log.
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-asan-${{ github.sha }}
+          restore-keys: |
+            ccache-asan-
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache libboost-dev libboost-graph-dev libhdf5-dev
+      # Bare cmake rather than a preset: the wsl-* presets name a Debug build
+      # type and their own compilers, and this leg wants an optimized build of
+      # the shipped configuration plus its own flags. The rest of the geometry
+      # is every other leg's - Ninja, gcc from the image, I/O on.
+      #
+      # QCX_INTEGRALS_LMAX=2 BELOW IS THE ONLY CEILING PINNED ON A RELEASE
+      # BUILD IN CI. Every Release leg elsewhere takes the shipped default of 6,
+      # so those compile the program that ships; this one narrows its own build
+      # because instrumentation is the one plausible resource constraint here -
+      # ASan and UBSan multiply the compile AND the run, and this leg already
+      # carries one of the two widest timeout-minutes in the file. The Debug
+      # entries pin 2 as well, for a different reason measured on the test
+      # sources rather than on this leg's cost; that reason is recorded on the
+      # windows-msvc Configure note and is not a precedent for this one.
+      # Raising this line is a separate judgement that needs its own
+      # measurement of this leg, not a copy of the others' change; until that
+      # number exists this line is the deliberate exception, not a leftover.
+      - name: Configure (ASan + UBSan)
+        run: |
+          cmake -S . -B build/linux-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_INTEGRALS_LMAX=2 \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      # A configure that silently dropped the flags would leave this leg a plain
+      # Release run under a sanitizer name: green, and proving nothing. The
+      # flags are in the cache, so their presence is checkable before the build
+      # spends minutes producing a binary that cannot report.
+      - name: Assert the sanitizers are configured
+        run: |
+          if ! grep -q -- '-fsanitize=address,undefined' build/linux-sanitizers/CMakeCache.txt; then
+            echo "the sanitizer flags are not in the CMake cache; this leg would run without ASan or UBSan."
+            exit 1
+          fi
+      - name: Build
+        run: cmake --build build/linux-sanitizers -j"$(nproc)"
+      - name: ccache stats
+        run: ccache -s
+      - name: Check module DAG
+        run: python3 tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python3 tools/check_docs_gate.py
+      - name: Test (routine selection, large excluded)
+        run: ctest --test-dir build/linux-sanitizers -LE large -j"$(nproc)" --output-on-failure
+
+  # -------------------------------------------------------------------------
+  # ubuntu-24.04-arm, GCC, Release. This leg and windows-arm64 exist for one
+  # reason: this tree's vector tiers are x86-64 only, and only an arm64 target
+  # proves the architecture guards hold rather than the compiler ones (see the
+  # header's ARCHITECTURE, NOT COMPILER note).
+  #
+  # The label is versioned rather than a moving `-latest`-style arm64 label:
+  # GitHub's arm64 labels are versioned, and the apt packages below are noble's.
+  # -------------------------------------------------------------------------
+  linux-arm64:
+    name: linux-arm64 gcc Release
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-gcc-arm64-${{ github.sha }}
+          restore-keys: |
+            ccache-gcc-arm64-
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache libboost-dev libboost-graph-dev libhdf5-dev
+      # The same preset the x86 Release entry configures, on the other
+      # architecture: a different configure would make the comparison between
+      # the two meaningless.
+      - name: Configure
+        run: cmake --preset wsl-gcc-release
+      # This leg's whole subject is the answer that probe gives, so it is
+      # checked before anything is built from it.
+      - name: Assert the x86-64 vector tier is off
+        run: |
+          if ! grep -qE '^QCX_ARCH_X86_64:[A-Z]+=OFF' build/wsl-gcc-release/CMakeCache.txt; then
+            echo "the architecture probe did not evaluate this as a non-x86-64 target;"
+            echo "this leg would build the wrong subject."
+            exit 1
+          fi
+      - name: Build
+        run: cmake --build build/wsl-gcc-release -j"$(nproc)"
+      - name: ccache stats
+        run: ccache -s
+      - name: Check module DAG
+        run: python3 tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python3 tools/check_docs_gate.py
+      # The routine selection. The AVX2-specific cases skip themselves through
+      # the feature probe - the boys tests through BoysAvx2Available() - so a
+      # green run here says the scalar paths passed, not that the vector tier
+      # was exercised.
+      #
+      # SERIAL ON PURPOSE, and this is the one place the arm64 legs differ from
+      # the x86 ones: arm64 runners are slower per core and the test harness is
+      # not reliable there when its cases run concurrently, so the tests run one
+      # at a time. The build above is not subject to this and keeps the whole
+      # machine.
+      - name: Test (routine selection, large excluded; serial on arm64)
+        run: ctest --test-dir build/wsl-gcc-release -LE large -j 1 --output-on-failure
+
+  # -------------------------------------------------------------------------
+  # windows-11-arm, MSVC arm64, Release: the Windows half of the architecture
+  # check above.
+  # -------------------------------------------------------------------------
+  windows-arm64:
+    name: windows-arm64 msvc Release
+    runs-on: windows-11-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      # arch is stated rather than inherited: msvc-dev-cmd defaults to host
+      # x64, and on an arm64 runner that builds an x64 binary which then runs
+      # under Windows' own emulation - a leg that reports green with no arm64
+      # subject anywhere in it.
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: arm64
+      - name: Restore vcpkg tree (cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed\arm64-windows
+            C:\vcpkg\packages
+          key: vcpkg-classic-arm64-windows-v1-${{ hashFiles('.github/workflows/ci.yml', '.github/workflows/ci-windows-release.yml') }}
+      - name: Install Boost.Graph
+        run: vcpkg install boost-graph:arm64-windows
+      # Same configure as the x64 Windows leg, with the triplet following the
+      # toolchain's target architecture, and - like every Release leg in this
+      # file - no QCX_INTEGRALS_LMAX: the configure takes the shipped default,
+      # so this leg builds the program that ships rather than a narrower one.
+      - name: Configure
+        run: cmake -S . -B build/windows-arm64-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_ENABLE_IO=OFF -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+      - name: Assert the x86-64 vector tier is off
+        run: |
+          if (-not (Select-String -Path build/windows-arm64-ci/CMakeCache.txt -Pattern '^QCX_ARCH_X86_64:[A-Z]+=OFF')) {
+            Write-Host "the architecture probe did not evaluate this as a non-x86-64 target;"
+            Write-Host "this leg would build the wrong subject."
+            exit 1
+          }
+      - name: Build
+        run: cmake --build build/windows-arm64-ci -j $env:NUMBER_OF_PROCESSORS
+      - name: Check module DAG
+        run: python tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python tools/check_docs_gate.py
+      # SERIAL ON PURPOSE, for the reason stated on the arm64 Linux leg's test
+      # step: this is an arm64 runner, and the tests run one at a time there.
+      - name: Test (routine selection, large excluded; serial on arm64)
+        run: ctest --test-dir build/windows-arm64-ci -LE large -j 1 --output-on-failure
+
+  # -------------------------------------------------------------------------
+  # macOS, both architectures: macos-latest is Apple Silicon and macos-15-intel
+  # is the x64 runner (the sibling repositories' pair). The two things this OS
+  # needs stated, on every entry below:
+  #
+  #   * the backend requires OpenMP and AppleClang ships no OpenMP runtime.
+  #     The leg installs one and hands CMake its flags, its library name and
+  #     its path, rather than leaving FindOpenMP to guess on a keg-only
+  #     formula. Boost comes from the same package manager, because the
+  #     molecule module's find_package needs its CMake config files.
+  #   * HDF5 is not part of the runner image, so I/O is off here as it is on
+  #     the Windows legs and the HighFive smoke test is covered on the Linux
+  #     ones, where the library is a plain package.
+  #
+  # WHY THERE IS A DEBUG ENTRY, AND WHY IT IS ONE ARCHITECTURE AND NOT TWO.
+  # Debug is not a slower copy of Release here; it is the only build type that
+  # can see a whole class of check. `assert` is governed by NDEBUG, so a
+  # Release build compiles every bare assertion in the sources out entirely -
+  # the BuildFock precondition assertions in integrals/src/fock_build.cpp among
+  # them, whose own comment says they are checked in Debug builds. A
+  # Release-only macOS leg cannot see that class at all, and AppleClang with
+  # libc++ is a genuinely different toolchain from the GCC and MSVC ones the
+  # Linux and Windows Debug legs already cover, so it is not a duplicate of
+  # them either. The entry is on macos-latest (Apple Silicon) alone, and that
+  # is the whole of the architecture choice: it carries the newer AppleClang,
+  # one Debug leg per system is the rule, and a second architecture would
+  # re-cover the same toolchain and buy only the cross-product. Debug runs the
+  # fast subset by construction rather than by a flag below: the heavy
+  # numerical cases GTEST_SKIP themselves through the fast-mode gate the build
+  # system defines for $<CONFIG:Debug>.
+  #
+  # The timeout is per entry for the same reason it is on the Windows job: an
+  # unoptimised Debug build takes substantially longer than the Release one,
+  # and a cap sized for Release would end that entry as a platform timeout - a
+  # red leg carrying no diagnostic.
+  #
+  # The architecture probe is asserted per line, so this job states both of the
+  # probe's answers: OFF on Apple Silicon, ON on Intel.
+  # -------------------------------------------------------------------------
+  macos:
+    name: macos ${{ matrix.arch }} ${{ matrix.build_type }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Quoted on purpose: an unquoted ON/OFF is a boolean in some YAML
+          # parsers and a string in others, and this value is compared as a
+          # string in the step below. timeout_minutes is quoted for the same
+          # reason - it is handed to timeout-minutes as a rendered string.
+          #
+          # lmax_arg is the ceiling each entry asks for; the empty string is the
+          # entry naming no ceiling at all, so the configure takes the value
+          # integrals/CMakeLists.txt ships. The two Release entries take it and
+          # the Debug entry pins 2, for the reason and the measurements recorded
+          # on the windows-msvc job's Configure step.
+          - runner: macos-latest
+            arch: arm64
+            build_type: Release
+            timeout_minutes: '120'
+            expect_x86_64: 'OFF'
+            lmax_arg: ''
+          - runner: macos-15-intel
+            arch: x64
+            build_type: Release
+            timeout_minutes: '120'
+            expect_x86_64: 'ON'
+            lmax_arg: ''
+          # The Debug lane: Apple Silicon, the fast subset, and the reason it
+          # exists is in the job note above.
+          - runner: macos-latest
+            arch: arm64
+            build_type: Debug
+            timeout_minutes: '180'
+            expect_x86_64: 'OFF'
+            lmax_arg: '-DQCX_INTEGRALS_LMAX=2'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Install toolchain
+        run: brew install ninja boost libomp
+      # The build directory carries the build type, so a Debug entry and a
+      # Release entry can never be read as each other's tree. lmax_arg carries
+      # the entry's ceiling, and the Release entries' empty value is the shipped
+      # default rather than a number - see the windows-msvc Configure note.
+      - name: Configure
+        run: |
+          cmake -S . -B build/macos-ci-${{ matrix.build_type }} -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ${{ matrix.lmax_arg }} -DQCX_ENABLE_IO=OFF \
+            -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp" \
+            -DOpenMP_CXX_LIB_NAMES=omp \
+            -DOpenMP_omp_LIBRARY="$(brew --prefix libomp)/lib/libomp.dylib"
+      - name: Assert the architecture probe
+        run: |
+          if ! grep -qE "^QCX_ARCH_X86_64:[A-Z]+=${{ matrix.expect_x86_64 }}" build/macos-ci-${{ matrix.build_type }}/CMakeCache.txt; then
+            echo "the architecture probe did not answer ${{ matrix.expect_x86_64 }} on this runner;"
+            echo "this leg would build the wrong subject."
+            exit 1
+          fi
+      # -j asks for the runner's own processor count ($(sysctl -n hw.ncpu))
+      # instead of a fixed 3, so the leg scales with whichever macOS runner it
+      # lands on.
+      - name: Build
+        run: cmake --build build/macos-ci-${{ matrix.build_type }} -j"$(sysctl -n hw.ncpu)"
+      - name: Check module DAG
+        run: python3 tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python3 tools/check_docs_gate.py
+      # One command, two selections: the Debug entry's heavy numerical cases
+      # GTEST_SKIP themselves under the fast-mode gate the build attaches to
+      # $<CONFIG:Debug>, so no filter here names either selection.
+      #
+      # SERIAL ON THE APPLE SILICON ENTRIES. `macos-latest` is arm64, and the
+      # ruling that arm64 test steps do not parallelize covers it: those
+      # runners are slower per core and the harness is not reliable there when
+      # its cases run concurrently. The Intel entry is x86-64 and keeps the
+      # runner's own count, as every Build step above does for every entry.
+      - name: Test (routine selection, large excluded; Debug runs the fast subset)
+        if: matrix.arch == 'x64'
+        run: ctest --test-dir build/macos-ci-${{ matrix.build_type }} -LE large -j"$(sysctl -n hw.ncpu)" --output-on-failure
+      - name: Test (routine selection, large excluded; serial on arm64; Debug runs the fast subset)
+        if: matrix.arch == 'arm64'
+        run: ctest --test-dir build/macos-ci-${{ matrix.build_type }} -LE large -j 1 --output-on-failure
+
+  # -------------------------------------------------------------------------
+  # The zero-warning Doxygen gate, as its own blocking leg on every push and
+  # every pull request.
+  #
+  # WHY IT IS NOT docs.yml. docs.yml publishes to GitHub Pages from a v-tag,
+  # and a publisher is not a gate: on that trigger the API reference may rot
+  # between releases. This job runs the same target (qcx-docs, WARN_AS_ERROR
+  # YES, EXTRACT_ALL NO, Doxygen 1.18.0) on every change, so a change that
+  # introduces a Doxygen warning is red.
+  #
+  # THE TWO ASSERTIONS ARE THE POINT, each because its absence is a green leg
+  # that proves nothing: Doxygen must be FOUND at configure time (the cache is
+  # tested for the NOTFOUND SENTINEL - find_program caches the failure as
+  # `DOXYGEN_EXECUTABLE:FILEPATH=DOXYGEN_EXECUTABLE-NOTFOUND`, so a bare
+  # presence test matches in exactly the case this step exists to catch), and
+  # the PUBLISHED ARTIFACT must exist (docs.yml uploads
+  # build/doxygen/html - if the Doxyfile's OUTPUT_DIRECTORY or HTML_OUTPUT ever
+  # moves, that upload publishes a site with no index.html and nothing else
+  # would notice). Both are the excgrid docs job's assertions, kept verbatim.
+  # -------------------------------------------------------------------------
+  docs:
+    name: docs (zero-warning Doxygen gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Install Doxygen 1.18.0 (pinned release — the local C:\Tools gate)
+        run: |
+          curl -L -sS -o /tmp/doxygen.tar.gz https://github.com/doxygen/doxygen/releases/download/Release_1_18_0/doxygen-1.18.0.linux.bin.tar.gz
+          tar -xzf /tmp/doxygen.tar.gz -C /tmp
+          echo "$(dirname "$(find /tmp/doxygen-1.18.0 -name doxygen -type f | head -1)")" >> "$GITHUB_PATH"
+      - name: Install docs dependencies
+        run: sudo apt-get update && sudo apt-get install -y libboost-dev libboost-graph-dev libhdf5-dev
+      - name: Configure
+        run: cmake --preset wsl-gcc
+      - name: Assert the gate is wired (Doxygen found at configure time)
+        run: |
+          if grep -q '^DOXYGEN_EXECUTABLE:FILEPATH=.*-NOTFOUND' build/wsl-gcc/CMakeCache.txt; then
+            echo "Doxygen was not found at configure time (CMake cached DOXYGEN_EXECUTABLE as NOTFOUND), so the qcx-docs target does not exist and this gate could not run."
+            exit 1
+          fi
+          if ! grep -q '^DOXYGEN_EXECUTABLE:FILEPATH=' build/wsl-gcc/CMakeCache.txt; then
+            echo "build/wsl-gcc/CMakeCache.txt carries no DOXYGEN_EXECUTABLE path, so the qcx-docs target cannot be assumed to exist."
+            exit 1
+          fi
+      - name: Docs (zero-warning Doxygen gate)
+        run: cmake --build build/wsl-gcc --target qcx-docs -j"$(nproc)"
+      - name: Assert the artifact docs.yml publishes exists
+        run: test -f build/doxygen/html/index.html
+
+  # -------------------------------------------------------------------------
+  # THE THREE LEGS THAT USED TO RUN ON A RELEASE CADENCE, now on every push
+  # with everything else and otherwise unchanged. That cadence was chosen while
+  # this repository was private and its Actions minutes were budgeted; the
+  # constraint is gone, and none of the three is cadence-bound: the tripwire is
+  # alert-only and reads better against the commit that moved a number than
+  # against a week of them, and the tidy sweep and the Windows Release smoke
+  # are ordinary coverage. The one category that stays off this path is
+  # `large` - hours of runtime, and the only job left in the other workflow.
+  # -------------------------------------------------------------------------
+
+  linux-gcc-release:
+    # This leg's payload is the alert-only peak-memory tripwire at the end of
+    # its step list, and the tripwire needs an optimized binary: a Debug RSS
+    # measurement would be meaningless. It is on this path for the same reason
+    # every other leg is - a footprint change is read against the commit that
+    # caused it rather than against a week of them.
+    #
+    # WHY IT IS A JOB OF ITS OWN RATHER THAN A STEP ON A TEST ENTRY. The gcc
+    # Release entry's rendered name is a branch-protection check and the
+    # tripwire is alert-only by design, so a measurement step inside that job
+    # would be one script error away from reddening a gate - which is exactly
+    # the property the tripwire is written to avoid. The price is a second
+    # Release build of the same tree at the same preset and flags, and the two
+    # share one ccache group, so the second build is near-incremental.
+    runs-on: ubuntu-latest
+    env:
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Restore ccache
+        # Same ccache-gcc- prefix the per-push Debug leg writes (both are the
+        # gcc compiler), so this leg restores on the Debug leg's warm cache;
+        # ccache keys on the compile flags internally, so the two build types
+        # coexist in one cache without poisoning each other.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-gcc-${{ github.sha }}
+          restore-keys: |
+            ccache-gcc-
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          # Same package set as the per-push job in ci.yml - hdf5 for the
+          # HighFive smoke (QCX_ENABLE_IO), libboost-dev as the umbrella
+          # header package (noble has no modular dev packages for
+          # header-only Boost libs), graph-dev for the BoostConfig component
+          # file molecule's find_package needs (CMake 4 CMP0167 = config
+          # mode only).
+          # 'time' ships /usr/bin/time -v, the peak-RSS capture of the
+          # peak-memory tripwire step below.
+          sudo apt-get install -y ninja-build wget ccache time libboost-dev libboost-graph-dev libhdf5-dev
+      - name: Configure
+        run: cmake --preset wsl-gcc-release
+      - name: Build
+        run: cmake --build build/wsl-gcc-release -j"$(nproc)"
+      - name: ccache stats
+        run: ccache -s
+      # The static gates are NOT tests and are kept: they cost seconds and they
+      # are gates.
+      - name: Check module DAG
+        run: python3 tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python3 tools/check_docs_gate.py
+      # The routine selection, like every other leg's: everything except the
+      # `large` category, which is a multi-hour on-demand run with its own
+      # workflow and is enabled by no configuration in this file.
+      - name: Test (routine selection, large excluded)
+        run: ctest --test-dir build/wsl-gcc-release -LE large -j"$(nproc)" --output-on-failure
+      # The alert-only peak-memory tripwire: a single fixed-input qcx run of the
+      # c12h26_sto3g fixture (38 atoms / 86 BF, sub-minute) under
+      # /usr/bin/time -v, compared against the committed baseline
+      # benchmarks/data/perf-guard/ci-peak-memory.json. Warns (never fails the
+      # job) past max(1.5x, +512 MiB); the timing signal comes from the
+      # development machine's nightly baseline, not from CI. At the 86-BF
+      # workload size the +512 MiB absolute arm dominates the 1.5x arm - that
+      # looseness is accepted at first cut (the seed baseline is a 512 MiB
+      # placeholder; no CI measurement exists yet) and tightens data-driven once
+      # real runs harvest rows. Alert-only, never a merge gate: the warning
+      # lands on this job and is read with the run's result. No `if:` guard is
+      # needed to reach it - the whole job is the Release configuration.
+      - name: Peak-memory tripwire (alert-only)
+        run: python3 tools/bench/ci_peak_memory.py --exe build/wsl-gcc-release/driver/qcx
+
+
+  # The Windows Release smoke: the same configure, flags and triplet as the
+  # windows-msvc matrix entry above, which is why the two legs overlap. The
+  # overlap is deliberate and temporary, and the reason is evidence: this is
+  # the only Windows leg that has ever reported green in CI (2026-08-17),
+  # while that entry has not run once. Delete this job once the entry has a
+  # green run - not before.
+  windows-msvc-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+      # Path-based caching of the vcpkg classic tree (the runner's vcpkg has no
+      # x-gha cache backend, so the tree is cached as files).
+      - name: Restore vcpkg tree (cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed\x64-windows
+            C:\vcpkg\packages
+          key: vcpkg-classic-x64-windows-v1-${{ hashFiles('.github/workflows/ci.yml', '.github/workflows/ci-windows-release.yml') }}
+      # boost-graph only (see the per-push Windows job's note).
+      - name: Install Boost.Graph
+        run: vcpkg install boost-graph:x64-windows
+      # QCX_ENABLE_IO=OFF like the other legs that have no HDF5 on the runner.
+      # QCX_INTEGRALS_LMAX is deliberately NOT named: this leg takes the value
+      # integrals/CMakeLists.txt ships, so its build is the shipped program's
+      # rather than a narrower one. It used to pin 2 here, which made the only
+      # Windows leg that had ever reported green the one leg compiling a
+      # different class matrix than the release does.
+      - name: Configure
+        run: cmake -S . -B build/windows-msvc-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_ENABLE_IO=OFF -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+      - name: Build
+        run: cmake --build build/windows-msvc-release -j $env:NUMBER_OF_PROCESSORS
+      # The static gates are NOT tests and are kept: they cost seconds and they
+      # are gates.
+      - name: Check module DAG
+        run: python tools/check_dag.py
+      - name: Check docs-gate coverage
+        run: python tools/check_docs_gate.py
+      # NO TEST STEP, ON PURPOSE. This leg is the evidence-carrying duplicate of
+      # the `windows-msvc Release` entry: same runner, same configure, same
+      # flags. A test step would run that entry's own selection on the same
+      # machine and add no coverage the entry does not already give, while
+      # making this leg a step wider than the shape that reported green - and
+      # the shape being unchanged is the whole of what this leg is preserving.
+      # The static gates above are kept because they are gates and cost seconds.
+
+
+  # The whole-tree tidy sweep: parsing every TU is heavy in minutes, and the
+  # findings it produces are per-source rather than per-change, so the sweep
+  # runs on every push and its findings are read by whoever is touching that
+  # source.
+  #
+  # WARNINGS ARE ERRORS ON THIS LEG, and that is a deliberate difference from
+  # the sibling repositories' tidy legs. This project's .clang-tidy sets
+  # `WarningsAsErrors: '*'`, so a finding reddens this leg rather than being
+  # printed and left in the log; the siblings' legs gate on parse failures only.
+  # A red here therefore means a finding to fix, not a broken leg.
+  clang-tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Install clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build wget libboost-dev libboost-graph-dev libhdf5-dev
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          sudo apt-get install -y clang-tidy-21 libomp-21-dev
+      - name: Configure
+        run: cmake --preset wsl-clang
+      # Every target precompiles its headers, so the compile database carries
+      # -include-pch flags; tidy needs the .pch files to exist.
+      - name: Build (materializes the PCHs tidy reads)
+        run: cmake --build build/wsl-clang -j"$(nproc)"
+      - name: Run clang-tidy
+        run: |
+          # Excluded: the CUDA host tests need the CUDA toolkit (local-only,
+          # QCX_ENABLE_CUDA) - not present on CI runners. No job here turns it
+          # on, so every QCX_ENABLE_CUDA branch compiles in no CI lane at all;
+          # the limitation is declared at its guard, tests/CMakeLists.txt:112.
+          # Also excluded: any nested copy of this tree (a scratch checkout
+          # holds COPIES of these sources, so walking it re-reports them under
+          # a scratch path) and external/ (the boys and excgrid submodules - a
+          # finding there is fixed upstream, never here).
+          # Keep this filter byte-identical to tools/run_clang_tidy.sh.
+          files=$(find . -path './build*' -prune -o -path './third_party*' -prune -o -path './.claude' -prune -o -path './external' -prune -o -path './backend/tests/cuda_smoke_test.cpp' -prune -o -path './memory/tests/device_buffer_cuda_test.cpp' -prune -o -path './memory/tests/tensor_cuda_test.cpp' -prune \
+                 -o -path './integrals/tests/boys_cuda_test.cpp' -prune -o -name '*.cpp' -print)
+          if [ -n "$files" ]; then
+            # run-clang-tidy.py parallelizes per TU: the amgcl TUs parse
+            # for ~30-50 s each and would serialize the whole job.
+            # The find filter above prunes the vendored TREES; our own TUs still
+            # include their headers, so the same two directories are excluded by
+            # name here - a finding inside a vendored header is fixed upstream,
+            # never here. Keep this regex byte-identical to the one in
+            # tools/run_clang_tidy.sh.
+            # SINGLE dash on the header filter: run-clang-tidy.py registers every
+            # one of its options with one leading dash, and argparse does not
+            # alias the `--` spelling onto them - it exits 2 with "unrecognized
+            # arguments" before running a single translation unit.
+            run-clang-tidy-21 -p build/wsl-clang -j "$(nproc)" -quiet \
+              -exclude-header-filter='(third_party|external)/.*' $files
+          fi

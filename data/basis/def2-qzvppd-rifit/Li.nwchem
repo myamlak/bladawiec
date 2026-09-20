@@ -1,0 +1,75 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: def2-QZVPPD-RIFIT
+# Description: def2-QZVPPD-RIFIT
+#        Role: rifit
+#     Version: 1  (Data from Turbomole 7.3)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# hattig2005a
+#     Hättig, Christof
+#     Optimization of auxiliary basis sets for RI-MP2 and RI-CC2
+#             calculations: Core-valence and quintuple-ζ basis sets for H to
+#             Ar and QZVPP basis sets for Li to Kr
+#     Phys. Chem. Chem. Phys. 7, 59-66 (2005)
+#     10.1039/b415208e
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (9s,7p,5d,4f,2g) -> [9s,7p,5d,4f,2g]
+Li    S
+    108.617                  1.0000000
+Li    S
+     22.5397                 1.0000000
+Li    S
+      8.37025                1.0000000
+Li    S
+      3.78446                1.0000000
+Li    S
+      2.43213                1.0000000
+Li    S
+      0.983859               1.0000000
+Li    S
+      0.445969               1.0000000
+Li    S
+      0.163467               1.0000000
+Li    S
+      0.074577               1.0000000
+Li    P
+     13.7984                 1.0000000
+Li    P
+      4.7962                 1.0000000
+Li    P
+      2.39853                1.0000000
+Li    P
+      0.446998               1.0000000
+Li    P
+      0.256322               1.0000000
+Li    P
+      0.109607               1.0000000
+Li    P
+      0.0559299              1.0000000
+Li    D
+      2.0614                 1.0000000
+Li    D
+      0.722639               1.0000000
+Li    D
+      0.271506               1.0000000
+Li    D
+      0.125992               1.0000000
+Li    D
+      0.0602193              1.0000000
+Li    F
+      0.994707               1.0000000
+Li    F
+      0.325262               1.0000000
+Li    F
+      0.186448               1.0000000
+Li    F
+      0.0639636              1.0000000
+Li    G
+      0.663344               1.0000000
+Li    G
+      0.207545               1.0000000
+END

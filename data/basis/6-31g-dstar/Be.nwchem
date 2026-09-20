@@ -1,0 +1,55 @@
+#----------------------------------------------------------------------
+# Basis Set Exchange
+# Version 0.12
+# https://www.basissetexchange.org
+#----------------------------------------------------------------------
+#   Basis set: 6-31G**
+# Description: 6-31G + polarization on all atoms
+#        Role: orbital
+#     Version: 1  (Data from Gaussian 09/GAMESS)
+#----------------------------------------------------------------------
+# Published reference(s) for this element's data:
+# binkley1977a
+#     Binkley, J. Stephen, Pople, John A.
+#     Self-consistent molecular orbital methods. XIX. Split-valence
+#             Gaussian-type basis sets for beryllium
+#     J. Chem. Phys. 66, 879-880 (1977)
+#     10.1063/1.433929
+# gaussian09e01
+#     Frisch, M. J., Trucks, G. W., Schlegel, H. B., Scuseria, G. E., Robb,
+#             M. A., Cheeseman, J. R., Scalmani, G., Barone, V., Mennucci,
+#             B., Petersson, G. A., Nakatsuji, H., Caricato, M., Li, X.,
+#             Hratchian, H. P., Izmaylov, A. F., Bloino, J., Zheng, G.,
+#             Sonnenberg, J. L., Hada, M., Ehara, M., Toyota, K., Fukuda,
+#             R., Hasegawa, J., Ishida, M., Nakajima, T., Honda, Y., Kitao,
+#             O., Nakai, H., Vreven, T., Montgomery, J. A., Jr., Peralta, J.
+#             E., Ogliaro, F., Bearpark, M., Heyd, J. J., Brothers, E.,
+#             Kudin, K. N., Staroverov, V. N., Kobayashi, R., Normand, J.,
+#             Raghavachari, K., Rendell, A., Burant, J. C., Iyengar, S. S.,
+#             Tomasi, J., Cossi, M., Rega, N., Millam, M. J., Klene, M.,
+#             Knox, J. E., Cross, J. B., Bakken, V., Adamo, C., Jaramillo,
+#             J., Gomperts, R., Stratmann, R. E., Yazyev, O., Austin, A. J.,
+#             Cammi, R., Pomelli, C., Ochterski, J. W., Martin, R. L.,
+#             Morokuma, K., Zakrzewski, V. G., Voth, G. A., Salvador, P.,
+#             Dannenberg, J. J., Dapprich, S., Daniels, A. D., Farkas, Ö.,
+#             Foresman, J. B., Ortiz, J. V., Cioslowski, J., Fox, D. J.
+#     Gaussian 09 Revision E.01
+#     Gaussian, Inc., Wallingford, CT, 2009
+BASIS "ao basis" SPHERICAL PRINT
+#BASIS SET: (10s,4p,1d) -> [3s,2p,1d]
+Be    S
+      0.1264585690E+04       0.1944757590E-02
+      0.1899368060E+03       0.1483505200E-01
+      0.4315908900E+02       0.7209054629E-01
+      0.1209866270E+02       0.2371541500E+00
+      0.3806323220E+01       0.4691986519E+00
+      0.1272890300E+01       0.3565202279E+00
+Be    SP
+      0.3196463098E+01      -0.1126487285E+00       0.5598019980E-01
+      0.7478133038E+00      -0.2295064079E+00       0.2615506110E+00
+      0.2199663302E+00       0.1186916764E+01       0.7939723389E+00
+Be    SP
+      0.8230990070E-01       0.1000000000E+01       0.1000000000E+01
+Be    D
+      0.4000000000E+00       1.0000000
+END
