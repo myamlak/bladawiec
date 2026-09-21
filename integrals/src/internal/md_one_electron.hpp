@@ -53,13 +53,8 @@ inline void BuildOverlapPair(const MdPairData& pair, double* block) {
     {
         const MdPrimPair& prim = pair.primPairs[primIdx];
         const double pref = std::pow(std::numbers::pi / prim.p, 1.5) * prim.prefactor;
-        FoldPairETable(pair.la,
-                       pair.lb,
-                       prim.perAxisTables,
-                       pair.isSphericalA,
-                       pair.isSphericalB,
-                       nHerm,
-                       folded);
+        FoldPairETable(
+            pair.la, pair.lb, 0, prim.perAxisTables, pair.isSphericalA, pair.isSphericalB, folded);
 
         for (std::size_t rowA = 0; rowA < pair.rowsA; ++rowA)
         {
@@ -310,13 +305,8 @@ inline void BuildNuclearPair(const MdPairData& pair,
         }
 
         // One bra contraction after the charge summation.
-        FoldPairETable(pair.la,
-                       pair.lb,
-                       prim.perAxisTables,
-                       pair.isSphericalA,
-                       pair.isSphericalB,
-                       nHerm,
-                       folded);
+        FoldPairETable(
+            pair.la, pair.lb, 0, prim.perAxisTables, pair.isSphericalA, pair.isSphericalB, folded);
 
         for (std::size_t rowA = 0; rowA < pair.rowsA; ++rowA)
         {
@@ -372,13 +362,8 @@ inline void BuildDipolePair(const MdPairData& pair,
     {
         const MdPrimPair& prim = pair.primPairs[primIdx];
         const double pref = std::pow(std::numbers::pi / prim.p, 1.5) * prim.prefactor;
-        FoldPairETable(pair.la,
-                       pair.lb,
-                       prim.perAxisTables,
-                       pair.isSphericalA,
-                       pair.isSphericalB,
-                       nHerm,
-                       folded);
+        FoldPairETable(
+            pair.la, pair.lb, 0, prim.perAxisTables, pair.isSphericalA, pair.isSphericalB, folded);
         const double dK = axis == 0   ? prim.px - origin[0]
                           : axis == 1 ? prim.py - origin[1]
                                       : prim.pz - origin[2];
@@ -445,13 +430,8 @@ inline void BuildQuadrupolePair(const MdPairData& pair,
     {
         const MdPrimPair& prim = pair.primPairs[primIdx];
         const double pref = std::pow(std::numbers::pi / prim.p, 1.5) * prim.prefactor;
-        FoldPairETable(pair.la,
-                       pair.lb,
-                       prim.perAxisTables,
-                       pair.isSphericalA,
-                       pair.isSphericalB,
-                       nHerm,
-                       folded);
+        FoldPairETable(
+            pair.la, pair.lb, 0, prim.perAxisTables, pair.isSphericalA, pair.isSphericalB, folded);
         const double dK = axisK == 0   ? prim.px - origin[0]
                           : axisK == 1 ? prim.py - origin[1]
                                        : prim.pz - origin[2];

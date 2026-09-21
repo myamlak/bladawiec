@@ -137,6 +137,24 @@ target_precompile_headers(qcx-bench-md-fock PRIVATE
     <qcx/integrals/fock_build.hpp>)
 qcx_apply_blas_runtime(qcx-bench-md-fock)
 
+# The Boys-share probe: counts the Boys calls one real Fock build makes, the
+# VRR order distribution and the argument range behind them, and reads them
+# against the engine's own per-phase spans. Plain main(), no Google Benchmark.
+add_executable(qcx-bench-boys-share boys_share_probe.cpp)
+target_include_directories(qcx-bench-boys-share PRIVATE
+    ${CMAKE_SOURCE_DIR}/integrals/src
+    ${CMAKE_SOURCE_DIR}/linalg/include
+    ${CMAKE_SOURCE_DIR}/tests/fixtures)
+target_compile_features(qcx-bench-boys-share PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-boys-share PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-boys-share PRIVATE qcx-integrals qcx-test-fixtures)
+target_precompile_headers(qcx-bench-boys-share PRIVATE
+    <qcx/integrals/boys.hpp>
+    <qcx/integrals/lean_fock_build.hpp>)
+qcx_apply_blas_runtime(qcx-bench-boys-share)
+
 # The survived-quartet recurrence of the direct Fock path across a real SCF
 # run - per-iteration screened counts, cumulative-union hit rate, the
 # ERI/contract wall-time split (the FockBuildStats seam), and the exact
@@ -406,3 +424,38 @@ target_link_libraries(qcx-bench-qfmm-separation-counts PRIVATE qcx-integrals qcx
 target_precompile_headers(qcx-bench-qfmm-separation-counts PRIVATE
     <qcx/integrals/fock_build.hpp>)
 qcx_apply_blas_runtime(qcx-bench-qfmm-separation-counts)
+
+# The memory-measurement probe: what the grid engine stores per grid point and
+# per block (the AO tiers and the per-point allocation census), what one block's
+# two candidate device layouts cost, what storing against recomputing costs at
+# each footprint, and how the Becke weight derivative scales with the atom
+# count. Plain main() with subcommands (m1, m2m3, m5, m6), not a
+# google-benchmark run. The census rides the Debug CRT allocation hook, so its
+# counts need a Debug build while the m5 timings want a Release one; the probe
+# prints that mode with its numbers.
+add_executable(qcx-bench-memory-probe
+    memory_probe.cpp
+    memory_probe_census.cpp
+    memory_probe_components.cpp
+    memory_probe_block.cpp
+    memory_probe_crossover.cpp
+    memory_probe_becke.cpp)
+target_compile_features(qcx-bench-memory-probe PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-memory-probe PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-memory-probe PRIVATE
+    qcx-grid qcx-basisset qcx-molecule qcx-memory)
+target_precompile_headers(qcx-bench-memory-probe PRIVATE
+    <qcx/grid/xc_grid_engine.hpp>)
+
+# The same probe's device half (m4): the two candidate layouts for one grid
+# block, allocated for real and read back through the device's own free-memory
+# counter. Raw CUDA runtime only - no qcx device backend is involved, so this
+# is a footprint measurement of the two layouts and not a kernel benchmark.
+if (QCX_ENABLE_CUDA)
+    add_executable(qcx-bench-memory-probe-device memory_probe_device.cu)
+    target_compile_features(qcx-bench-memory-probe-device PRIVATE cxx_std_23)
+    target_precompile_headers(qcx-bench-memory-probe-device PRIVATE
+        <cuda_runtime.h>)
+endif()

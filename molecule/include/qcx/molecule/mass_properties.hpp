@@ -17,6 +17,11 @@ struct MassProperties {
     bool isLinear; ///< Smallest moment is below the linearity threshold; false for a single atom.
 };
 
+/// The default smallest-to-largest principal-moment ratio below which a
+/// structure counts as linear.
+/// \ingroup qcx-molecule
+inline constexpr double kDefaultLinearityThreshold = 1e-6;
+
 /// Computes mass properties from the molecule's isotopes and coordinates.
 ///
 /// Parallel blocked reductions over the atoms (deterministic up to
@@ -25,7 +30,8 @@ struct MassProperties {
 /// \param linearityThreshold Smallest-to-largest moment ratio below which the
 /// molecule is considered linear.
 /// \returns The mass properties.
-MassProperties ComputeMassProperties(const Molecule& molecule, double linearityThreshold = 1e-6);
+MassProperties ComputeMassProperties(const Molecule& molecule,
+                                     double linearityThreshold = kDefaultLinearityThreshold);
 
 /// Closed-form nuclear repulsion energy: sum of Z_i Z_j / r_ij over pairs.
 ///

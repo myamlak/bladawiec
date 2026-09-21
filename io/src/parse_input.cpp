@@ -653,6 +653,15 @@ std::string_view ToString(ExecutionBackend backend) noexcept {
     return "cpu";
 }
 
+std::string DeviceSelectorText(const RunDeviceRequest& request) {
+    if (request.target == DeviceTarget::kHost)
+    {
+        return "host";
+    }
+
+    return "cuda:" + std::to_string(request.index);
+}
+
 bool operator==(const BuilderAxes& left, const BuilderAxes& right) noexcept {
     return left.integralFamily == right.integralFamily && left.storageTier == right.storageTier &&
            left.executionBackend == right.executionBackend;
@@ -814,6 +823,126 @@ qcx::Result<ExecutionBackend> ParseExecutionBackend(std::string_view name) {
             "unknown builder.execution_backend \"" + std::string(name) + "\" (cpu | gpu)"));
 }
 
+// The device selector: `host`, or `cuda:<index>` with a non-negative decimal
+// index. The accepted set is named on every refusal, so a user who mistypes the
+// word is handed the set rather than a parse failure two layers down.
+//
+// The index is parsed HERE rather than left as an opaque string, and the reason
+// is the record: a requirement the run cannot be held to is not a requirement,
+// so "cuda:" with no index, "cuda:-1" and "cuda:x" are refused by name rather
+// than stored and compared later as text.
+qcx::Result<RunDeviceRequest> ParseDeviceSelector(std::string_view name) {
+    if (name == "host")
+    {
+        return RunDeviceRequest{DeviceTarget::kHost, -1};
+    }
+
+    constexpr std::string_view kCudaPrefix = "cuda:";
+
+    if (name.starts_with(kCudaPrefix))
+    {
+        const std::string_view indexText = name.substr(kCudaPrefix.size());
+        int index = -1;
+
+        if (!indexText.empty())
+        {
+            bool allDigits = true;
+
+            for (const char c : indexText)
+            {
+                if (c < '0' || c > '9')
+                {
+                    allDigits = false;
+                    break;
+                }
+            }
+
+            if (allDigits)
+            {
+                try
+                { index = std::stoi(std::string(indexText)); } catch (const std::exception&)
+                {
+                    // A decimal string too long for int: refused below by the
+                    // same sentence as any other unusable index, rather than
+                    // reported as a parse failure a user cannot act on.
+                    index = -1;
+                }
+            }
+        }
+
+        if (index < 0)
+        {
+            // A `cuda` selection that carries no usable index. The sentence names
+            // the shape rather than the accepted set, because the WORD was
+            // accepted: it is the index that is missing, and the two are
+            // different things for an author to fix.
+            return std::unexpected(
+                Err(qcx::ErrorCode::kInvalidArgument,
+                    "builder.device = \"" + std::string(name) +
+                        "\" names no CUDA device: a cuda selection carries the index in the "
+                        "selector, as \"cuda:0\" (the first device) - the index is a non-negative "
+                        "decimal number"));
+        }
+
+        return RunDeviceRequest{DeviceTarget::kCuda, index};
+    }
+
+    return std::unexpected(
+        Err(qcx::ErrorCode::kInvalidArgument,
+            "unknown builder.device \"" + std::string(name) + "\" (host | cuda)"));
+}
+
+// The DEVICE requirement against the backend it will be held to: they must
+// AGREE, and a pair that does not is REFUSED rather than resolved - the same
+// rule the axes-versus-deprecated-key conflict follows, for the same reason.
+// Electing one key as authoritative would leave the other silently unread, and
+// the two sentences name their own contradiction so an author knows which to
+// change.
+//
+// The backend is an ARGUMENT rather than a second reading of the slots, because
+// the caller has two of them and they are different facts: the resolved axis
+// when a backend word was written, and the default (cpu) when the block named no
+// axis at all and the selection will resolve to its own defaults. A requirement
+// checked against one and not the other would be a key whose meaning depended on
+// whether an unrelated word happened to be present.
+// \param input The run being resolved; `builder.device` is the requirement.
+// \param backend The backend the requirement is held to.
+// \returns Nothing, or the refusal naming both sides.
+qcx::Result<void> CheckDeviceAgreement(const RunInput& input, ExecutionBackend backend) {
+    if (!input.builder.device.has_value())
+    {
+        // No requirement: nothing to hold the backend to (the null-honesty rule
+        // the sibling optional keys follow - an absent key is not a request).
+        return {};
+    }
+
+    const bool deviceIsCuda = input.builder.device->target == DeviceTarget::kCuda;
+
+    if (deviceIsCuda && backend != ExecutionBackend::kGpu)
+    {
+        return std::unexpected(
+            Err(qcx::ErrorCode::kInvalidArgument,
+                "builder.device = \"" + DeviceSelectorText(*input.builder.device) +
+                    "\" requires the device backend, and builder.execution_backend resolves to \"" +
+                    std::string(ToString(backend)) +
+                    "\": the requirement cannot be honoured on the host path, so the run is "
+                    "refused rather than executed elsewhere. Write builder.execution_backend = "
+                    "\"gpu\", or state builder.device = \"host\""));
+    }
+
+    if (!deviceIsCuda && backend == ExecutionBackend::kGpu)
+    {
+        return std::unexpected(
+            Err(qcx::ErrorCode::kInvalidArgument,
+                "builder.device = \"host\" requires the host path, and "
+                "builder.execution_backend = \"gpu\" resolves to the device: the same run cannot "
+                "require both, so the pair is refused rather than resolved. Write "
+                "builder.execution_backend = \"cpu\", or state a cuda:<index> device"));
+    }
+
+    return {};
+}
+
 // Resolves the [builder] block into the selection slots the wiring already
 // reads - method.builder and the within-family leanDirect flag - so the axis
 // vocabulary is a second SPELLING of one request, never a second state a run can
@@ -856,12 +985,43 @@ qcx::Result<void> ResolveBuilderBlock(RunInput& input, toml::table& table) {
         return std::unexpected(backendName.error());
     }
 
+    auto deviceName = ReadString(builder, "builder.device");
+
+    if (!deviceName.has_value())
+    {
+        return std::unexpected(deviceName.error());
+    }
+
+    // The DEVICE axis is read and validated before the axes' own early return,
+    // because it is a requirement and not a selection: `[builder] device` alone
+    // must leave the family, the tier and the backend at their defaults and let
+    // the size ladder keep deciding the builder. Folding it into `axesGiven`
+    // would make stating a requirement silently select the direct family's
+    // in-memory tier - a placement key changing what was placed.
+    if (deviceName->has_value())
+    {
+        auto parsed = ParseDeviceSelector(**deviceName);
+
+        if (!parsed.has_value())
+        {
+            return std::unexpected(parsed.error());
+        }
+
+        input.builder.device = *parsed;
+    }
+
     const bool axesGiven =
         familyName->has_value() || tierName->has_value() || backendName->has_value();
 
     if (!axesGiven)
     {
-        return {};
+        // No axis word was written, so the selection resolves to its own
+        // defaults - cpu among them - and a device requirement is answered
+        // against THAT rather than left for a later site. The requirement and a
+        // defaulted backend are as much a pair as two written words are, and a
+        // `cuda` requirement the input cannot pair with anything is refused
+        // here, at the key, where the author is looking.
+        return CheckDeviceAgreement(input, ExecutionBackend::kCpu);
     }
 
     // The deprecated key's own spelling is what makes this a conflict, not the
@@ -951,6 +1111,22 @@ qcx::Result<void> ResolveBuilderBlock(RunInput& input, toml::table& table) {
                 "builder.execution_backend = \"gpu\" runs the DIRECT family on the device "
                 "(GpuJkFockBuilder), so it cannot be combined with builder.integral_family = \"" +
                     std::string(ToString(family)) + "\""));
+    }
+
+    // The DEVICE requirement and the backend axis must AGREE, and the pair is
+    // REFUSED rather than resolved - the same rule the axes-versus-deprecated-key
+    // conflict above follows, for the same reason: electing one key as
+    // authoritative would leave the other one silently unread, and the two
+    // sentences name their own contradiction so an author knows which to change.
+    //
+    // This is the within-block check; the requirement is checked again against
+    // the RESOLVED builder in the driver (ValidateCombination), which is the only
+    // place that knows what the run actually wired - the deprecated
+    // `[method] fock_builder = "gpu"` word reaches the device path without
+    // passing through this block at all.
+    if (auto agreement = CheckDeviceAgreement(input, backend); !agreement.has_value())
+    {
+        return std::unexpected(agreement.error());
     }
 
     input.builder.integralFamily = family;

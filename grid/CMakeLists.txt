@@ -16,6 +16,7 @@ add_library(qcx-grid
   src/ao_evaluator.cpp
   src/geometry_translation.cpp
   src/xc_grid_engine.cpp
+  src/xc_gradient.cpp
 )
 target_include_directories(qcx-grid PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(qcx-grid PUBLIC cxx_std_23)
@@ -40,6 +41,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/molecular_grid_test.cpp
         tests/ao_evaluator_test.cpp
         tests/xc_assembly_test.cpp
+        tests/xc_gradient_test.cpp
         tests/quadrature_cross_validation_test.cpp
         tests/synthetic_fixture.cpp
         tests/synthetic_fixture_test.cpp

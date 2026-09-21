@@ -38,6 +38,10 @@ struct ShellEnvelope {
     std::size_t aoOffset = 0; ///< Index of the shell's first AO.
     std::size_t functionCount = 0; ///< AOs in the shell, all contraction rows.
     std::array<double, 3> center{}; ///< Shell center, Bohr.
+    // Which atom carries the shell. The screening test does not need it; a
+    // gradient does, because the AOs' motion reaches the coordinates of the atom
+    // they sit on and of no other.
+    std::size_t atomIndex = 0; ///< The molecule's atom the shell is centered on.
     double minExponent = 0.0; ///< Most diffuse primitive exponent.
     double extentRadius = 0.0; ///< Radius of the shell's radial maximum, Bohr.
 };
@@ -113,6 +117,7 @@ inline qcx::Result<std::vector<ShellEnvelope>> BuildShellEnvelopes(
             envelopes.push_back(ShellEnvelope{ranges[shellIndex].aoOffset,
                                               ranges[shellIndex].functionCount,
                                               center,
+                                              atom,
                                               minExponent,
                                               extentRadius});
             ++shellIndex;
@@ -200,7 +205,7 @@ inline qcx::Result<std::vector<ShellEnvelope>> BuildShellEnvelopes(
 /// when \p density does not hold exactly aoCount^2 entries.
 /// \ingroup qcx-grid
 [[nodiscard]] inline qcx::Result<std::vector<double>> ShellDensityWeights(
-    const std::vector<ShellEnvelope>& envelopes,
+    std::span<const ShellEnvelope> envelopes,
     std::span<const double> density,
     std::size_t aoCount) {
     if (density.size() != aoCount * aoCount)

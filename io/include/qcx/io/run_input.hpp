@@ -256,8 +256,13 @@ std::string_view ToString(qcx::integrals::AccuracyPreset preset) noexcept;
 /// \ingroup qcx-io
 bool BuilderConsumesAux(BuilderKind builder) noexcept;
 
-/// The RI tensor rung selection (the driver's disk-rung knob): v1 is automatic
-/// selection by the engine's Create-time ladder plus this explicit disk opt-in.
+/// The RI tensor rung selection (the driver's disk-rung knob): the engine's
+/// Create-time ladder selects among the IN-MEMORY rungs, and the disk rung is
+/// entered only when a run asks for it - at this key (`"disk"`) or at the force
+/// key that names the same rung more strongly (`[diagnostics] force_disk_ri`).
+/// **Disk is never reached by a run that asks for nothing.** The ladder's own
+/// last IN-MEMORY rung is the blocked-metric one; `disk` extends the ladder with
+/// one further rung, and `auto` - the absent key - does not extend it at all.
 ///
 /// These are TIER words, not family words (the two axes are stated at
 /// BuilderKind): the key asks WHERE the RI tensor and its working set live -
@@ -745,6 +750,14 @@ enum class GuessKind {
 // | integral_family   | direct, ri_j_link, ri_jk, qfmm | [builder] integral_family       |
 // | storage_tier      | lean, in_memory, blocked, disk | [builder] storage_tier (2 of 4) |
 // | execution_backend | cpu, gpu, gpu_split            | [builder] execution_backend     |
+// | device            | host, cuda:<index>             | [builder] device                |
+//
+// The last row is the one axis that names no part of the SELECTION - it says
+// where the resolved selection's kernels are required to execute, and it is the
+// only axis a run may write alone without moving the family or the tier (the
+// DeviceTarget doc states why). It is also the axis that cannot disagree with
+// `execution_backend`: the two must agree, and a pair that does not is refused
+// by name rather than resolved.
 //
 // LEGACY SPELLING -> COMBINATION (what `[method] fock_builder` meant):
 //
@@ -852,6 +865,65 @@ enum class ExecutionBackend {
     kGpuSplit
 };
 
+/// The builder selection's DEVICE axis: WHICH device a run requires its kernels
+/// to execute on. It exists because the backend axis answers a different
+/// question. `execution_backend = "gpu"` states the device CLASS - the run wants
+/// the device path, whichever device that is - and before this axis there was no
+/// key through which a run could name a PARTICULAR device, so a requirement of
+/// that kind could only be left to be inferred from the builder kind the run
+/// happened to resolve.
+///
+/// **The two name different things and the difference is the point.** The
+/// builder kind says HOW the Fock build is done; this axis says WHERE the run
+/// requires it to happen. A combination whose backend cannot supply the required
+/// device is REFUSED BY NAME - never quietly executed elsewhere, which is the
+/// rule the builder whitelist and the unwired-combination checks already follow.
+/// The second surface for the same fact is safe here rather than contradictory
+/// for that reason: it cannot disagree with the backend, because a disagreement
+/// is a refusal and not a resolution.
+///
+/// **This axis does not restate the CUDA-absence refusal.** A build without the
+/// CUDA backend refuses `execution_backend = "gpu"` by name already (the kGpu
+/// doc above), so a `cuda:<index>` request reaches that refusal first and needs
+/// no rule of its own here; the parser's acceptance matrix states only what the
+/// two keys must agree about.
+///
+/// **A device requirement is not a builder selection.** Writing this key alone
+/// does NOT fill the family or tier slots the way the `[builder]` axes do: with
+/// the other axes absent the size ladder still decides the selection, and this
+/// key only states where the run requires the result to be computed. That is the
+/// whole reason it is a separate key rather than a fourth axis word on a key
+/// that already conflates selection with placement.
+/// \ingroup qcx-io
+enum class DeviceTarget {
+    /// The host: the CPU backend's own device, the one every run in a build
+    /// without the CUDA backend executes on.
+    kHost,
+    /// A CUDA device, named by index in the selector.
+    kCuda
+};
+
+/// One device requirement as the file wrote it: the target, and for kCuda the
+/// index the selector named. `kHost` carries -1, which is not a device index -
+/// the same absent-means-not-this-axis reading the sibling optionals use.
+/// \ingroup qcx-io
+struct RunDeviceRequest {
+    /// The device class the requirement names.
+    DeviceTarget target = DeviceTarget::kHost;
+    /// The CUDA device index, or -1 on kHost.
+    int index = -1;
+};
+
+/// The canonical selector text of one device requirement: `"host"` or
+/// `"cuda:<index>"`. ONE spelling, produced in one place, so the parser's
+/// accepted set, the input's stored form and the run record's member cannot
+/// drift apart - and so the record's word is a word a user can write back into a
+/// file (the `method` word's own rule).
+/// \param request The requirement.
+/// \returns The selector text.
+/// \ingroup qcx-io
+std::string DeviceSelectorText(const RunDeviceRequest& request);
+
 /// One resolved builder selection, in the orthogonal vocabulary: the three axes
 /// together are the whole selection, and no axis can be read off another.
 ///
@@ -946,6 +1018,19 @@ struct RunBuilderInput {
     /// `execution_backend`; absent = cpu. `gpu_split` is refused by name: the
     /// candidate has no builder to execute (the kGpuSplit precedent).
     std::optional<ExecutionBackend> executionBackend;
+    /// `device`; absent = no requirement stated, which leaves every run exactly
+    /// where it was before the key existed. Present, it is the device the run
+    /// REQUIRES (DeviceTarget above), and the two keys must AGREE: a `host`
+    /// requirement beside `execution_backend = "gpu"`, or a `cuda:<index>`
+    /// requirement beside `cpu` (or beside no backend word at all, whose
+    /// resolution is cpu), is refused by name rather than resolved - the choice
+    /// between them would have to elect one key as authoritative while silently
+    /// leaving the other unread.
+    ///
+    /// It does NOT participate in the axes' selection: this key alone leaves the
+    /// family, tier and backend at their own defaults, so the size ladder still
+    /// decides the builder and the run only states where it requires the result.
+    std::optional<RunDeviceRequest> device;
     /// The DEPRECATED spelling this run used, when it named its selection
     /// through `[method] fock_builder` rather than through the axes above: the
     /// exact word the file wrote ("direct", "ri_j_link", "ri_jk", "qfmm",

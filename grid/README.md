@@ -20,11 +20,17 @@ of truth.
 
 - `grid/include/qcx/grid/`: `angular_grid.hpp`, `radial_grid.hpp`,
   `atomic_grid.hpp`, `molecular_grid.hpp`, `partition_function.hpp`,
-  `ao_evaluator.hpp` (+ `internal/lebedev_tables.hpp`, `internal/solid_harmonics.hpp`)
+  `ao_evaluator.hpp`, `geometry_translation.hpp`, `shell_screening.hpp`,
+  `xc_grid_engine.hpp`, `xc_gradient.hpp`
+  (+ `internal/lebedev_tables.hpp`, `internal/solid_harmonics.hpp`)
 - `AngularGrid` — the Lebedev quadrature.
 - `RadialGrid` — the Euler–Maclaurin quadrature.
 - `MolecularGrid` — the combined per-atom product grid.
 - `AoEvaluator` — AO values at arbitrary points (the `N_l(a)` convention).
+- `XcGridEngine` — the exchange-correlation energy and potential, over the
+  molecular grid of an excgrid functional.
+- `EvaluateXcGradient` — the same functional's contribution to the nuclear
+  gradient at fixed density, under the energy path's own thresholds.
 
 ## Generation / regeneration notes
 

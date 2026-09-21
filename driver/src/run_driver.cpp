@@ -68,6 +68,9 @@
 // The Kohn-Sham composition (driver-internal, the
 // internal/footprint.hpp precedent in integrals/src).
 #include "internal/ks_composition.hpp"
+// The Kohn-Sham grid: the engine, its derivative provider's geometry and
+// parameters, and the thresholds both walks read.
+#include "internal/ks_grid.hpp"
 
 #include <Eigen/Dense>
 #include <algorithm>
@@ -151,6 +154,18 @@ struct EriStoreWiring {
     /// record's `engaged` word cannot describe a tier the run did not have.
     bool ramTierInForce = false;
 };
+
+// The engine-decorator factory for the disk-tier ERI store. Declared here
+// because it has TWO install sites that must share it - the restricted
+// wiring's machinery member and the unrestricted runner's two halves - and
+// the first of those is defined above the factory's own definition. Its
+// contract is documented once, at the definition.
+qcx::integrals::EngineDecoratorFactory MakeEriStoreFactory(std::shared_ptr<EriStoreHandle> handle,
+                                                           const qcx::molecule::Molecule& molecule,
+                                                           const qcx::basisset::BasisSet& basis,
+                                                           std::string orbitalBasisName,
+                                                           std::string auxBasisName,
+                                                           std::filesystem::path storePath);
 
 // The wired builder plus the artifacts the cap left in force for it. The
 // trailing members carry the ri_j budget path (the budget path): the workspace
@@ -626,6 +641,12 @@ qcx::Result<UhfRun> RunDirectUhfScf(
     // the ladder each consumer re-derived it from (input, nBasis), which a
     // demoted run would have got wrong.
     bool leanMember,
+    // The run's disk-tier ERI store wiring (`method.eri_cache_store`), the
+    // `EriStoreWiring` out-parameter the machinery arm installs the
+    // engine-decorator factory on and the record reads back afterwards. Null
+    // means no caller is collecting it (the Fukui charged-species runs), in
+    // which case no decorator is installed and nothing is left hanging.
+    EriStoreWiring* eriStore = nullptr,
     bool enableTrace = false);
 
 // One composed-QFMM UHF run: the definition follows RunDirectUhfScf.
@@ -1402,6 +1423,43 @@ std::string RiJLinkKsDiskRungRefusalText() {
            "split builders carry the halves on every rung)";
 }
 
+// The unrestricted legs' disk-tier ERI store refusal, in ONE home: the
+// combination check states it beside the requested path and the family the
+// run resolved to, and no other site restates it.
+//
+// THE LOAD-BEARING SENTENCE IS ONE STRING LITERAL ON ONE SOURCE LINE, and
+// deliberately so. The sentence this text replaces was split across two
+// adjacent literals at a point INSIDE the sentence ("...the restricted
+// paths' direct " / "family machinery member..."), so a single-line search
+// for the words a record or a document quotes found nothing - a refusal an
+// author cannot find is a refusal an author cannot act on, which is the
+// same rule the dispatch's own refusals follow.
+//
+// THE LITERAL IS ALSO SHORT ENOUGH TO SURVIVE THE FORMATTER, which is a
+// second constraint and not a stylistic one: `.clang-format` inherits
+// BreakStringLiterals from LLVM, so a literal longer than the 100-column
+// limit is SPLIT by clang-format - the single-line property is lost by the
+// act of committing it cleanly. Measured on this function: a 100-character
+// sentence came back out as two literals. The sentence here is 72
+// characters, which leaves room for its indentation and its quotes.
+// \param storePath The path the input named, verbatim.
+// \param resolvedKind The builder family the unrestricted run resolved to.
+// \param isKs True on the per-spin Kohn-Sham path (UKS), false on UHF.
+// \returns The refusal text.
+std::string UnrestrictedEriStoreRefusalText(const std::string& storePath,
+                                            qcx::io::BuilderKind resolvedKind,
+                                            bool isKs) {
+    // The sentence a reader searches for, in ONE home, so the assertion the
+    // test makes and the source a reader greps cannot drift apart.
+    const std::string seam =
+        "the disk-tier ERI store is wired on the direct family's per-spin halves";
+
+    return "method.eri_cache_store = \"" + storePath + "\" resolves to fock_builder = \"" +
+           std::string(qcx::io::ToString(resolvedKind)) + "\" on " +
+           (isKs ? std::string{"a UKS run"} : std::string{"a UHF run"}) + ", and " + seam +
+           ", which this builder is not";
+}
+
 // The storage module's own absence, in ONE home for the same reason the two
 // texts above share theirs: the fact belongs to the BUILD, not to the site that
 // runs into it, so every storage-backed route (the disk rung, the checkpoint
@@ -1435,6 +1493,34 @@ std::string StorageModuleAbsentRefusalText() {
 std::string FusedKsRefusalReasonText() {
     return "fuses its Coulomb and exchange halves inside one BuildFock, so it would need its own "
            "Kohn-Sham composition";
+}
+
+// The guess request's RESOLUTION POINT: the ONE place `guess.type` and
+// `guess.restart_path` are read as the single request they are. The value's
+// own consumers are the solver wiring sites (the GWH/core start, the SAD
+// fragment start, the restart read); this answers for the PAIR, which no site
+// did - so a restart_path written beside a guess word that does not read it
+// was stored by `io` and ignored by the driver, with nothing in the run's
+// record able to say so.
+//
+// The rule is one line: restart_path belongs to restart. The other three words
+// take no checkpoint file at all, so a path written beside one of them names a
+// file no code path will open.
+// \param input The parsed input.
+// \returns Nothing, or the refusal naming both keys.
+qcx::Result<void> ResolveGuess(const qcx::io::RunInput& input) {
+    if (!input.guessRestartPath.empty() && input.guess != qcx::io::GuessKind::kRestart)
+    {
+        return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                                   "guess.restart_path = \"" + input.guessRestartPath +
+                                       "\" was written beside a guess.type that is not "
+                                       "\"restart\", and no other start reads a checkpoint file - "
+                                       "so the key would be stored and silently ignored. Write "
+                                       "guess.type = \"restart\" to load it, or remove "
+                                       "guess.restart_path"));
+    }
+
+    return {};
 }
 
 // The not-yet-wired combinations the schema documents; the driver rejects
@@ -1822,6 +1908,24 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
                     "exactly), and a run that dropped it silently would compute at a screening "
                     "the document does not ask for. Use fock_builder = \"qfmm\", or remove " +
                     keyWord));
+    }
+
+    // The guess RESOLUTION POINT, and it is the pair's ONE home.
+    // `guess.type` and `guess.restart_path` are one request between them, and
+    // the value itself is consumed at the solver wiring sites below (the
+    // GWH/core start, the SAD fragment start, the restart read) - which is
+    // why the parsed enum was never dead code. What was missing is the place
+    // that answers for the PAIR: a restart_path written beside any other guess
+    // word was stored (`io` keeps what the file says, by its own contract) and
+    // then read by nothing, so the input named a checkpoint file, no path
+    // opened it, and the run record could not say so. That is the knob-
+    // conformance defect exactly - a key a user can write that the code
+    // neither honours, refuses by name, nor demotes with a disclosure - and a
+    // refusal by name is its closure, because the request is well-formed and a
+    // demotion has nothing to disclose: the run works, the key does not.
+    if (auto guess = ResolveGuess(input); !guess.has_value())
+    {
+        return std::unexpected(guess.error());
     }
 
     if (!isUnrestricted && input.guess == qcx::io::GuessKind::kSad)
@@ -2888,16 +2992,21 @@ qcx::scf::UhfFockBuilderFn MakeLeanUhfFockBuilder(
 // composition's HalfFockFn.
 // ---------------------------------------------------------------------------
 
-// The run's resolved Kohn-Sham context: the functional the input asked for,
-// plus the XC evaluator that compiles it over the molecule's grid.
+// The run's resolved Kohn-Sham context: the functional the input asked for, the
+// XC evaluator that compiles it over the molecule's grid, and the grid itself -
+// the engine, the geometry and parameters its derivative provider is built
+// from, and the thresholds both walks read (KsGrid).
 //
 // The engine owns the grid, so it is built ONCE per run and held in a
 // shared_ptr the evaluator lambda captures - the evaluator is copied into the
 // seam closures, which the SCF loop holds for the run's duration, and the grid
-// must outlive every copy of them.
+// must outlive every copy of them. The grid rides along beside the evaluator so
+// that a gradient walk reads the same engine and the same thresholds rather
+// than resolving a second grid of its own.
 struct KsContext {
     qcx::driver::internal::KsFunctional functional;
     qcx::driver::internal::XcEvaluatorFn evaluator;
+    qcx::driver::internal::KsGrid grid;
 };
 
 // The XC grid settings for this run: the parser's resolved `[grid]`
@@ -2972,17 +3081,13 @@ qcx::Result<KsContext> ResolveKsContext(const qcx::io::RunInput& input,
 
     // The run's grid: the input's `[grid]` block, resolved by the parser,
     // reaches the grid build here and nowhere else - this is the ONE Create
-    // for the whole run, whichever builder arm called it.
-    auto engine = qcx::grid::XcGridEngine::Create(
-        molecule,
-        basis,
-        functional->name,
-        ResolveXcGridSettings(input.grid.value_or(qcx::io::RunGridInput{})));
-
-    if (!engine.has_value())
-    {
-        return std::unexpected(engine.error());
-    }
+    // for the whole run, whichever builder arm called it. The settings object
+    // and the tolerance below go to that build TOGETHER, and the thresholds
+    // they produce are what the energy path is handed here and what a gradient
+    // walk is handed later: one object, read once, so neither walk can screen
+    // by a rule the other did not use.
+    const qcx::grid::XcGridSettings settings =
+        ResolveXcGridSettings(input.grid.value_or(qcx::io::RunGridInput{}));
 
     // The tolerance the schema documents: an absent key is
     // kDefaultScreeningTolerance (the engine's measured cheap route), a
@@ -2992,6 +3097,16 @@ qcx::Result<KsContext> ResolveKsContext(const qcx::io::RunInput& input,
     const double tolerance =
         input.method.screeningTolerance.value_or(qcx::io::kDefaultScreeningTolerance);
 
+    auto grid =
+        qcx::driver::internal::CreateKsGrid(molecule, basis, functional->name, settings, tolerance);
+
+    if (!grid.has_value())
+    {
+        return std::unexpected(grid.error());
+    }
+
+    KsContext context{std::move(*functional), {}, std::move(*grid)};
+
     // EvaluateScreened is the entry point used for BOTH lanes. The closed
     // shell passes the spin pair (rho, rho) at rho = D/2, which is exactly
     // the split EvaluateClosedShellScreened(D) performs internally - both
@@ -2999,15 +3114,19 @@ qcx::Result<KsContext> ResolveKsContext(const qcx::io::RunInput& input,
     // the same, so calling the pair form directly is the same integration.
     // The returned potentials are dE/dD_s in both lanes; the restricted
     // consumer halves their sum (the engine's own chain-rule note).
-    auto shared = std::make_shared<qcx::grid::XcGridEngine>(std::move(*engine));
-    qcx::driver::internal::XcEvaluatorFn evaluator =
-        [shared,
-         tolerance](const Eigen::MatrixXd& densityAlpha,
-                    const Eigen::MatrixXd& densityBeta) -> qcx::Result<qcx::grid::XcEvaluation> {
-        return shared->EvaluateScreened(densityAlpha, densityBeta, tolerance);
+    //
+    // The screen the evaluator passes is read off the context's own thresholds
+    // rather than off a copy of the double: the energy path and the gradient
+    // walk then screen by one value, and a divergence between the two is
+    // unrepresentable rather than merely unlikely.
+    context.evaluator =
+        [engine = context.grid.engine, thresholds = context.grid.thresholds](
+            const Eigen::MatrixXd& densityAlpha,
+            const Eigen::MatrixXd& densityBeta) -> qcx::Result<qcx::grid::XcEvaluation> {
+        return engine->EvaluateScreened(densityAlpha, densityBeta, thresholds.screeningTolerance);
     };
 
-    return KsContext{std::move(*functional), std::move(evaluator)};
+    return context;
 }
 
 // One Kohn-Sham half behind the composition's HalfFockFn, over the direct
@@ -4319,6 +4438,7 @@ qcx::Result<UhfRun> RunDirectUhfScf(
     const qcx::backend::GpuComputeProfile& deviceComputeProfile,
     std::optional<bool> certifiedLaneRequest,
     bool leanMember,
+    EriStoreWiring* eriStore,
     bool enableTrace) {
     // The per-call stats stream of the trace side-channel: the main
     // UHF branch only (enableTrace) - the Fukui charged-species runs are
@@ -4555,6 +4675,66 @@ qcx::Result<UhfRun> RunDirectUhfScf(
     const std::size_t cacheBytes = DirectFamilyCacheBytes(input.resources.memoryCapGiB);
     coulombOptions.maxCacheBytes = cacheBytes;
     exchangeOptions.maxCacheBytes = cacheBytes;
+
+    // The disk-tier ERI store (`[method] eri_cache_store`) on the
+    // unrestricted legs, and this is its one install site: the machinery
+    // arm's two option structs, on the SAME grant path the cap-derived
+    // cache budget above rides. The `RunDirectUhfScf` seam the older
+    // refusal announced is this one - the per-spin coulomb and exchange
+    // halves assemble their own FockBuildOptions here, so the restricted
+    // site's install could not reach them.
+    //
+    // ONE factory, TWO halves, and the pairing is deliberate: the factory
+    // is a copyable closure over ONE shared handle, so the first half's
+    // Create opens the store and the second reuses it rather than opening a
+    // second append-only writer over the same file (the `MakeEriStoreFactory`
+    // contract, the same one the Kohn-Sham composition relies on).
+    //
+    // The install is BESIDE the cap-derived grant, never derived from it:
+    // an explicit store request is not a cap-derived grant, so it is not
+    // re-derived from `cacheBytes` and it does not move it. The two facts
+    // the record needs are read from the options the builders actually
+    // get: whether a factory was installed at all, and whether a positive
+    // in-memory tier stands behind it.
+    //
+    // A store that cannot open costs the run a cache, never the run (the
+    // owner's 2026-09-12 ruling): the factory returns the raw engine pair
+    // unchanged and leaves its cause on the handle for the record to
+    // disclose. The LEAN arm above never reaches here - it builds
+    // LeanFockBuildOptions, which carries no engine pair to decorate - so a
+    // lean run's request demotes through the record's own lean sentence,
+    // exactly as the restricted member's does.
+    const bool eriStoreRequested = !input.method.eriCacheStore.empty();
+
+    if (eriStore != nullptr && eriStoreRequested && !leanMember)
+    {
+        auto auxName = AuxNameInEffect(input, qcx::io::BuilderKind::kDirect);
+
+        if (!auxName.has_value())
+        {
+            return std::unexpected(auxName.error());
+        }
+
+        eriStore->handle = std::make_shared<EriStoreHandle>();
+        // The path the input named is used as written, the restricted
+        // site's rule and the same reason: the EriStore layer creates a
+        // missing file and verifies the fingerprint of an existing one, so
+        // a stale or foreign store at the path is a demotion the record
+        // discloses rather than a run this site silently redirects.
+        const qcx::integrals::EngineDecoratorFactory decorator =
+            MakeEriStoreFactory(eriStore->handle,
+                                molecule,
+                                basis,
+                                input.basis.orbital,
+                                *auxName,
+                                input.method.eriCacheStore);
+        coulombOptions.engineDecorator = decorator;
+        exchangeOptions.engineDecorator = decorator;
+        // The tier that would serve an unengaged request, read from the
+        // same options struct the builders get - the coulomb half's, since
+        // the cap-derived grant above writes the same number into both.
+        eriStore->ramTierInForce = coulombOptions.maxCacheBytes > 0;
+    }
 
     // The adaptive seam, wired like the RHF direct branch:
     // the cap is the workspace budget shared by the coulomb and exchange
@@ -9395,6 +9575,54 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         std::fprintf(stderr, "qcx: warning: %s\n", selection->warning.c_str());
     }
 
+    // The DEVICE requirement (`[builder] device`) against the builder the run
+    // actually resolved, and this is the resolution point for the whole
+    // requirement. The parser already refuses the two `[builder]` keys disagreeing
+    // with one another; what it cannot see is the RESOLVED kinds - the deprecated
+    // `[method] fock_builder` word reaches the device path without passing through
+    // the axes block, a programmatic caller fills the field directly, and a
+    // `gpu` request in a build with no CUDA device is demoted to the ladder (the
+    // selection's own warning above) before this point is reached.
+    //
+    // So the requirement is answered against `selection->kind`, the ONE value the
+    // wiring acts on: a `cuda:<index>` requirement needs the device kind, a
+    // `host` requirement needs any other, and either mismatch is REFUSED BY NAME
+    // rather than resolved or demoted. Demotion is deliberately not the posture
+    // here although it is for the `gpu` request alone: a request that names a
+    // mechanism may be demoted with its demotion disclosed, but a REQUIREMENT
+    // states where the run must execute, and a run that executed elsewhere while
+    // the record said "cuda:0" is the substitution this key exists to make
+    // impossible.
+    if (input.builder.device.has_value())
+    {
+        const std::string selector = qcx::io::DeviceSelectorText(*input.builder.device);
+        const bool deviceRequired = input.builder.device->target == qcx::io::DeviceTarget::kCuda;
+        const bool routedToDevice = selection->kind == qcx::io::BuilderKind::kGpu;
+
+        if (deviceRequired && !routedToDevice)
+        {
+            return refuse(Err(
+                qcx::ErrorCode::kUnimplemented,
+                "builder.device = \"" + selector +
+                    "\" requires the device path, and this run resolved to fock_builder = \"" +
+                    std::string(qcx::io::ToString(selection->kind)) +
+                    "\" on the host: the requirement cannot be honoured, so the run is refused "
+                    "rather than executed elsewhere. State builder.device = \"host\", or wire the "
+                    "device backend (builder.execution_backend = \"gpu\") in a build with a CUDA "
+                    "device present"));
+        }
+
+        if (!deviceRequired && routedToDevice)
+        {
+            return refuse(Err(
+                qcx::ErrorCode::kUnimplemented,
+                "builder.device = \"" + selector +
+                    "\" requires the host path, and this run resolved to the device builder: one "
+                    "run cannot require both, so the pair is refused. Drop the key, or state a "
+                    "cuda:<index> device"));
+        }
+    }
+
     // The COMPUTE TARGET's profile . Both probes were taken at
     // the run boundary above; WHICH one counts is decided here, by the family
     // the run actually wired, and it is decided once. A device number reaching
@@ -9572,30 +9800,34 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     }
 
     // The disk-tier ERI store (`method.eri_cache_store`) on the
-    // unrestricted legs: REFUSED BY NAME, and this is its resolution point -
-    // the shape the refusal above and ResolveScfPath both follow.
+    // unrestricted legs: the key's resolution point, and the shape the
+    // refusal above and ResolveScfPath both follow.
     //
-    // The key's consumer is the direct family's MACHINERY member's options,
-    // and the unrestricted legs wire their own builders: RunDirectUhfScf
-    // assembles the per-spin coulomb and exchange FockBuildOptions itself, so
-    // an install point there is a second site rather than this one - and the
-    // per-spin arm's cap-derived cache grant is the half an explicit store
-    // has to be reconciled with first. The request is refused rather than
-    // accepted and ignored: an explicit request the run drops is a disclosure-rule
-    // violation whether or not a follow-on is planned, and a half-applied
-    // contract that is loud about being half-applied is conformant where a
-    // silent one is not (the increment boundary of the seam).
-    if (!input.method.eriCacheStore.empty() && isUnrestricted)
+    // WIRED, and this is the narrowing that says how far. The key's consumer
+    // is a batch engine pair on a builder's options, and on the unrestricted
+    // legs the DIRECT family is the one that owns such a pair: its runner
+    // installs the decorator on the per-spin coulomb and exchange halves, on
+    // the same grant path their cap-derived cache budget rides (this is the
+    // seam the earlier text announced as "not yet wired on the UHF path",
+    // and that sentence is what this change discharges). The other
+    // unrestricted families - ri_j_link, ri_jk, qfmm, gpu, gpu_split - wire
+    // their own builders and carry no such pair, so the key still cannot be
+    // honoured there.
+    //
+    // Those stay REFUSED rather than silently dropped: an explicit request
+    // the run drops is a disclosure-rule violation whether or not a
+    // follow-on is planned. A refusal is the honest answer exactly here and
+    // not on the restricted legs, where the same families DEMOTE through the
+    // record: a refusal is a run that never reaches serialization, so it is
+    // the one outcome the `eri_store` block cannot disclose, and it is
+    // therefore reserved for the case the block cannot state - an
+    // unrestricted family whose requested arrangement has no other name.
+    if (!input.method.eriCacheStore.empty() && isUnrestricted &&
+        selection->kind != qcx::io::BuilderKind::kDirect)
     {
-        const std::string route = isKs ? std::string{"a UKS run"} : std::string{"a UHF run"};
-
         return refuse(Err(
             qcx::ErrorCode::kUnimplemented,
-            "method.eri_cache_store = \"" + input.method.eriCacheStore + "\" resolves to " + route +
-                ": the disk-tier ERI store is installed on the restricted paths' direct "
-                "family machinery member, and it is not yet wired on the UHF path. "
-                "Drop the key, or run it on that member (an explicit "
-                "fock_builder = \"direct\" at any size)"));
+            UnrestrictedEriStoreRefusalText(input.method.eriCacheStore, selection->kind, isKs)));
     }
 
     // The certified fp32 lane's REQUEST (the owner's ruling 2026-09-13): the
@@ -9790,12 +10022,21 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
             ? "axes"
             : "ladder";
 
-    result.builderAxes =
-        qcx::io::RunBuilderAxes{std::string(qcx::io::ToString(resolvedAxes.integralFamily)),
-                                std::string(qcx::io::ToString(resolvedAxes.storageTier)),
-                                std::string(qcx::io::ToString(resolvedAxes.executionBackend)),
-                                input.builder.legacyFockBuilderWord,
-                                requestedBy};
+    result.builderAxes = qcx::io::RunBuilderAxes{
+        std::string(qcx::io::ToString(resolvedAxes.integralFamily)),
+        std::string(qcx::io::ToString(resolvedAxes.storageTier)),
+        std::string(qcx::io::ToString(resolvedAxes.executionBackend)),
+        input.builder.legacyFockBuilderWord,
+        requestedBy,
+        // The device the run REQUIRED, in the selector vocabulary the file
+        // wrote (schema 39). Absent when the key was absent - an omitted key
+        // is not a requirement - and present only on the runs that reached
+        // serialization with the requirement already answered against the
+        // resolved kind above, so a document carrying it is a document whose
+        // kernels executed where the input said they must.
+        input.builder.device.has_value()
+            ? std::optional<std::string>(qcx::io::DeviceSelectorText(*input.builder.device))
+            : std::nullopt};
 
     // The auxiliary-basis weak-region notice: the disclosure
     // half of the demotion the aux rule performs. The rule ALWAYS resolves a
@@ -9981,6 +10222,16 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
 
     if (isUnrestricted)
     {
+        // The run's disk-tier ERI store wiring (`method.eri_cache_store`) on
+        // this arm, the out-parameter the direct runner installs the
+        // engine-decorator factory on and this scope reads back for the
+        // record. Declared for every unrestricted family even though only the
+        // direct one can install a decorator: the record is the DISCLOSURE
+        // surface, so a request that resolved to a family with no engine pair
+        // must still serialize what it asked for (the null-honesty rule this
+        // block's siblings follow).
+        EriStoreWiring eriStore;
+
         if (selection->kind == qcx::io::BuilderKind::kRiJLink)
         {
             // The unrestricted RI-J-link path (the per-spin adapter): the
@@ -10263,6 +10514,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                                        computeProfile,
                                        certifiedLaneRequest,
                                        selection->leanMember,
+                                       &eriStore,
                                        true);
 
             if (!run.has_value())
@@ -10299,6 +10551,17 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
             // here - stated, not left unmentioned.
             result.resourcesResolved.riOrbitExpansion =
                 MakeRiOrbitExpansionRecord(input, selection->kind, false, false);
+
+            // The disk-tier ERI store's own disclosure on the unrestricted
+            // legs, the RHF arm's block one scope over and the same rule: the
+            // store's consumer sits outside the builder, so the run's own JSON
+            // is the only place a reader can learn whether a named disk store
+            // was what ran. `engaged` is read from the store's own traffic and
+            // never from the install, so the class-aware disengagement and the
+            // lean member's missing engine pair each report the demotion they
+            // are.
+            result.resourcesResolved.eriStore =
+                MakeEriStoreRecord(input, selection->kind, selection->leanMember, eriStore);
 
             auto outcome = FillUhfRunOutcome(result,
                                              *molecule,

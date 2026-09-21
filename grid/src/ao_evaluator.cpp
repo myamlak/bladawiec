@@ -593,6 +593,14 @@ void AoEvaluator::EvaluateDerivatives(const std::array<double, 3>& pointBohr,
     EvaluateDerivativesTier<true>(pointBohr, _allShells, values, gradients, hessians);
 }
 
+void AoEvaluator::EvaluateDerivativesSelected(const std::array<double, 3>& pointBohr,
+                                              std::span<const std::size_t> selection,
+                                              std::span<double> values,
+                                              std::span<double> gradients,
+                                              std::span<double> hessians) const {
+    EvaluateDerivativesTier<true>(pointBohr, selection, values, gradients, hessians);
+}
+
 // Both tier definitions live in this translation unit, so both instantiations
 // are emitted here.  The names in an explicit instantiation are not subject to
 // access checking, which is what lets the private ShellData appear in the

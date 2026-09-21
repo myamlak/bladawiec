@@ -35,15 +35,6 @@ namespace qcx::integrals::internal {
 /// identity), covered by passing la+2 to the constructor; the recurrence
 /// writes the same values at the same indices, so the tables are
 /// bit-identical to the fixed-array build.
-/// The folded angular-only 3D E slice of FoldPairETable: nCartA x nCartB x
-/// Hermite3DCount(la + lb), maximized at la = lb = kMaxShellL =
-/// CartesianCount(6)^2 * Hermite3DCount(12) = 356720 elements. The buffer is
-/// thread_local: the 1e builders run inside a ParallelFor (one_electron.cpp),
-/// and ~2.7 MB per buffer is too large for the per-call stack.
-inline constexpr std::size_t kMaxFoldElements =
-    static_cast<std::size_t>(CartesianCount(kMaxShellL)) * CartesianCount(kMaxShellL) *
-    Hermite3DCount(2 * kMaxShellL);
-
 /// One per-axis 1D E table: E[(ix, jx)][t], flattened
 /// [(ix*(lb+1)+jx)*(la+lb+1)+t]. The storage is re-fittable in place
 /// (Reset) so a rebuilt table keeps its vector instead of allocating a new
@@ -83,6 +74,21 @@ public:
         return _values[Index(ix, jx, t)];
     }
 
+    /// The bra extent the table was fitted to: rows 0..BraExtent().
+    int BraExtent() const noexcept {
+        return _tMax - _lb;
+    }
+
+    /// The ket extent the table was fitted to: columns 0..Lb().
+    int Lb() const noexcept {
+        return _lb;
+    }
+
+    /// The Hermite extent the table was fitted to: t values 0..TMax().
+    int TMax() const noexcept {
+        return _tMax;
+    }
+
 private:
     std::size_t Index(int ix, int jx, int t) const noexcept {
         return static_cast<std::size_t>((ix * (_lb + 1) + jx) * (_tMax + 1) + t);
@@ -96,7 +102,12 @@ private:
 /// Fills one per-axis 1D E table by the recurrence above. \p shiftA[d] is
 /// (P-A) along axis d, \p shiftB[d] is (P-B), \p p the pair exponent. The
 /// table dims (la, lb) are the caller's choice - the 1e kinetic builders
-/// fill (la+2, lb) tables (the raised bra rows of the E-shift identity).
+/// fill (la+2, lb) tables (the raised bra rows of the E-shift identity),
+/// and the derivative tier (md_derivative.hpp) fills the operator-raised
+/// extents up to (la + kMaxMdDerivativeOrder + 2, lb + kMaxMdDerivativeOrder)
+/// (the kinetic path evaluates its index-shifted expression there). The
+/// recurrence reads only cells with t <= i + j, so a table filled at a
+/// larger extent holds the same values at the smaller extent's indices.
 inline void FillPerAxisTable(int la,
                              int lb,
                              const std::array<double, 3>& shiftA,
@@ -104,7 +115,8 @@ inline void FillPerAxisTable(int la,
                              double p,
                              int axis,
                              PerAxisETable& table) {
-    assert(la <= kMaxShellL + 2 && lb <= kMaxShellL);
+    assert(la <= kMaxShellL + kMaxMdDerivativeOrder + 2 &&
+           lb <= kMaxShellL + kMaxMdDerivativeOrder);
     const double invTwoP = 0.5 / p;
     table.At(0, 0, 0) = 1.0;
 
@@ -192,26 +204,55 @@ struct MdShellContractions {
 /// Builds the folded angular-only 3D E slice E[(fa, fb), t] of one
 /// primitive pair from its per-axis tables: the per-axis products with the
 /// spherical folds applied (identity for Cartesian shells), rows excluded.
-/// Shared by the transform construction (md_batch.cpp) and the 1e builders
-/// (md_one_electron.hpp).
+/// Shared by the transform construction (md_batch.cpp), the 1e builders
+/// (md_one_electron.hpp) and the derivative tier (md_derivative.hpp).
+/// \param la Bra angular momentum - the Cartesian rows read from the tables.
+/// \param lb Ket angular momentum.
+/// \param tierRaises How far the tier range runs past la + lb. Zero for a
+/// plain pair, whose coefficients stop at tier la + lb. A derivative tier
+/// passes the term's raise count: its coefficients D[E]^{(i,j)}_t =
+/// 2a E^{(i+1,j)}_t - i E^{(i-1,j)}_t reach tier la + lb + 1 per raise, so
+/// its tables are filled at (la + raises, lb + raises) and its kernel is
+/// built to that order too.
+/// \param tables The pair's per-axis tables, filled to at least
+/// (la + tierRaises, lb + tierRaises) per axis.
+/// \param isSphericalA Spherical flag of shell a.
+/// \param isSphericalB Spherical flag of shell b.
+/// \param out The folded slice, nAngA x nAngB x Hermite3DCount(la + lb +
+/// tierRaises), zeroed first.
 inline void FoldPairETable(int la,
                            int lb,
+                           int tierRaises,
                            const std::array<PerAxisETable, 3>& tables,
                            bool isSphericalA,
                            bool isSphericalB,
-                           int nHerm,
                            std::vector<double>& out) {
-    assert(la <= kMaxShellL && lb <= kMaxShellL && nHerm <= Hermite3DCount(2 * kMaxShellL));
+    assert(la <= kMaxShellL && lb <= kMaxShellL && tierRaises <= kMaxMdDerivativeOrder);
+    const int tierMax = la + lb + tierRaises;
+    const int nHerm = Hermite3DCount(tierMax);
     const int nCartA = CartesianCount(la);
     const int nCartB = CartesianCount(lb);
     const int nAngA = isSphericalA ? SphericalCount(la) : nCartA;
     const int nAngB = isSphericalB ? SphericalCount(lb) : nCartB;
     out.assign(static_cast<std::size_t>(nAngA) * nAngB * nHerm, 0.0);
-    // Fixed-size scratch: thread_local so the ~2.7 MB buffers neither
-    // hit the per-call stack nor allocate per pair, and stay safe under the
-    // ParallelFor of the 1e builders.
-    static thread_local std::array<double, kMaxFoldElements> e3d;
-    static thread_local std::array<double, kMaxFoldElements> mid;
+    // Scratch for the two folds, sized by the call: thread_local so it
+    // neither hits the per-call stack nor allocates per pair (the 1e
+    // builders run inside a ParallelFor, one_electron.cpp), and grown only
+    // as far as the widest fold this thread has run - a raised tier asks for
+    // at most Hermite3DCount(2*kMaxShellL + kMaxMdDerivativeOrder).
+    static thread_local std::vector<double> e3d;
+    static thread_local std::vector<double> mid;
+
+    if (e3d.size() < static_cast<std::size_t>(nCartA) * nCartB * nHerm)
+    {
+        e3d.resize(static_cast<std::size_t>(nCartA) * nCartB * nHerm);
+    }
+
+    if (mid.size() < static_cast<std::size_t>(nCartA) * nAngB * nHerm)
+    {
+        mid.resize(static_cast<std::size_t>(nCartA) * nAngB * nHerm);
+    }
+
     const PerAxisETable& ex = tables[0];
     const PerAxisETable& ey = tables[1];
     const PerAxisETable& ez = tables[2];
@@ -224,11 +265,11 @@ inline void FoldPairETable(int la,
         {
             const CartIndex cb = kCartesianIndices[lb][angb];
 
-            for (int tx = 0; tx <= la + lb; ++tx)
+            for (int tx = 0; tx <= tierMax; ++tx)
             {
-                for (int ty = 0; ty <= la + lb - tx; ++ty)
+                for (int ty = 0; ty <= tierMax - tx; ++ty)
                 {
-                    for (int tz = 0; tz <= la + lb - tx - ty; ++tz)
+                    for (int tz = 0; tz <= tierMax - tx - ty; ++tz)
                     {
                         const double value = ex.At(ca.ix, cb.ix, tx) * ey.At(ca.iy, cb.iy, ty) *
                                              ez.At(ca.iz, cb.iz, tz);

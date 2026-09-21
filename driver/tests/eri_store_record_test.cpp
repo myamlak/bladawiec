@@ -216,7 +216,9 @@ fock_builder = "direct"
 accuracy = "kNormal"
 )") + kOneThreadTeam;
 
-} // namespace
+// The unrestricted rows' fixtures sit inside this anonymous namespace with
+// every other helper in the file, so the namespace stays open to the end of
+// it and the file's own `} // namespace` below closes the whole thing.
 
 TEST(EriStoreRecordTest, PlainPathRunOpensTheStoreAndLandsOnTheUnmovedEnergy) {
 #if !defined(QcxHasStorage)
@@ -475,34 +477,238 @@ eri_cache_store = ")" + path +
     std::filesystem::remove(path, ignored);
 }
 
-TEST(EriStoreRecordTest, TheUnrestrictedLegsRefuseTheKeyByName) {
-    // The increment boundary, pinned as a REFUSAL rather than a silence: an
-    // explicit request the run drops is a disclosure-rule violation whether or not a
-    // follow-on is planned, so the key is answered on the unrestricted legs
-    // instead of ignored there. The refusal names the state and the remedy,
-    // which is what makes a half-applied contract conformant.
-    const std::string path = TempStorePath("uhf");
-    const std::string toml = R"(
+// The unrestricted fixture: the SAME deliberately asymmetric water whose point
+// group is C1, taken as the H2O+ cation doublet. It is the restricted rows'
+// fixture for the restricted rows' reason - the engine disengages its whole
+// engine tier (decorator included) on the class-aware path, so a symmetric
+// fixture cannot measure an engaged store at all - and the open shell is what
+// makes the per-spin wiring the thing under test rather than the closed-shell
+// one beside it.
+//
+// MEASURED at this revision through the driver itself, at thread_cap 1:
+// converged, 76 iterations, E = -74.60535279455287 Ha, and `class_table_bytes`
+// reads 0 on every block it emits - which is the PRECONDITION the honoured rows
+// below need, asserted rather than assumed, because a fixture that drifted into
+// the class-aware path would demote the store and the row would fail for a
+// reason that has nothing to do with the seam.
+constexpr const char* kUnrestrictedWater = R"(
 [molecule]
-charge = 0
-multiplicity = 3
+charge = 1
+multiplicity = 2
 atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.62, 0.55, 0.0], ["H", -0.71, 0.41, 0.55]]
 [basis]
 orbital = "sto-3g"
+)";
+
+std::string DirectUhfWithStore(const std::string& storePath) {
+    return std::string(kUnrestrictedWater) + R"(
 [method]
 type = "uhf"
 fock_builder = "direct"
 accuracy = "kNormal"
+eri_cache_store = ")" +
+           storePath + "\"\n" + kOneThreadTeam;
+}
+
+const std::string kDirectUhfWithoutStore = std::string(kUnrestrictedWater) + R"(
+[method]
+type = "uhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+)" + kOneThreadTeam;
+
+} // namespace
+
+TEST(EriStoreRecordTest, UnrestrictedDirectRunIsServedThroughTheSeam) {
+#if !defined(QcxHasStorage)
+    // This row is about a store that OPENED on the per-spin halves, and a
+    // build configured with QCX_ENABLE_IO=OFF compiles no storage module: the
+    // driver demotes the request with the build's own cause, nothing is
+    // written at the path, and every assertion below about an honoured run is
+    // unreachable by construction.
+    GTEST_SKIP() << "storage module not built (QCX_ENABLE_IO=OFF): this row asserts an opened "
+                    "store";
+#else
+    // THE WIRING IS HONOURED END TO END, and the difference from the rows
+    // above is the whole point of the row: this run is UNRESTRICTED, so the
+    // decorator cannot be the one the restricted wiring installs. It is the
+    // direct runner's own install on the per-spin coulomb and exchange
+    // halves, on the grant path their cap-derived cache budget rides.
+    //
+    // "Through the seam, not around it" is separated into three claims that a
+    // run bypassing the store cannot satisfy together: the file the input
+    // named exists and carries bytes (something wrote it); the block's
+    // counters are the DECORATOR's own traffic (a store that was handed over
+    // and never called reads all-zero, which is why the miss count is
+    // asserted rather than the block's presence alone); and the arithmetic is
+    // unmoved against the same run without the key, because the tier serves
+    // the engine's own bytes.
+    const std::string path = TempStorePath("uhf-direct");
+    const auto served = RunInputText(DirectUhfWithStore(path));
+
+    ASSERT_TRUE(served.has_value())
+        << "the store request failed the unrestricted run: " << served.error().message;
+    EXPECT_NE(served->find("\"converged\": true"), std::string::npos);
+
+    // The row's precondition, read off the record rather than assumed: this
+    // fixture really does take the plain path, so the engine tier - the
+    // decorator with it - really is engaged and an honoured store is
+    // reachable at all.
+    const auto classBytes = JsonNumber(*served, "\"class_table_bytes\"");
+    ASSERT_TRUE(classBytes.has_value()) << *served;
+    EXPECT_DOUBLE_EQ(*classBytes, 0.0)
+        << "the fixture engages the class-aware path, which disengages the engine tier: "
+        << *served;
+
+    std::error_code sizeError;
+    const auto bytes = std::filesystem::file_size(path, sizeError);
+    EXPECT_FALSE(sizeError) << "the honoured request named a store that was never written: "
+                            << path;
+    EXPECT_GT(bytes, 0U) << path;
+
+    const std::string block = EriStoreBlock(*served);
+    ASSERT_FALSE(block.empty()) << "the honoured request left no record: " << *served;
+    EXPECT_NE(block.find("\"engaged\": \"disk\""), std::string::npos) << block;
+    EXPECT_NE(block.find("\"demoted\": false"), std::string::npos) << block;
+    EXPECT_NE(block.find("\"path\": \"" + path + "\""), std::string::npos) << block;
+    EXPECT_EQ(block.find("demoted_reason"), std::string::npos) << block;
+
+    const auto misses = JsonNumber(block, "\"miss_quartets\"");
+    ASSERT_TRUE(misses.has_value()) << block;
+    EXPECT_GT(*misses, 0.0) << block;
+
+    const auto control = RunInputText(kDirectUhfWithoutStore);
+    ASSERT_TRUE(control.has_value()) << control.error().message;
+
+    const auto servedEnergy = JsonNumber(*served, "\"total_energy_hartree\"");
+    const auto controlEnergy = JsonNumber(*control, "\"total_energy_hartree\"");
+    ASSERT_TRUE(servedEnergy.has_value()) << *served;
+    ASSERT_TRUE(controlEnergy.has_value()) << *control;
+    EXPECT_DOUBLE_EQ(*servedEnergy, *controlEnergy);
+
+    // The third reader state, the restricted rows' rule one family over: a
+    // run that never named the key carries no block, so "served" can never be
+    // confused with "never asked".
+    EXPECT_EQ(EriStoreBlock(*control), std::string{}) << *control;
+
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+#endif
+}
+
+TEST(EriStoreRecordTest, UnrestrictedSecondRunOverTheSameStoreMissesOnNothing) {
+#if !defined(QcxHasStorage)
+    GTEST_SKIP() << "storage module not built (QCX_ENABLE_IO=OFF): this row re-opens a written "
+                    "store";
+#else
+    // The persistence row on the per-spin wiring, and the one only the record
+    // can show: the store is a FILE, so a second unrestricted run over it
+    // recomputes nothing. A decorator that engaged but wrote nothing usable -
+    // or one whose stats were read from the install rather than from the run -
+    // cannot produce a zero here.
+    const std::string path = TempStorePath("uhf-warm");
+
+    const auto cold = RunInputText(DirectUhfWithStore(path));
+    ASSERT_TRUE(cold.has_value()) << cold.error().message;
+
+    const auto warm = RunInputText(DirectUhfWithStore(path));
+    ASSERT_TRUE(warm.has_value()) << warm.error().message;
+
+    const std::string block = EriStoreBlock(*warm);
+    ASSERT_FALSE(block.empty()) << *warm;
+    EXPECT_NE(block.find("\"engaged\": \"disk\""), std::string::npos) << block;
+    EXPECT_NE(block.find("\"demoted\": false"), std::string::npos) << block;
+
+    const auto hits = JsonNumber(block, "\"hit_quartets\"");
+    const auto misses = JsonNumber(block, "\"miss_quartets\"");
+    ASSERT_TRUE(hits.has_value()) << block;
+    ASSERT_TRUE(misses.has_value()) << block;
+    EXPECT_GT(*hits, 0.0) << block;
+    EXPECT_DOUBLE_EQ(*misses, 0.0) << block;
+
+    const auto coldEnergy = JsonNumber(*cold, "\"total_energy_hartree\"");
+    const auto warmEnergy = JsonNumber(*warm, "\"total_energy_hartree\"");
+    ASSERT_TRUE(coldEnergy.has_value()) << *cold;
+    ASSERT_TRUE(warmEnergy.has_value()) << *warm;
+    EXPECT_DOUBLE_EQ(*coldEnergy, *warmEnergy);
+
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+#endif
+}
+
+TEST(EriStoreRecordTest, UnrestrictedLeanMemberDemotesWithItsOwnSentence) {
+    // The demotion the narrowing leaves in place on the unrestricted legs: the
+    // direct family's LEAN member builds LeanFockBuildOptions, which carry no
+    // batch engine pair to decorate, so the request demotes through the
+    // record's own lean sentence exactly as it does on the restricted member -
+    // and the store it did not open is never created.
+    const std::string path = TempStorePath("uhf-lean");
+    const std::string toml = std::string(kUnrestrictedWater) + R"(
+[method]
+type = "uhf"
+fock_builder = "lean"
+accuracy = "kNormal"
 eri_cache_store = ")" + path +
-                             "\"\n";
+                             "\"\n" + kOneThreadTeam;
 
     const auto run = RunInputText(toml);
-    ASSERT_FALSE(run.has_value()) << "the unrestricted leg ran with the key silently dropped: "
+    ASSERT_TRUE(run.has_value()) << run.error().message;
+
+    const std::string block = EriStoreBlock(*run);
+    ASSERT_FALSE(block.empty()) << *run;
+    EXPECT_NE(block.find("\"demoted\": true"), std::string::npos) << block;
+    EXPECT_EQ(block.find("\"engaged\": \"disk\""), std::string::npos) << block;
+    EXPECT_NE(block.find("LEAN member"), std::string::npos) << block;
+
+    std::error_code ignored;
+    EXPECT_FALSE(std::filesystem::exists(path, ignored)) << path;
+}
+
+TEST(EriStoreRecordTest, UnrestrictedFamilyWithNoEnginePairRefusesTheKeyByName) {
+    // The narrowing, pinned as a REFUSAL rather than a silence. The direct
+    // family is wired now, so the key is honoured there; every OTHER
+    // unrestricted family wires its own builders and carries no batch engine
+    // pair, and those still cannot be honoured. An explicit request the run
+    // drops is a disclosure-rule violation whether or not a follow-on is
+    // planned, so the answer is a refusal that names the key, the family the
+    // run resolved to, and the seam that would have to carry it.
+    //
+    // THE SEARCHABLE SENTENCE IS ASSERTED, not paraphrased: the words below
+    // are one string literal on one source line in `run_driver.cpp`, which is
+    // the property the refusal it replaced did NOT have - that one split its
+    // sentence across two adjacent literals, so a single-line search for the
+    // words a document quoted found nothing. A future edit that re-splits the
+    // sentence breaks this row, which is the point of asserting it verbatim.
+    const std::string path = TempStorePath("uhf-qfmm");
+    const std::string toml = std::string(kUnrestrictedWater) + R"(
+[method]
+type = "uhf"
+fock_builder = "qfmm"
+accuracy = "kNormal"
+eri_cache_store = ")" + path +
+                             "\"\n" + kOneThreadTeam;
+
+    const auto run = RunInputText(toml);
+    ASSERT_FALSE(run.has_value()) << "the unrestricted family ran with the key silently dropped: "
                                   << *run;
-    EXPECT_NE(run.error().message.find("not yet wired on the UHF path"), std::string::npos)
-        << run.error().message;
-    // The refusal names the key it is about, so a user reading it can find the
-    // line to delete.
     EXPECT_NE(run.error().message.find("method.eri_cache_store"), std::string::npos)
         << run.error().message;
+    EXPECT_NE(run.error().message.find("fock_builder = \"qfmm\""), std::string::npos)
+        << run.error().message;
+    EXPECT_NE(run.error().message.find("a UHF run"), std::string::npos) << run.error().message;
+    // Written as ONE literal on ONE line for the same reason the source's is:
+    // a phrase this row asserts must be findable by a single-line search, and
+    // a phrase split across two adjacent literals is not. The sentence is the
+    // source's seam sentence verbatim, short enough that clang-format's
+    // BreakStringLiterals leaves it whole.
+    EXPECT_NE(run.error().message.find(
+                  "the disk-tier ERI store is wired on the direct family's per-spin halves"),
+              std::string::npos)
+        << run.error().message;
+
+    // A refusal is a run that never reached serialization, so nothing was
+    // written at the path it named.
+    std::error_code ignored;
+    EXPECT_FALSE(std::filesystem::exists(path, ignored)) << path;
 }

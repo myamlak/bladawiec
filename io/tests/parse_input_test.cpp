@@ -20,6 +20,8 @@ namespace {
 
 using qcx::io::BuilderKind;
 using qcx::io::CoordinateUnit;
+using qcx::io::DeviceSelectorText;
+using qcx::io::DeviceTarget;
 using qcx::io::GuessKind;
 using qcx::io::MethodType;
 using qcx::io::ParseRunInput;
@@ -2510,6 +2512,115 @@ TEST(ParseInputTest, AnUnknownAxisWordIsRefusedWithTheAcceptedList) {
     ASSERT_FALSE(backend.has_value());
     EXPECT_NE(backend.error().message.find("cpu | gpu"), std::string::npos)
         << "message: " << backend.error().message;
+}
+
+// THE DEVICE AXIS. The key states WHICH device the run requires its kernels to
+// execute on - the question `execution_backend` cannot answer, since `gpu` names
+// the device CLASS and nothing could name the particular device. Two properties
+// are pinned here, and the first is the whole reason the key is not a fourth
+// word on an existing axis key.
+TEST(ParseInputTest, TheDeviceAxisStatesARequirementWithoutSelectingABuilder) {
+    // A requirement is not a selection: `[builder] device` alone must leave the
+    // family, the tier and the backend at their own defaults, because filling
+    // them would make stating where a run executes silently decide what it runs
+    // - and it would move an absent-key run off the size ladder onto the direct
+    // family's in-memory tier.
+    const auto hostAlone =
+        ParseRunInput(BuilderSelectionToml("", "[builder]\ndevice = \"host\"\n"));
+    ASSERT_TRUE(hostAlone.has_value()) << hostAlone.error().message;
+    ASSERT_TRUE(hostAlone->builder.device.has_value());
+    EXPECT_EQ(hostAlone->builder.device->target, DeviceTarget::kHost);
+    EXPECT_EQ(hostAlone->builder.device->index, -1);
+    EXPECT_FALSE(hostAlone->builder.integralFamily.has_value());
+    EXPECT_FALSE(hostAlone->builder.storageTier.has_value());
+    EXPECT_FALSE(hostAlone->builder.executionBackend.has_value());
+    EXPECT_FALSE(hostAlone->method.builder.has_value());
+
+    // The device this key exists for: a PARTICULAR device, by index, beside the
+    // backend word that names the class. Parsed, not stored as text - the index
+    // is the requirement, and a record that echoed a string could not be held to
+    // one.
+    const auto cuda = ParseRunInput(
+        BuilderSelectionToml("", "[builder]\nexecution_backend = \"gpu\"\ndevice = \"cuda:1\"\n"));
+    ASSERT_TRUE(cuda.has_value()) << cuda.error().message;
+    ASSERT_TRUE(cuda->builder.device.has_value());
+    EXPECT_EQ(cuda->builder.device->target, DeviceTarget::kCuda);
+    EXPECT_EQ(cuda->builder.device->index, 1);
+    EXPECT_EQ(DeviceSelectorText(*cuda->builder.device), "cuda:1");
+
+    // The agree arm, one word each side: host beside cpu.
+    const auto hostOnCpu = ParseRunInput(
+        BuilderSelectionToml("", "[builder]\nexecution_backend = \"cpu\"\ndevice = \"host\"\n"));
+    ASSERT_TRUE(hostOnCpu.has_value()) << hostOnCpu.error().message;
+    EXPECT_EQ(DeviceSelectorText(*hostOnCpu->builder.device), "host");
+
+    // And an absent key states nothing: no requirement, so the field is absent
+    // rather than defaulted to the host - the null-honesty rule, because a
+    // defaulted "host" would read as a requirement the file never wrote.
+    const auto absent = ParseRunInput(BuilderSelectionToml("", ""));
+    ASSERT_TRUE(absent.has_value()) << absent.error().message;
+    EXPECT_FALSE(absent->builder.device.has_value());
+}
+
+// THE DEVICE REQUIREMENT AGAINST THE BACKEND: the pair must AGREE, and a pair
+// that does not is REFUSED by name with both sides stated rather than resolved.
+TEST(ParseInputTest, ADeviceRequirementTheBackendCannotHonourIsRefusedByName) {
+    // A CUDA device beside the host backend, and the same request beside NO
+    // backend word at all - whose resolution is cpu, so it is the same refusal.
+    for (const std::string& block :
+         {std::string{"[builder]\nexecution_backend = \"cpu\"\ndevice = \"cuda:0\"\n"},
+          std::string{"[builder]\ndevice = \"cuda:0\"\n"}})
+    {
+        const auto run = ParseRunInput(BuilderSelectionToml("", block));
+        ASSERT_FALSE(run.has_value()) << "a device requirement was resolved rather than "
+                                         "answered: "
+                                      << block;
+        EXPECT_EQ(run.error().code, qcx::ErrorCode::kInvalidArgument);
+        // The refusal names BOTH sides, so an author knows which key to change.
+        EXPECT_NE(run.error().message.find("builder.device = \"cuda:0\""), std::string::npos)
+            << run.error().message;
+        EXPECT_NE(run.error().message.find("builder.execution_backend"), std::string::npos)
+            << run.error().message;
+    }
+
+    // The other direction: the host required beside the device backend. One run
+    // cannot require both, and the refusal says so rather than electing one.
+    const auto hostOnGpu = ParseRunInput(
+        BuilderSelectionToml("", "[builder]\nexecution_backend = \"gpu\"\ndevice = \"host\"\n"));
+    ASSERT_FALSE(hostOnGpu.has_value());
+    EXPECT_EQ(hostOnGpu.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(hostOnGpu.error().message.find("builder.device = \"host\""), std::string::npos)
+        << hostOnGpu.error().message;
+}
+
+// The device SELECTOR is parsed, not stored as opaque text: a selector that names
+// no device is refused by name at the key, with the shape it wanted, rather than
+// accepted and compared as a string by every later reader.
+TEST(ParseInputTest, AnUnusableDeviceSelectorIsRefusedByName) {
+    const auto tpu = ParseRunInput(BuilderSelectionToml("", "[builder]\ndevice = \"tpu\"\n"));
+    ASSERT_FALSE(tpu.has_value());
+    EXPECT_EQ(tpu.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(tpu.error().message.find("unknown builder.device"), std::string::npos)
+        << "message: " << tpu.error().message;
+    EXPECT_NE(tpu.error().message.find("(host | cuda)"), std::string::npos)
+        << "message: " << tpu.error().message;
+
+    // The index is the requirement, so a `cuda` selection without a usable one
+    // is refused rather than stored as text no later reader can be held to. The
+    // WORD is accepted - it is the index that is missing - so the two sentences
+    // name different things, and a user who wrote the word correctly is not sent
+    // looking for the accepted set.
+    for (const char* selector : {"cuda:", "cuda:x", "cuda:-1"})
+    {
+        const auto badIndex = ParseRunInput(
+            BuilderSelectionToml("", std::string{"[builder]\ndevice = \""} + selector + "\"\n"));
+        ASSERT_FALSE(badIndex.has_value()) << selector;
+        EXPECT_EQ(badIndex.error().code, qcx::ErrorCode::kInvalidArgument);
+        EXPECT_NE(badIndex.error().message.find("names no CUDA device"), std::string::npos)
+            << "message: " << badIndex.error().message;
+        EXPECT_NE(badIndex.error().message.find("cuda:0"), std::string::npos)
+            << "message: " << badIndex.error().message;
+    }
 }
 
 // THE DEPRECATION RECORD. The old key is ACCEPTED - never refused - and the
