@@ -20,6 +20,20 @@ qcx::Result<void> ValidateLayout(const ResponseLayout& layout) {
     return {};
 }
 
+/// Validates a matrix against the layout whose squared dimension it must hold.
+/// \param layout The occupied/virtual block structure.
+/// \param matrix Row-major matrix, required to be Dimension() squared long.
+/// \returns An Error (kInvalidArgument) on a length mismatch.
+qcx::Result<void> ValidateMatrix(const ResponseLayout& layout, std::span<const double> matrix) {
+    if (matrix.size() != layout.Dimension() * layout.Dimension())
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument, "the matrix must be Dimension() squared"});
+    }
+
+    return {};
+}
+
 } // namespace
 
 OrbitalHessianOperator::OrbitalHessianOperator(ResponseLayout layout,
@@ -144,6 +158,20 @@ DenseResponseOperator::DenseResponseOperator(ResponseLayout layout,
 
 qcx::Result<DenseResponseOperator> DenseResponseOperator::Create(ResponseLayout layout,
                                                                  std::span<const double> matrix) {
+    auto layoutStatus = ValidateLayout(layout);
+
+    if (!layoutStatus.has_value())
+    {
+        return std::unexpected(layoutStatus.error());
+    }
+
+    auto matrixStatus = ValidateMatrix(layout, matrix);
+
+    if (!matrixStatus.has_value())
+    {
+        return std::unexpected(matrixStatus.error());
+    }
+
     const std::size_t dimension = layout.Dimension();
     std::vector<double> diagonal(dimension);
 
@@ -164,13 +192,14 @@ qcx::Result<DenseResponseOperator> DenseResponseOperator::Create(
         return std::unexpected(layoutStatus.error());
     }
 
-    const std::size_t dimension = layout.Dimension();
+    auto matrixStatus = ValidateMatrix(layout, matrix);
 
-    if (matrix.size() != dimension * dimension)
+    if (!matrixStatus.has_value())
     {
-        return std::unexpected(
-            qcx::Error{qcx::ErrorCode::kInvalidArgument, "the matrix must be Dimension() squared"});
+        return std::unexpected(matrixStatus.error());
     }
+
+    const std::size_t dimension = layout.Dimension();
 
     if (preconditioner.size() != dimension)
     {

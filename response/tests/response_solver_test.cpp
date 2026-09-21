@@ -489,8 +489,13 @@ TEST(ResponseSolverTest, OperatorConstructionRefusesMismatchedShapes) {
 
     const std::vector<double> goodMatrix(16, 0.0);
     const std::vector<double> shortMatrix(9, 0.0);
+    const std::vector<double> oneShortMatrix(15, 0.0);
     const std::vector<double> shortPreconditioner = {1.0};
     EXPECT_EQ(DenseResponseOperator::Create(ResponseLayout{2, 2}, shortMatrix).error().code,
+              qcx::ErrorCode::kInvalidArgument);
+    // Short by one element: the refusal keys on the full squared dimension, not
+    // merely on the matrix reaching far enough to carry its own diagonal.
+    EXPECT_EQ(DenseResponseOperator::Create(ResponseLayout{2, 2}, oneShortMatrix).error().code,
               qcx::ErrorCode::kInvalidArgument);
     EXPECT_EQ(DenseResponseOperator::Create(ResponseLayout{2, 2}, goodMatrix, shortPreconditioner)
                   .error()
