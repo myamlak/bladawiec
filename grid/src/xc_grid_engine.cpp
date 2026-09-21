@@ -1,5 +1,6 @@
 #include "qcx/grid/xc_grid_engine.hpp"
 
+#include "internal/xc_point_assembly.hpp"
 #include "qcx/grid/geometry_translation.hpp"
 #include "qcx/grid/shell_screening.hpp"
 
@@ -34,24 +35,8 @@ std::string ShippedFunctionalNames() {
     return names;
 }
 
-// The grid build parameters for these settings.
-excgrid::GridParams ToExcgridParams(const XcGridSettings& settings) {
-    excgrid::GridParams params;
-    params.radialPoints = settings.radialPoints;
-    params.angularPoints = settings.angularPoints;
-    params.alpha = settings.alpha;
-    params.radialExponent = settings.radialExponent;
-    params.trimWeight = settings.trimWeight;
-    params.blockTarget = settings.blockTarget;
-
-    return params;
-}
-
 // One spin's density and density gradient at a grid point.
-struct PointDensity {
-    double rho = 0.0;
-    std::array<double, 3> gradient{};
-};
+using PointDensity = internal::PointDensity;
 
 // Contracts a spin density matrix with the point's AO values and gradients:
 //     rho      = sum_mu nu D_mu nu phi_mu phi_nu
@@ -124,76 +109,6 @@ double ContractValue(const Eigen::MatrixXd& density,
     densityPhi.noalias() = density * phi;
 
     return phi.dot(densityPhi);
-}
-
-// A row-major copy of a density matrix: ShellDensityWeights walks rows, and
-// Eigen's default storage is column-major. One O(nAO^2) pass per spin,
-// counted in XcScreeningCounts::densityWeightTerms.
-std::vector<double> FlattenRowMajor(const Eigen::MatrixXd& density) {
-    const Eigen::Index n = density.rows();
-    std::vector<double> flat(static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
-    Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> map(
-        flat.data(), n, n);
-    map = density;
-
-    return flat;
-}
-
-// The screened form of ContractSpinDensity: the same double sum, restricted to
-// the selected shells' AO slots. Dropping a shell drops its density-matrix row
-// and column along with its AO values, which is exactly what the significance
-// test argued for. The dense contraction is the case where the selection covers
-// every shell, and the screening gate pins that equivalence numerically rather
-// than by construction, so the two forms cannot drift apart unnoticed.
-//
-// Only the selected slots are read: the fetch writes the selected range of a
-// point's slice and leaves the rest of it holding whatever the slice had.
-PointDensity ContractSelectedSpinDensity(const Eigen::MatrixXd& density,
-                                         std::span<const double> values,
-                                         std::span<const double> gradients,
-                                         std::span<const std::size_t> selectedAos,
-                                         std::vector<double>& valueContraction,
-                                         std::vector<double>& gradientContraction) {
-    // (D phi)_mu and (D grad phi)_mu over the selected block.
-    for (const std::size_t mu : selectedAos)
-    {
-        double contracted = 0.0;
-        std::array<double, 3> contractedGradient{};
-
-        for (const std::size_t nu : selectedAos)
-        {
-            const double element =
-                density(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu));
-            contracted += element * values[nu];
-
-            for (std::size_t axis = 0; axis < 3; ++axis)
-            {
-                contractedGradient[axis] += element * gradients[3 * nu + axis];
-            }
-        }
-
-        valueContraction[mu] = contracted;
-
-        for (std::size_t axis = 0; axis < 3; ++axis)
-        {
-            gradientContraction[3 * mu + axis] = contractedGradient[axis];
-        }
-    }
-
-    PointDensity result;
-
-    for (const std::size_t mu : selectedAos)
-    {
-        result.rho += values[mu] * valueContraction[mu];
-
-        for (std::size_t axis = 0; axis < 3; ++axis)
-        {
-            result.gradient[axis] += gradients[3 * mu + axis] * valueContraction[mu] +
-                                     values[mu] * gradientContraction[3 * mu + axis];
-        }
-    }
-
-    return result;
 }
 
 // The screened form of AccumulatePotential, on the same selected block:
@@ -433,7 +348,7 @@ qcx::Result<XcEvaluation> XcGridEngine::EvaluateScreened(const Eigen::MatrixXd& 
     // The weights cost one pass over each spin's density matrix, O(AOCount()^2)
     // against the O(points x AOCount()^2) of the assembly: setup, but counted.
     // A closed-shell pair is one matrix, so its pass is shared.
-    const std::vector<double> flatAlpha = FlattenRowMajor(densityAlpha);
+    const std::vector<double> flatAlpha = internal::FlattenRowMajor(densityAlpha);
     auto weightsAlpha = ShellDensityWeights(_envelopes, flatAlpha, _aoCount);
 
     if (!weightsAlpha.has_value())
@@ -449,7 +364,7 @@ qcx::Result<XcEvaluation> XcGridEngine::EvaluateScreened(const Eigen::MatrixXd& 
         weightsBeta = *weightsAlpha;
     } else
     {
-        const std::vector<double> flatBeta = FlattenRowMajor(densityBeta);
+        const std::vector<double> flatBeta = internal::FlattenRowMajor(densityBeta);
         auto computed = ShellDensityWeights(_envelopes, flatBeta, _aoCount);
 
         if (!computed.has_value())
@@ -592,18 +507,20 @@ qcx::Result<XcEvaluation> XcGridEngine::EvaluateScreened(const Eigen::MatrixXd& 
                     batchAos.data() + batchAoOffsets[index],
                     batchAoOffsets[index + 1] - batchAoOffsets[index]);
 
-                const PointDensity densityA = ContractSelectedSpinDensity(densityAlpha,
-                                                                          values,
-                                                                          gradients,
-                                                                          selectedAos,
-                                                                          valueContraction,
-                                                                          gradientContraction);
-                const PointDensity densityB = ContractSelectedSpinDensity(densityBeta,
-                                                                          values,
-                                                                          gradients,
-                                                                          selectedAos,
-                                                                          valueContraction,
-                                                                          gradientContraction);
+                const PointDensity densityA =
+                    internal::ContractSelectedSpinDensity(densityAlpha,
+                                                          values,
+                                                          gradients,
+                                                          selectedAos,
+                                                          valueContraction,
+                                                          gradientContraction);
+                const PointDensity densityB =
+                    internal::ContractSelectedSpinDensity(densityBeta,
+                                                          values,
+                                                          gradients,
+                                                          selectedAos,
+                                                          valueContraction,
+                                                          gradientContraction);
 
                 const Eigen::Vector3d gradientA(
                     densityA.gradient[0], densityA.gradient[1], densityA.gradient[2]);

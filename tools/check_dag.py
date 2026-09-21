@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-ORDER = ["core", "backend", "memory", "linalg", "molecule", "symmetry", "basisset", "grid", "integrals", "scf", "storage", "io", "properties", "driver"]
+ORDER = ["core", "backend", "memory", "linalg", "molecule", "symmetry", "basisset", "grid", "integrals", "scf", "response", "storage", "io", "properties", "driver"]
 RANK = {m: i for i, m in enumerate(ORDER)}
 
 

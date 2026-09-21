@@ -65,7 +65,7 @@ PREDEFINED             = QcxIntegralsFp16=1
 # is NOT the fix: CONTRIBUTING.md links on to .clang-format, LICENSE and this
 # Doxyfile, none of which is a page or can be made one, so the warning only moves
 # inside it (measured, same day). The README names such files in backticks.
-INPUT                  = core/include backend/include memory/include linalg/include molecule/include symmetry/include basisset/include integrals/include scf/include grid/include properties/include io/include driver/include storage/include README.md
+INPUT                  = core/include backend/include memory/include linalg/include molecule/include symmetry/include basisset/include integrals/include scf/include response/include grid/include properties/include io/include driver/include storage/include README.md
 RECURSIVE              = YES
 FILE_PATTERNS          = *.hpp *.h *.md
 INPUT_ENCODING         = UTF-8

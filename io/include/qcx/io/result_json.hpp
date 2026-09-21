@@ -1440,6 +1440,24 @@ struct RunBuilderAxes {
     /// Stated rather than left to be inferred from `legacySpelling`'s absence,
     /// which cannot tell the axes from the ladder.
     std::string requestedBy;
+    /// Schema 39: the DEVICE the run REQUIRED, in the input's own selector
+    /// vocabulary - `"host"` | `"cuda:<index>"` (`DeviceSelectorText`), present
+    /// exactly when the file wrote `[builder] device` and ABSENT when it did not
+    /// (the null-honesty rule: an omitted key is not a requirement, so the
+    /// absence is "no requirement stated" and never "the host was required").
+    ///
+    /// **This member states a requirement the run HONOURED, and it can state
+    /// nothing else.** A requirement the resolved builder cannot supply is
+    /// refused by name before any record exists - the parser's acceptance matrix
+    /// for the two `[builder]` axes, and the driver's for the resolved kind,
+    /// which is what catches the deprecated `fock_builder = "gpu"` word and a
+    /// programmatic caller. A refusal never reaches serialization, so a run whose
+    /// document carries this key is a run whose kernels executed where the input
+    /// said they must. That is why the block needs no requested-vs-ran pairing
+    /// here, unlike its `eri_store` sibling: there is no demoted arm for it to
+    /// disclose, because a device requirement that cannot be met is a refusal
+    /// rather than an arrangement.
+    std::optional<std::string> device;
 };
 
 /// The machine-readable result of one run.
@@ -1508,7 +1526,32 @@ struct RunResult {
     /// the number moves with them - and they are keys a consumer must notice,
     /// because a miss is a statement about the accuracy of the energy beside
     /// them.
-    static constexpr int kSchemaVersion = 37;
+    ///
+    /// Schema 38 WIDENS the presence rule of `resources_resolved.eri_store`
+    /// (RunEriStore, schema 33) to the unrestricted legs. No key is added and
+    /// none is removed: what a consumer must notice is WHICH RUNS CARRY THE
+    /// BLOCK. At schema 33 an unrestricted (UHF/UKS) run carrying
+    /// `method.eri_cache_store` was REFUSED by name before serialization, so
+    /// the block could only ever appear on a restricted run; the seam is now
+    /// wired on the direct family's per-spin halves, so a UHF or UKS run on
+    /// that family emits the block on exactly the honoured-or-demoted rule its
+    /// restricted sibling follows. The refusal is narrowed rather than
+    /// deleted, and a narrowed change to which runs can produce a block is a
+    /// change to the document's shape - the same reasoning schema 25 used when
+    /// it widened `selection.approximation` to exact-kernel runs carrying a
+    /// notice, where the block's own absence rule moved and the number moved
+    /// with it. A consumer keyed on "no `eri_store` on an unrestricted run"
+    /// is the one that will notice.
+    ///
+    /// Schema 39 ADDS `builder_axes.device` (RunBuilderAxes::device): the device
+    /// the run REQUIRED, in the input's own selector vocabulary (`"host"` |
+    /// `"cuda:<index>"`), present exactly when the file wrote `[builder] device`.
+    /// A key added, so the number moves with it. It carries no requested-vs-ran
+    /// pairing and needs none: a requirement the resolved builder cannot supply
+    /// is refused by name before serialization, so a document carrying this key
+    /// is a document whose kernels executed where the input said they must - the
+    /// same reading the `eri_store` block's refusal sentence states one rule over.
+    static constexpr int kSchemaVersion = 39;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.

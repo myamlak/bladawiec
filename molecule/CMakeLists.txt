@@ -21,6 +21,7 @@ target_link_libraries(qcx-molecule PUBLIC qcx-core qcx-memory eigen Boost::graph
 target_precompile_headers(qcx-molecule PRIVATE
     <qcx/molecule/molecule.hpp>
     <qcx/molecule/elements.hpp>
+    <qcx/molecule/harmonic.hpp>
     <Eigen/Dense>
     <boost/graph/adjacency_list.hpp>)
 
@@ -31,6 +32,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
       tests/connectivity_test.cpp
       tests/mass_properties_test.cpp
       tests/large_molecule_test.cpp
+      tests/harmonic_test.cpp
     )
     # C60/nanotube fixtures live in qcx-test-fixtures (tests/), shared with
     # the symmetry corpus; the target is defined later but plain-name links
@@ -40,6 +42,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         <gtest/gtest.h>
         <qcx/molecule/molecule.hpp>
         <qcx/molecule/elements.hpp>
+        <qcx/molecule/harmonic.hpp>
         <Eigen/Dense>
         <boost/graph/adjacency_list.hpp>)
 

@@ -239,10 +239,14 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/two_electron_test.cpp
         tests/md_tables_test.cpp
         tests/md_scatter_table_test.cpp
+        tests/md_derivative_test.cpp
+        tests/two_electron_derivative_test.cpp
         tests/shell_pairs_test.cpp
         tests/symmetry_reduction_test.cpp
         tests/symmetry_parity_refusal_test.cpp
         tests/screening_test.cpp
+        tests/screening_derivative_test.cpp
+        tests/screening_quartet_derivative_test.cpp
         tests/eri_batch_test.cpp
         tests/eri_cache_test.cpp
         tests/fock_build_test.cpp

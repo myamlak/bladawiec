@@ -204,7 +204,7 @@ void BuildContractedPairTransform(MdPairData& pair,
             // transform stores the transposed orientation with the weights
             // folded in (the ket contraction has no other site).
             FoldPairETable(
-                la, lb, prim.perAxisTables, shellA.isSpherical, shellB.isSpherical, nHerm, folded);
+                la, lb, 0, prim.perAxisTables, shellA.isSpherical, shellB.isSpherical, folded);
             pair.ketTransforms[primIdx].assign(static_cast<std::size_t>(nHerm) * pair.nFuncs, 0.0);
 
             for (std::size_t rowA = 0; rowA < rowsA; ++rowA)

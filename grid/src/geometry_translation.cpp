@@ -1,5 +1,7 @@
 #include "qcx/grid/geometry_translation.hpp"
 
+#include "qcx/grid/xc_grid_engine.hpp"
+
 #include <array>
 #include <cstddef>
 #include <string>
@@ -51,6 +53,18 @@ qcx::Result<excgrid::Geometry> ToExcgridGeometry(const qcx::molecule::Molecule& 
     }
 
     return geometry;
+}
+
+excgrid::GridParams ToExcgridParams(const XcGridSettings& settings) noexcept {
+    excgrid::GridParams params;
+    params.radialPoints = settings.radialPoints;
+    params.angularPoints = settings.angularPoints;
+    params.alpha = settings.alpha;
+    params.radialExponent = settings.radialExponent;
+    params.trimWeight = settings.trimWeight;
+    params.blockTarget = settings.blockTarget;
+
+    return params;
 }
 
 } // namespace qcx::grid

@@ -9597,3 +9597,190 @@ restart_path = "qcx_no_such_checkpoint_anywhere.h5"
     std::filesystem::remove(uhfStore);
 #endif
 }
+
+TEST(DriverErrorTest, TheDeviceRequirementReachesTheRecordAndUnhonourableOnesRefuse) {
+    // The device axis, end to end through the pipeline a user's TOML takes. Two
+    // facts, and the second is why the key is not merely a record change: a
+    // requirement the run could not honour must be REFUSED, never executed
+    // elsewhere - a run that computed on the host while its document said
+    // "cuda:0" is exactly the substitution the key exists to forbid.
+    //
+    // The record half: `[builder] device = "host"` on an ordinary RHF run is
+    // honoured by construction (the host is where this build's kernels run) and
+    // the requirement appears in the document, in the selector vocabulary the
+    // file wrote, so a consumer reads back a word it can write into a file.
+    const auto hostRun = RunInputText(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.96], ["H", 0.9, 0.0, -0.3]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[builder]
+device = "host"
+)");
+    ASSERT_TRUE(hostRun.has_value()) << hostRun.error().message;
+    // The KEY is asserted, not the bare word: "device" is also a legal VALUE in
+    // this document (a compute-profile source), so a search for the bare word
+    // would pass for a reason that has nothing to do with this axis.
+    EXPECT_NE(hostRun->find("\"device\": \"host\""), std::string::npos) << *hostRun;
+
+    // And an absent key states nothing: the member is ABSENT rather than
+    // defaulted to "host", because a defaulted word would read as a requirement
+    // the file never wrote.
+    const auto noDevice = RunInputText(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.96], ["H", 0.9, 0.0, -0.3]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+)");
+    ASSERT_TRUE(noDevice.has_value()) << noDevice.error().message;
+    EXPECT_EQ(noDevice->find("\"device\":"), std::string::npos) << *noDevice;
+
+    // The refusal half, and it takes TWO legs because the requirement is
+    // answered at two sites that see different facts.
+    //
+    // (1) The parser's: a `cuda` requirement written with no backend word at
+    // all. The block names no axis, so the selection resolves to its own
+    // defaults - cpu among them - and the pair is contradictory in the file,
+    // before any builder exists.
+    const auto cudaWithoutBackend = RunInputText(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.96], ["H", 0.9, 0.0, -0.3]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[builder]
+device = "cuda:0"
+)");
+    ASSERT_FALSE(cudaWithoutBackend.has_value()) << *cudaWithoutBackend;
+    EXPECT_EQ(cudaWithoutBackend.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(cudaWithoutBackend.error().message.find("builder.device = \"cuda:0\""),
+              std::string::npos)
+        << cudaWithoutBackend.error().message;
+
+    // (2) The driver's, which the parser CANNOT reach: the two keys AGREE - the
+    // backend axis says the device class and the device is a CUDA index - and the
+    // requirement is still not honourable, because this build has no CUDA device
+    // and the selection DEMOTES the `gpu` request to the ladder with its own
+    // warning. So the run resolves to a host builder, and the requirement is
+    // answered against what the run actually wired rather than against what the
+    // file asked for. This is the leg that makes the driver's check a second
+    // site rather than a copy of the parser's.
+    const auto cudaOnDemotedGpu = RunInputText(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.96], ["H", 0.9, 0.0, -0.3]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[builder]
+execution_backend = "gpu"
+device = "cuda:0"
+)");
+    ASSERT_FALSE(cudaOnDemotedGpu.has_value())
+        << "a device requirement the run could not honour was executed elsewhere: "
+        << *cudaOnDemotedGpu;
+    EXPECT_EQ(cudaOnDemotedGpu.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(cudaOnDemotedGpu.error().message.find("builder.device = \"cuda:0\""),
+              std::string::npos)
+        << cudaOnDemotedGpu.error().message;
+    EXPECT_NE(cudaOnDemotedGpu.error().message.find("the requirement cannot be honoured"),
+              std::string::npos)
+        << cudaOnDemotedGpu.error().message;
+}
+
+TEST(DriverErrorTest, ARestartPathBesideANonRestartGuessIsRefusedByName) {
+    // The `guess.type` resolution point, pinned as a REFUSAL rather than a
+    // silence. `guess.type` and `guess.restart_path` are one request between
+    // them, and the path belongs to `restart` alone: the other three guess
+    // words take no checkpoint file, so a path written beside one of them was
+    // stored by `io` (which keeps what the file says, by its own contract)
+    // and read by nothing at all - a key a user can write that the code
+    // neither honoured, refused by name, nor demoted with a disclosure, which
+    // is the knob-conformance defect's own definition.
+    //
+    // The pair is answered in ONE place (ResolveGuess, called from the
+    // combination check), and this row reaches it through the pipeline the
+    // way a user's TOML does. Both non-restart spellings are exercised,
+    // because the rule is about the PAIR and not about one word of it: a rule
+    // that only looked at the default would pass the first leg and fail the
+    // second.
+    const auto gwhStrayPath = RunInputText(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.96], ["H", 0.9, 0.0, -0.3]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[guess]
+type = "gwh"
+restart_path = "stray.h5"
+)");
+    ASSERT_FALSE(gwhStrayPath.has_value())
+        << "the stray path was silently ignored rather than answered: " << *gwhStrayPath;
+    EXPECT_EQ(gwhStrayPath.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(gwhStrayPath.error().message.find("guess.restart_path"), std::string::npos)
+        << gwhStrayPath.error().message;
+    EXPECT_NE(gwhStrayPath.error().message.find("guess.type = \"restart\""), std::string::npos)
+        << gwhStrayPath.error().message;
+
+    const auto sadStrayPath = RunInputText(R"(
+[molecule]
+charge = 1
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.96]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "uhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[guess]
+type = "sad"
+restart_path = "stray.h5"
+)");
+    ASSERT_FALSE(sadStrayPath.has_value()) << *sadStrayPath;
+    EXPECT_EQ(sadStrayPath.error().code, qcx::ErrorCode::kInvalidArgument);
+
+    // And the pair that IS the request still resolves: a `restart` run with a
+    // path reaches the checkpoint read rather than this refusal. The read
+    // itself fails on the missing file, which is a different error code and a
+    // different message - so this leg separates "the pair is answered" from
+    // "every path is refused". It needs the storage module: on a build
+    // configured with QCX_ENABLE_IO=OFF the driver refuses the read with the
+    // build's own cause before any store is touched, which names neither key.
+#if defined(QcxHasStorage)
+    const auto restartWithPath = RunInputText(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.96], ["H", 0.9, 0.0, -0.3]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[guess]
+type = "restart"
+restart_path = "qcx_no_such_checkpoint_for_this_row.h5"
+)");
+    ASSERT_FALSE(restartWithPath.has_value());
+    EXPECT_NE(restartWithPath.error().message.find("guess.restart_path"), std::string::npos)
+        << restartWithPath.error().message;
+    EXPECT_EQ(restartWithPath.error().message.find("was written beside a guess.type"),
+              std::string::npos)
+        << "the restart pair was answered by the pairing rule instead of by the read: "
+        << restartWithPath.error().message;
+#endif
+}

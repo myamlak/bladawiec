@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qcx/error.hpp"
+#include "qcx/grid/xc_grid_engine.hpp"
 #include "qcx/molecule/molecule.hpp"
 
 #include <excgrid/error.hpp>
@@ -33,5 +34,17 @@ qcx::Error TranslateExcgridError(excgrid::ErrorCode code, std::string_view conte
 /// not {atomCount, 3}.
 /// \ingroup qcx-grid
 qcx::Result<excgrid::Geometry> ToExcgridGeometry(const qcx::molecule::Molecule& molecule);
+
+/// Translates grid settings into the library's build parameters.
+///
+/// The grid and its geometric derivatives must come from one parameter set, so
+/// this is the single mapping from the settings the engine was built with to the
+/// parameters a derivative provider is built with. A second copy of it would let
+/// the two disagree about which points exist, and a provider refuses a block its
+/// own parameters would not have produced.
+/// \param settings The grid settings.
+/// \returns The parameters, field for field.
+/// \ingroup qcx-grid
+[[nodiscard]] excgrid::GridParams ToExcgridParams(const XcGridSettings& settings) noexcept;
 
 } // namespace qcx::grid

@@ -786,6 +786,18 @@ std::string SerializeRunResultJson(const RunResult& result) {
             axesBlock["deprecated_key"] = "method.fock_builder";
         }
 
+        // Schema 39: the device the run REQUIRED. Present exactly when the file
+        // wrote `[builder] device`, absent otherwise - an omitted key is not a
+        // requirement, and writing "host" for it would be the record answering a
+        // question the input never asked. It is written at top level of this
+        // block rather than nested, because it is a requirement about the
+        // SELECTION's placement and not a fourth axis value: `execution_backend`
+        // above says the device class, this says which device.
+        if (axes.device.has_value())
+        {
+            axesBlock["device"] = *axes.device;
+        }
+
         document["builder_axes"] = std::move(axesBlock);
     }
 

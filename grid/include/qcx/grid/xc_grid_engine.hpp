@@ -31,6 +31,32 @@ struct XcGridSettings {
     std::size_t blockTarget = 1024; ///< Spatial re-batching target (points per block).
 };
 
+/// The thresholds one XC integration runs under, carried together.
+///
+/// The energy path owns both: the grid build truncates the point set by
+/// XcGridSettings::trimWeight, and the screened assembly drops shells below its
+/// significance test's tolerance. A gradient that takes them from anywhere else
+/// is the derivative of a different energy than the one the SCF converged, and
+/// the forces it returns are then inconsistent with the density they came from.
+/// One object with one named source is what makes that reuse assertable rather
+/// than a matter of reading two call sites and trusting them to agree.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-grid
+struct XcIntegrationThresholds {
+    double trimWeight = 0.0; ///< The grid build's point truncation.
+    double screeningTolerance = 0.0; ///< The significance test's neglect threshold.
+
+    /// The thresholds an energy-path integration ran under.
+    /// \param settings The grid settings the energy path was built with.
+    /// \param tolerance The screening tolerance the energy path passed.
+    /// \returns Both, as the gradient walk consumes them.
+    /// \ingroup qcx-grid
+    [[nodiscard]] static XcIntegrationThresholds FromEnergyPath(const XcGridSettings& settings,
+                                                                double tolerance) noexcept {
+        return XcIntegrationThresholds{settings.trimWeight, tolerance};
+    }
+};
+
 /// What one integration actually did, in counted operations.
 ///
 /// A wall clock cannot separate a screening win from a noise band, and cannot
@@ -271,6 +297,20 @@ public:
     /// \returns The grid.
     [[nodiscard]] const excgrid::BlockGrid& Grid() const noexcept {
         return _grid;
+    }
+
+    /// The AO evaluator the engine's points are evaluated with, for a consumer
+    /// integrating a further quantity at the same points.
+    /// \returns The evaluator.
+    [[nodiscard]] const AoEvaluator& Evaluator() const noexcept {
+        return _evaluator;
+    }
+
+    /// The functional kernel this engine integrates, for a consumer that needs
+    /// the same functional's partials at the same points.
+    /// \returns The functional.
+    [[nodiscard]] const excgrid::XcFunctional& Functional() const noexcept {
+        return *_functional;
     }
 
     /// The screening envelopes, in the evaluator's shell order.

@@ -137,6 +137,23 @@ public:
                              std::span<double> gradients,
                              std::span<double> hessians) const;
 
+    /// Fills \p values, \p gradients, and \p hessians for the shells named by
+    /// \p selection.
+    ///
+    /// The screened form of EvaluateDerivatives, with the same contract on the
+    /// untouched slots: a caller reads only the selected ranges. All three span
+    /// sizes are still AOCount(), 3 * AOCount() and 6 * AOCount().
+    /// \param pointBohr The evaluation point, in Bohr.
+    /// \param selection Shell indices into ShellRanges(), in any order.
+    /// \param values Size AOCount(); the selected ranges are overwritten.
+    /// \param gradients Size 3 * AOCount(); the selected ranges are overwritten.
+    /// \param hessians Size 6 * AOCount(); the selected ranges are overwritten.
+    void EvaluateDerivativesSelected(const std::array<double, 3>& pointBohr,
+                                     std::span<const std::size_t> selection,
+                                     std::span<double> values,
+                                     std::span<double> gradients,
+                                     std::span<double> hessians) const;
+
 private:
     struct Primitive {
         double exponent;

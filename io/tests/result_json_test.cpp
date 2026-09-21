@@ -35,7 +35,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsThirtySeven) {
+TEST(ResultJsonTest, SchemaVersionIsThirtyNine) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -79,7 +79,27 @@ TEST(ResultJsonTest, SchemaVersionIsThirtySeven) {
     // serializer dropped them, so a run whose far field missed its budget
     // used to be indistinguishable in the document from one that met it.
     // Keys added, so the number moves with them.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 37);
+    //
+    // v37 -> v38: NO key is added and none is removed - what moves is the
+    // PRESENCE RULE of `resources_resolved.eri_store` (RunEriStore, schema
+    // 33), widened to the unrestricted legs. At v33 an unrestricted (UHF/UKS)
+    // run that named `method.eri_cache_store` was refused by name before it
+    // could serialize, so the block was a restricted-run-only shape; the
+    // engine-decorator seam is now wired on the direct family's per-spin
+    // coulomb and exchange halves, so those runs carry the same
+    // honoured-or-demoted block their restricted sibling does. A consumer
+    // keyed on "no `eri_store` on an unrestricted run" is the one that must
+    // notice - the same reasoning v25 used when it widened
+    // `selection.approximation` to exact-kernel runs carrying a notice.
+    //
+    // v38 -> v39: the `builder_axes` block GAINS `device` (RunBuilderAxes), the
+    // device the run REQUIRED in the input's own selector vocabulary ("host" |
+    // "cuda:<index>"), present exactly when the file wrote `[builder] device`.
+    // A key added, so the number moves with it. It carries no requested-vs-ran
+    // pairing and needs none: a requirement the resolved builder cannot supply
+    // is refused by name before serialization, so a document carrying this key
+    // is one whose kernels executed where the input said they must.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 39);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {

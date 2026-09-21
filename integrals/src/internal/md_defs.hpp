@@ -31,6 +31,17 @@
 
 namespace qcx::integrals::internal {
 
+/// The highest nuclear-coordinate derivative order the MD recurrence tier
+/// takes (md_derivative.hpp). The order is a runtime argument of the
+/// derivative entry points - one function serves every order - and this
+/// bound is what the raised table extents are sized for: the derivative
+/// tables add the term's operator applications to the pair's angular
+/// momenta (kMaxShellL + kMaxMdDerivativeOrder bra rows, kMaxShellL +
+/// kMaxMdDerivativeOrder ket columns), and the kinetic path adds the two
+/// rows of its |r-A|^2 terms on top of the bra raises (the assert of
+/// FillPerAxisTable, md_hermite.hpp).
+inline constexpr int kMaxMdDerivativeOrder = 2;
+
 /// Number of Cartesian components of a shell of angular momentum l.
 /// \param l Angular momentum, 0..kMaxShellL.
 /// \returns (l+1)(l+2)/2.

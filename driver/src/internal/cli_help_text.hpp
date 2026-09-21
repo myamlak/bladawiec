@@ -166,6 +166,15 @@ input file keys (a key marked required must be written):
     execution_backend = "cpu"       optional; cpu | gpu; "gpu" runs the direct
                                     family on the device. "gpu_split" names the
                                     unwired candidate and is refused
+    device = "host"                 optional; host | cuda; WHICH device the run
+                                    requires its kernels to execute on - the
+                                    question execution_backend cannot answer,
+                                    since it names the device CLASS. A cuda
+                                    selection carries its index in the value,
+                                    as "cuda:0" for the first device. Absent
+                                    states no requirement; a value the backend
+                                    cannot supply is refused, never executed
+                                    elsewhere
 [scf]
     max_iterations = 100            >= 1
     energy_tolerance = 1e-8         > 0; the energy change between two
