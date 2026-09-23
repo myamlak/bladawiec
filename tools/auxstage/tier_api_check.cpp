@@ -3,7 +3,7 @@
 // directly. Ratios only: the machine is shared.
 
 #include "boys/boys.hpp"
-#include "boys_impl.hpp" // the rungs themselves, for the comparisons
+#include "boys/boys_impl.hpp" // the rungs themselves, for the comparisons
 
 #include <chrono>
 #include <cstdio>

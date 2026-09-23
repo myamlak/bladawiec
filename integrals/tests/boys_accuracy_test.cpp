@@ -19,10 +19,10 @@
 // sampled m, F(x16) being the certified double lane evaluated at the
 // fp16-rounded argument (the reference lane).
 //
-// The sampled-m instantiations are compiled from the internal headers
-// (boys_impl.hpp, boys_effective_degrees.hpp) — the library exports only
-// the m = 1 instantiations; the m = 1 call sites below still route to the
-// library's certified instantiations. The relaxed SIMD lanes consume the
+// The sampled-m instantiations are compiled from the shipped headers
+// (boys/boys_impl.hpp, boys/boys_effective_degrees.hpp); the m = 1 call sites
+// below still route to the library's certified instantiations, which the
+// extern-template declarations in boys/boys.hpp name. The relaxed SIMD lanes consume the
 // same constexpr degree tables as their scalar twins (region A:
 // kDoubleSingle; region B: kDoubleBatch) and the same Clenshaw recursions
 // with runtime degrees (the full-accuracy shape), so the grid contract
@@ -32,8 +32,9 @@
 // file's existing tests untouched (the split is editorial only — same test
 // binary, same contract).
 
-#include "boys_effective_degrees.hpp"
-#include "boys_impl.hpp"
+#include "boys/boys.hpp"
+#include "boys/boys_effective_degrees.hpp"
+#include "boys/boys_impl.hpp"
 #include "qcx/integrals/boys.hpp"
 
 #include <algorithm>

@@ -9,7 +9,7 @@
 // header (the submodule keeps src/ off the public include path), which is the
 // same header the kernel's own contract tests include directly.
 
-#include "boys_impl.hpp"
+#include "boys/boys_impl.hpp"
 
 #include <cmath>
 #include <cstdio>

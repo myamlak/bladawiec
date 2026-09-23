@@ -23,7 +23,7 @@
 
 #include "qcx/integrals/eri_cuda.hpp"
 
-#include "boys_coefficients.hpp"
+#include "boys/boys_coefficients.hpp"
 #include "internal/device_footprint.hpp"
 #include "internal/eri_cuda_fock.hpp"
 #include "internal/fock_screen.hpp"

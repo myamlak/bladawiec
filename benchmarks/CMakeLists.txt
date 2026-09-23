@@ -19,9 +19,9 @@ qcx_apply_blas_runtime(qcx-bench-molecule)
 # The benchmark partitions inputs with the
 # exact region boundaries, so it includes the generated detail header.
 add_executable(qcx-bench-boys boys_benchmark.cpp)
-# The Boys kernel internals live in the boys submodule now (the
-# table constants the driver reads come from its src/).
-target_include_directories(qcx-bench-boys PRIVATE ${CMAKE_SOURCE_DIR}/external/boys/src)
+# The Boys kernel lives in the boys submodule; the table constants the driver
+# reads are part of its published surface (external/boys/include/boys/).
+target_include_directories(qcx-bench-boys PRIVATE ${CMAKE_SOURCE_DIR}/external/boys/include)
 target_compile_features(qcx-bench-boys PRIVATE cxx_std_23)
 target_link_libraries(qcx-bench-boys PRIVATE qcx-integrals benchmark::benchmark)
 target_precompile_headers(qcx-bench-boys PRIVATE
@@ -37,7 +37,7 @@ qcx_apply_blas_runtime(qcx-bench-boys)
 if (QCX_ARCH_X86_64)
     add_executable(qcx-bench-boys-unsorted-simd boys_unsorted_simd_benchmark.cpp)
     target_include_directories(qcx-bench-boys-unsorted-simd PRIVATE
-        ${CMAKE_SOURCE_DIR}/external/boys/src)
+        ${CMAKE_SOURCE_DIR}/external/boys/include)
     target_compile_features(qcx-bench-boys-unsorted-simd PRIVATE cxx_std_23)
     target_link_libraries(qcx-bench-boys-unsorted-simd PRIVATE qcx-integrals)
     target_precompile_headers(qcx-bench-boys-unsorted-simd PRIVATE
@@ -165,8 +165,7 @@ target_include_directories(qcx-bench-boys-argument PRIVATE
     ${CMAKE_SOURCE_DIR}/integrals/src
     ${CMAKE_SOURCE_DIR}/linalg/include
     ${CMAKE_SOURCE_DIR}/tests/fixtures
-    ${CMAKE_SOURCE_DIR}/external/boys/include
-    ${CMAKE_SOURCE_DIR}/external/boys/src)
+    ${CMAKE_SOURCE_DIR}/external/boys/include)
 target_compile_features(qcx-bench-boys-argument PRIVATE cxx_std_23)
 target_compile_definitions(qcx-bench-boys-argument PRIVATE
     NOMINMAX
@@ -188,8 +187,7 @@ target_include_directories(qcx-bench-boys-argument-scaling PRIVATE
     ${CMAKE_SOURCE_DIR}/integrals/src
     ${CMAKE_SOURCE_DIR}/linalg/include
     ${CMAKE_SOURCE_DIR}/tests/fixtures
-    ${CMAKE_SOURCE_DIR}/external/boys/include
-    ${CMAKE_SOURCE_DIR}/external/boys/src)
+    ${CMAKE_SOURCE_DIR}/external/boys/include)
 target_compile_features(qcx-bench-boys-argument-scaling PRIVATE cxx_std_23)
 target_compile_definitions(qcx-bench-boys-argument-scaling PRIVATE
     NOMINMAX
@@ -212,8 +210,7 @@ target_include_directories(qcx-bench-boys-replay PRIVATE
     ${CMAKE_SOURCE_DIR}/integrals/src
     ${CMAKE_SOURCE_DIR}/linalg/include
     ${CMAKE_SOURCE_DIR}/tests/fixtures
-    ${CMAKE_SOURCE_DIR}/external/boys/include
-    ${CMAKE_SOURCE_DIR}/external/boys/src)
+    ${CMAKE_SOURCE_DIR}/external/boys/include)
 target_compile_features(qcx-bench-boys-replay PRIVATE cxx_std_23)
 target_compile_definitions(qcx-bench-boys-replay PRIVATE
     NOMINMAX
@@ -440,7 +437,7 @@ if (QCX_ENABLE_CUDA AND TARGET qcx-integrals-cuda)
     # The driver is the submodule's canonical copy (boys namespace,
     # BoysStatus semantics); the kernels TU is CUDA-clean and unchanged.
     target_include_directories(qcx-bench-boys-cuda PRIVATE
-        ${CMAKE_SOURCE_DIR}/external/boys/src)
+        ${CMAKE_SOURCE_DIR}/external/boys/include)
     target_compile_features(qcx-bench-boys-cuda PRIVATE cxx_std_23)
     target_compile_definitions(qcx-bench-boys-cuda PRIVATE NOMINMAX)
     target_link_libraries(qcx-bench-boys-cuda PRIVATE qcx-integrals-cuda)

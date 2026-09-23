@@ -1,4 +1,4 @@
-#include "boys_coefficients.hpp"
+#include "boys/boys_coefficients.hpp"
 #include "qcx/integrals/boys.hpp"
 
 #include <algorithm>

@@ -21,7 +21,7 @@
 //                                [--no-build] [--no-cost]
 #include "alkane_sto3g.hpp"
 #include "boys/boys.hpp"
-#include "boys_coefficients.hpp"
+#include "boys/boys_coefficients.hpp"
 #include "internal/fock_screen.hpp"
 #include "qcx/backend/cpu_backend.hpp"
 #include "qcx/integrals/accuracy.hpp"

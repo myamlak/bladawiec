@@ -50,7 +50,7 @@ public header, next to the value or the choice it explains.
   generator, never a generated file.
 - The Boys kernel is an exception: it is owned by the boys submodule
   (upstream-first). Its generated files
-  (`external/boys/src/boys_coefficients.hpp`,
+  (`external/boys/include/boys/boys_coefficients.hpp`,
   `external/boys/tests/data/boys_reference.csv`) are checked by the
   same `boys-reference-regeneration` test, which drives the submodule's
   generator (`external/boys/tools/gen_boys_coefficients.py --check`)

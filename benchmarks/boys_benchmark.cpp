@@ -9,7 +9,7 @@
 // measured on region-sorted arrays (the engine pattern); the unsorted
 // penalty is measured by the mixed per-vector kernel in
 // boys_unsorted_simd_benchmark.cpp.
-#include "boys_coefficients.hpp"
+#include "boys/boys_coefficients.hpp"
 #include "qcx/integrals/boys.hpp"
 
 #include <benchmark/benchmark.h>

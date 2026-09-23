@@ -32,7 +32,7 @@
 // Usage: qcx-bench-boys-argument-scaling [--basis <family>] [--carbons <n>]
 //                                        [--no-build] [--sample-shift <k>]
 #include "alkane_sto3g.hpp"
-#include "boys_coefficients.hpp"
+#include "boys/boys_coefficients.hpp"
 #include "internal/fock_screen.hpp"
 #include "internal/md_batch.hpp"
 #include "internal/qfmm_geometry.hpp"

@@ -15,7 +15,8 @@
 // once for nmax + 1 values - and the batch is the shape a real integral
 // engine uses.
 
-#include "boys_impl.hpp"
+#include "boys/boys.hpp"
+#include "boys/boys_impl.hpp"
 
 #include <chrono>
 #include <cmath>
