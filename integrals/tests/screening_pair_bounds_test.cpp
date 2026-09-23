@@ -672,7 +672,7 @@ TEST(ScreeningPairBoundsTest, APairPastTheKernelTableCarriesNoBound) {
     // The fixture's whole point is shells the kernel table does not cover, so
     // a build whose ceiling stops below them refuses the basis at its entry
     // point and there is no pair census to read.
-    if (!qcx::integrals::SupportsL(3))
+    if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "the fixture's f and g shells exceed this build's kMaxEngineL "
                         "(CI lmax=2)";

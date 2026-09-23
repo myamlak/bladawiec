@@ -168,9 +168,9 @@ TEST(KsInputFileTest, TheSameFileOnTheHartreeFockWordIsADifferentEnergy) {
     // The Kohn-Sham arm's pure functional resolves the universal-J fitting set
     // at run time, and that set's oxygen carries f and g shells a capped build
     // refuses - so the pair of numbers this test exists to compare never forms.
-    if (!qcx::integrals::SupportsL(3))
+    if (!qcx::integrals::SupportsL(4))
     {
-        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
+        GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
                         "(CI lmax=2)";
     }
 
@@ -210,9 +210,9 @@ TEST(KsInputFileTest, ChangingTheFunctionalNameMovesTheEnergy) {
     // The Slater arm resolves the universal-J fitting set, whose oxygen
     // carries f and g shells; a capped build refuses that run, so the
     // two-functional comparison this test is made of cannot be drawn.
-    if (!qcx::integrals::SupportsL(3))
+    if (!qcx::integrals::SupportsL(4))
     {
-        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
+        GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
                         "(CI lmax=2)";
     }
 
@@ -263,9 +263,9 @@ TEST(KsInputFileTest, TheGradientKeyAsksForTheExchangeCorrelationWalk) {
     // The Slater arm at the end of this test resolves the universal-J fitting
     // set, whose oxygen carries f and g shells, and a capped build refuses
     // that run - so the cross-functional comparison it carries never forms.
-    if (!qcx::integrals::SupportsL(3))
+    if (!qcx::integrals::SupportsL(4))
     {
-        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
+        GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
                         "(CI lmax=2)";
     }
 

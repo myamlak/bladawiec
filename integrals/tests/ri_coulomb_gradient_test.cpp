@@ -508,9 +508,9 @@ TEST(RiCoulombGradientTest, TheGradientIsTheDerivativeOfItsOwnEnergy) {
     // The ladder's rung here is the vendored Coulomb-fitting set, whose oxygen
     // carries f and g shells: a capped build refuses that basis at the engine's
     // entry point rather than fitting anything with it.
-    if (!qcx::integrals::SupportsL(3))
+    if (!qcx::integrals::SupportsL(4))
     {
-        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
+        GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
                         "(CI lmax=2)";
     }
 
