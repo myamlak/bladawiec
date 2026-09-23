@@ -960,11 +960,14 @@ TEST(LeanDirectFockBuilderTest, KernelSpanProbeSubdividesTheKernelAndStaysInside
                               << " ket=" << firstStats.kernelKetWallTime.count()
                               << " bra=" << firstStats.kernelBraWallTime.count()
                               << " kernel=" << kernel;
-    EXPECT_GE(2 * phases, kernel)
-        << "the kernel phases covered less than half the kernel span - the "
-           "decomposition has stopped adding up: vrr="
-        << firstStats.kernelVrrWallTime.count() << " ket=" << firstStats.kernelKetWallTime.count()
-        << " bra=" << firstStats.kernelBraWallTime.count() << " kernel=" << kernel;
+    // No half-coverage floor is pinned here or on the threaded leg below. The
+    // un-phased remainder (the per-batch scratch layout walk, scratch.assign,
+    // the group splitting, the loop increments and the pass-2 clock opens)
+    // absorbs the dispatch's worker scheduling, so the phases' SHARE of the
+    // kernel span moves with the machine's load rather than with the
+    // decomposition. Disjointness is the contract - the sub-spans are measured
+    // inside the kernel span and sum to at most it - and the per-phase
+    // positivity above pins that the probe subdivided anything at all.
     // The denominators, against counts the call already publishes.
     EXPECT_GT(firstStats.kernelPrimPasses, 0u);
     EXPECT_GT(firstStats.kernelGroupCount, 0u);
@@ -1017,8 +1020,14 @@ TEST(LeanDirectFockBuilderTest, KernelSpanProbeSubdividesTheKernelAndStaysInside
                                      threadedStats.kernelBraWallTime.count();
 
     EXPECT_GT(threadedKernel, 0);
+    // Containment is contractual at any k: the sub-spans are measured inside
+    // the kernel span of every window, so the window-accumulated sums stay
+    // inside the accumulated parent. The half-coverage floor the k = 1 leg
+    // argues against is not restated here either.
+    EXPECT_GT(threadedStats.kernelVrrWallTime.count(), 0);
+    EXPECT_GT(threadedStats.kernelKetWallTime.count(), 0);
+    EXPECT_GT(threadedStats.kernelBraWallTime.count(), 0);
     EXPECT_LE(threadedPhases, threadedKernel);
-    EXPECT_GE(2 * threadedPhases, threadedKernel);
 }
 
 TEST(LeanDirectFockBuilderTest, MatchesTheDirectFamilyAtEqualPreset) {
