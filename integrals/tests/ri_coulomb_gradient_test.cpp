@@ -21,6 +21,7 @@
 #include "internal/shells_flat.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/integrals/eri_batch.hpp"
+#include "qcx/integrals/limits.hpp"
 #include "qcx/integrals/one_electron.hpp"
 #include "qcx/integrals/ri_gradient.hpp"
 #include "qcx/integrals/shell_pairs.hpp"
@@ -504,6 +505,15 @@ std::size_t FunctionCount(const qcx::molecule::Molecule& molecule,
 /// fitting coefficients as well - and a walk that dropped the coefficients'
 /// own geometry dependence fails it by that term's size.
 TEST(RiCoulombGradientTest, TheGradientIsTheDerivativeOfItsOwnEnergy) {
+    // The ladder's rung here is the vendored Coulomb-fitting set, whose oxygen
+    // carries f and g shells: a capped build refuses that basis at the engine's
+    // entry point rather than fitting anything with it.
+    if (!qcx::integrals::SupportsL(3))
+    {
+        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
+                        "(CI lmax=2)";
+    }
+
     auto fixture = MakeFixture();
 
     if (!fixture.has_value())

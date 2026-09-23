@@ -19,6 +19,7 @@
 // the name reached the physics rather than only the record.
 
 #include "qcx/driver/run_driver.hpp"
+#include "qcx/integrals/limits.hpp"
 #include "qcx/io/parse_input.hpp"
 #include "qcx/io/run_input.hpp"
 #include "qcx/io/validate_input.hpp"
@@ -164,6 +165,15 @@ functional = "b3lyp"
 // over a Hartree-Fock Fock would land on the second number, so the two are
 // compared rather than the Kohn-Sham energy alone.
 TEST(KsInputFileTest, TheSameFileOnTheHartreeFockWordIsADifferentEnergy) {
+    // The Kohn-Sham arm's pure functional resolves the universal-J fitting set
+    // at run time, and that set's oxygen carries f and g shells a capped build
+    // refuses - so the pair of numbers this test exists to compare never forms.
+    if (!qcx::integrals::SupportsL(3))
+    {
+        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
+                        "(CI lmax=2)";
+    }
+
     auto ks = RunFile(TempInputPath("rks-slater"), WaterToml(R"(type = "rks"
 functional = "slater"
 )"));
@@ -197,6 +207,15 @@ functional = "slater"
 // the record and integrated something else - or the same thing for every name
 // - passes every other assertion in this file.
 TEST(KsInputFileTest, ChangingTheFunctionalNameMovesTheEnergy) {
+    // The Slater arm resolves the universal-J fitting set, whose oxygen
+    // carries f and g shells; a capped build refuses that run, so the
+    // two-functional comparison this test is made of cannot be drawn.
+    if (!qcx::integrals::SupportsL(3))
+    {
+        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
+                        "(CI lmax=2)";
+    }
+
     auto b3lyp = RunFile(TempInputPath("byp"), WaterToml(R"(type = "rks"
 functional = "b3lyp"
 )"));
@@ -241,6 +260,15 @@ functional = "slater"
 // the construction rather than of this fixture: the weights see the geometry
 // only through differences).
 TEST(KsInputFileTest, TheGradientKeyAsksForTheExchangeCorrelationWalk) {
+    // The Slater arm at the end of this test resolves the universal-J fitting
+    // set, whose oxygen carries f and g shells, and a capped build refuses
+    // that run - so the cross-functional comparison it carries never forms.
+    if (!qcx::integrals::SupportsL(3))
+    {
+        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
+                        "(CI lmax=2)";
+    }
+
     const std::string ksBody = R"(type = "rks"
 functional = "b3lyp"
 )";

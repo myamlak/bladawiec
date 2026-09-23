@@ -23,6 +23,7 @@
 #include "internal/shells_flat.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/integrals/eri_batch.hpp"
+#include "qcx/integrals/limits.hpp"
 #include "qcx/integrals/screening.hpp"
 #include "qcx/integrals/shell_pairs.hpp"
 #include "qcx/memory/tensor.hpp"
@@ -668,6 +669,15 @@ END
 /// quantity that is not a bound, and the gradient would be wrong smoothly
 /// rather than loudly.
 TEST(ScreeningPairBoundsTest, APairPastTheKernelTableCarriesNoBound) {
+    // The fixture's whole point is shells the kernel table does not cover, so
+    // a build whose ceiling stops below them refuses the basis at its entry
+    // point and there is no pair census to read.
+    if (!qcx::integrals::SupportsL(3))
+    {
+        GTEST_SKIP() << "the fixture's f and g shells exceed this build's kMaxEngineL "
+                        "(CI lmax=2)";
+    }
+
     auto molecule = qcx::testing::MakeH2oSto3g();
     ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
     auto basis = qcx::basisset::ParseNwchemText(kPastTheKernelTableBasis);
