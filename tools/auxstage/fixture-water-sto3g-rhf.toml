@@ -1,0 +1,19 @@
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["O", 0.0, 0.0, 0.0],
+    ["H", 0.7569503270127429, 0.58588227657553, 0.0],
+    ["H", -0.7569503270127429, 0.58588227657553, 0.0],
+]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kTight"
+
+[resources]
+thread_cap = 1

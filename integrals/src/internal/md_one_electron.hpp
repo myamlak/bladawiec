@@ -225,7 +225,7 @@ inline void BuildNuclearPair(const MdPairData& pair,
             const double dcz = prim.pz - centers[c].z();
             const double x = prim.p * (dcx * dcx + dcy * dcy + dcz * dcz);
             double tmp[1 + kMaxBoysOrder];
-            BoysBatch(l1, x, tmp);
+            BoysAllOrders(l1, x, tmp);
 
             for (int m = 0; m <= l1; ++m)
             {

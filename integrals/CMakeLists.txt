@@ -53,6 +53,7 @@ add_library(qcx-integrals
   src/ri_engine_chunk.cpp
   src/ri_occ_k.cpp
   src/ri_full_fock.cpp
+  src/ri_gradient.cpp
   src/screening.cpp
   src/shell_pairs.cpp
   src/symmetry_reduction.cpp
@@ -246,6 +247,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/symmetry_parity_refusal_test.cpp
         tests/screening_test.cpp
         tests/screening_derivative_test.cpp
+        tests/screening_pair_bounds_test.cpp
         tests/screening_quartet_derivative_test.cpp
         tests/eri_batch_test.cpp
         tests/eri_cache_test.cpp
@@ -258,6 +260,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/incremental_fock_test.cpp
         tests/ri_engine_test.cpp
         tests/ri_engine_chunk_test.cpp
+        tests/ri_coulomb_gradient_test.cpp
         tests/ri_orbit_test.cpp
         tests/ri_occ_k_test.cpp
         tests/ri_full_fock_test.cpp

@@ -2,7 +2,7 @@
 // function is.
 //
 // Counts first, because a count does not care what else the machine is doing.
-// The MD engine's VRR calls BoysBatch once per primitive quadruple of every
+// The MD engine's VRR calls BoysAllOrders once per primitive quadruple of every
 // screened-in shell quartet, so the Boys call count of one build is a
 // combinatorial property of the screened quartet set - and that set is
 // enumerated here a second time, from the public pair list and Schwarz
@@ -12,7 +12,7 @@
 // cost nothing beyond the walk.
 //
 // The cost half IS a timing and is labelled as one: the per-call cost of
-// BoysBatch on the enumerated (nmax, x) distribution, and the engine's own
+// BoysAllOrders on the enumerated (nmax, x) distribution, and the engine's own
 // phase spans of the kernel that contains the call. Both are taken on
 // whatever machine runs this probe, so the share is reported as an interval -
 // the cost read at each argument bin's center and at both its edges, which is
@@ -181,7 +181,7 @@ struct CallCost {
     double median = 0.0; ///< The middle round: how much load moves the reading.
 };
 
-/// Times one BoysBatch call at (nmax, x) over \p kRoundCount rounds.
+/// Times one BoysAllOrders call at (nmax, x) over \p kRoundCount rounds.
 /// \param nmax The batch's highest order.
 /// \param x The argument.
 /// \returns Nanoseconds per call, at the minimum and the median round.
@@ -196,7 +196,7 @@ CallCost TimeBoysCall(int nmax, double x) {
 
     for (std::size_t i = 0; i < reps; ++i)
     {
-        qcx::integrals::BoysBatch(nmax, x, out);
+        qcx::integrals::BoysAllOrders(nmax, x, out);
     }
 
     const auto calStop = std::chrono::steady_clock::now();
@@ -220,7 +220,7 @@ CallCost TimeBoysCall(int nmax, double x) {
 
         for (std::size_t i = 0; i < reps; ++i)
         {
-            qcx::integrals::BoysBatch(nmax, x, out);
+            qcx::integrals::BoysAllOrders(nmax, x, out);
         }
 
         const auto stop = std::chrono::steady_clock::now();
@@ -287,7 +287,7 @@ CallCost TimeMixedStream(const Census& census) {
 
         for (const auto& [lClass, x] : stream)
         {
-            qcx::integrals::BoysBatch(lClass, x, out);
+            qcx::integrals::BoysAllOrders(lClass, x, out);
             gSink += out[lClass];
         }
 

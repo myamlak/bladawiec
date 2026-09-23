@@ -1,6 +1,7 @@
 add_library(qcx-response
   src/response_operator.cpp
   src/response_solver.cpp
+  src/response_gradient.cpp
 )
 target_include_directories(qcx-response PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(qcx-response PUBLIC cxx_std_23)
@@ -20,6 +21,7 @@ target_precompile_headers(qcx-response PRIVATE
 if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-response-tests
       tests/response_solver_test.cpp
+      tests/response_gradient_test.cpp
     )
     # The C1 anchor runs the real H2/STO-3G SCF at three field strengths, so the
     # test target pulls scf, integrals, basisset and the shared H2/STO-3G

@@ -259,6 +259,11 @@ input file keys (a key marked required must be written):
                                     bond paths
     molden = ""                     a path; the Molden-format file of the
                                     converged or last-iterate SCF result
+    xc_gradient = false             bool; dE_xc/dR at the converged density,
+                                    Hartree/Bohr per atom and direction. The
+                                    exchange-correlation term of the gradient
+                                    only: the density is held fixed, so this is
+                                    not a total nuclear gradient (Kohn-Sham only)
     nocv_fragments = [[0, 1]]       optional; one atom-index array per fragment
                                     (the indices count the atom rows as
                                     written). ETS-NOCV, closed-shell only

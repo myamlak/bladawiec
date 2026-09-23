@@ -85,7 +85,7 @@ double StableSeriesF(int n, double x) {
     return 0.5 * std::exp(-x) * sum;
 }
 
-// Builds the 38 x 1025 LUT: rows 0..32 from BoysBatchF64 on the grid
+// Builds the 38 x 1025 LUT: rows 0..32 from BoysCuda::BatchF64 on the grid
 // (certified <= 5.5e-14), rows 33..37 via the stable series above (the
 // degree-5 corrections of order-32 inputs reach F_37). BatchF64 takes
 // DEVICE pointers (boys_cuda.hpp), so the grid travels through device

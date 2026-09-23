@@ -52,8 +52,8 @@
 
 namespace {
 
-using qcx::integrals::BoysBatch;
-using qcx::integrals::BoysBatchF32;
+using qcx::integrals::BoysAllOrders;
+using qcx::integrals::BoysAllOrdersF32;
 using qcx::integrals::BoysSingle;
 using qcx::integrals::BoysSingleF32;
 using qcx::integrals::detail::BoysRole;
@@ -270,7 +270,7 @@ template <double kM> void SweepDoubleBatch() {
 
     for (const ReferenceRow& row : gReference)
     {
-        BoysBatch<kM>(row.n, row.x, batch.data());
+        BoysAllOrders<kM>(row.n, row.x, batch.data());
 
         for (int k = 0; k <= row.n; ++k)
         {
@@ -309,7 +309,7 @@ template <double kM> void SweepFloatBatch() {
 
     for (const ReferenceRow& row : gReference)
     {
-        BoysBatchF32<kM>(row.n, static_cast<float>(row.x), batch.data());
+        BoysAllOrdersF32<kM>(row.n, static_cast<float>(row.x), batch.data());
 
         for (int k = 0; k <= row.n; ++k)
         {
@@ -466,7 +466,7 @@ template <double kM> void CheckSingleBatchAgree() {
         const double x = xd(rng);
         const BoysRegion region = RegionOf(x);
         const int nmax = static_cast<int>(rng() % (qcx::integrals::kMaxBoysOrder + 1));
-        BoysBatch<kM>(nmax, x, batch.data());
+        BoysAllOrders<kM>(nmax, x, batch.data());
 
         for (int k = 0; k <= nmax; ++k)
         {
@@ -489,7 +489,7 @@ template <double kM> void CheckSingleBatchAgreeF32() {
         const float x = xd(rng);
         const BoysRegion region = RegionOf(static_cast<double>(x));
         const int nmax = static_cast<int>(rng() % (qcx::integrals::kMaxBoysOrder + 1));
-        BoysBatchF32<kM>(nmax, x, batch.data());
+        BoysAllOrdersF32<kM>(nmax, x, batch.data());
 
         for (int k = 0; k <= nmax; ++k)
         {
@@ -512,7 +512,7 @@ template <double kM> void CheckZeroArgument() {
     }
 
     double batch[qcx::integrals::kMaxBoysOrder + 1];
-    BoysBatch<kM>(8, 0.0, batch);
+    BoysAllOrders<kM>(8, 0.0, batch);
 
     for (int k = 0; k <= 8; ++k)
     {
@@ -520,7 +520,7 @@ template <double kM> void CheckZeroArgument() {
     }
 
     float batchF32[qcx::integrals::kMaxBoysOrder + 1];
-    BoysBatchF32<kM>(8, 0.0f, batchF32);
+    BoysAllOrdersF32<kM>(8, 0.0f, batchF32);
 
     for (int k = 0; k <= 8; ++k)
     {
@@ -604,7 +604,7 @@ TEST(BoysAccuracyTest, F16SampledMultipliers) {
         RunHalfSampledCheck<qcx::integrals::F16,
                             kM,
                             qcx::integrals::BoysSingleF16<kM>,
-                            qcx::integrals::BoysBatchF16<kM>>("BoysF16");
+                            qcx::integrals::BoysAllOrdersF16<kM>>("BoysF16");
     });
 }
 
@@ -613,7 +613,7 @@ TEST(BoysAccuracyTest, Bf16SampledMultipliers) {
         RunHalfSampledCheck<qcx::integrals::Bf16,
                             kM,
                             qcx::integrals::BoysSingleBf16<kM>,
-                            qcx::integrals::BoysBatchBf16<kM>>("BoysBf16");
+                            qcx::integrals::BoysAllOrdersBf16<kM>>("BoysBf16");
     });
 }
 

@@ -579,6 +579,28 @@ radial_points = 40
               "[grid]: rhf does not take an XC integration grid (no density functional is "
               "integrated, so nothing is evaluated on a grid; the Kohn-Sham methods rks and uks "
               "do)");
+
+    // The fourth key of the family is a `[properties]` member rather than a
+    // method key, and it is refused by the same classifier: the quantity it
+    // asks for is the derivative of the exchange-correlation energy, which a
+    // run that names no functional does not have. Refused, not ignored - an
+    // absent `xc_gradient` block in the record would otherwise read as "no walk
+    // ran", which is true, while the file's own request vanished without a word.
+    const auto gradient = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[properties]
+xc_gradient = true
+)");
+    ASSERT_EQ(gradient.issues.size(), 1u);
+    EXPECT_EQ(gradient.issues[0],
+              "properties.xc_gradient: rhf does not take an exchange-correlation gradient (no "
+              "density functional is differentiated; the Kohn-Sham methods rks and uks do)");
 }
 
 TEST(RunInputValidationTest, KohnShamMethodsAcceptTheKohnShamKeys) {
@@ -600,6 +622,22 @@ radial_points = 40
 angular_points = 50
 )");
     EXPECT_TRUE(rks.IsValid()) << (rks.issues.empty() ? "" : rks.issues[0]);
+
+    // The gradient request is legal on this lane with its three siblings: it
+    // differentiates the functional those keys name, on the grid they configure.
+    const auto rksGradient = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rks"
+accuracy = "kNormal"
+functional = "pbe"
+[properties]
+xc_gradient = true
+)");
+    EXPECT_TRUE(rksGradient.IsValid()) << (rksGradient.issues.empty() ? "" : rksGradient.issues[0]);
 
     const auto uks = Validate(R"(
 [molecule]

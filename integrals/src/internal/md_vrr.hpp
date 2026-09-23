@@ -24,7 +24,7 @@
 // (tier |t| of slice |t|), gathered into [p~|q~] = [p~+q~]^(0).
 //
 // The 4 steps per class batch (contraction-with-recurrence, [LibintXMatrixForm]):
-//   1. VRR: BoysBatch(L, a R_PQ^2) seeds -> the slice triangle -> [p~|q~],
+//   1. VRR: BoysAllOrders(L, a R_PQ^2) seeds -> the slice triangle -> [p~|q~],
 //      contracted over the bra primitive pairs on the fly (CWR part 1:
 //      d_a d_b weights, row-pair-aware - general contractions ride along
 //      the p~ index).
@@ -41,7 +41,7 @@
 // a-priori error bound
 //   bound = eps * C_class * (1 + G_class) * EabSum * EcdSum
 //           * sum_(abgd) f * sum_m (|seed_m| + eps)
-// with eps = 1e-7 (the BoysBatchF32 seed tolerance and the fp32 roundoff
+// with eps = 1e-7 (the BoysAllOrdersF32 seed tolerance and the fp32 roundoff
 // bound of the GEMM/representation terms), C_class/G_class the
 // generator-derived class constants (md_tables_gen.hpp: kappa_m =
 // sup sqrt(x) F_{m+1}/F_m bounds each recurrence step, the path sums bound
@@ -71,7 +71,7 @@
 
 namespace qcx::integrals::internal {
 
-/// The certified seed/roundoff epsilon: BoysBatchF32's documented absolute
+/// The certified seed/roundoff epsilon: BoysAllOrdersF32's documented absolute
 /// tolerance, also the fp32 roundoff bound of the transform/representation
 /// terms.
 inline constexpr double kCertifiedEpsilon = 1e-7;
@@ -140,8 +140,8 @@ void RunVrrQuadruple(const MdPrimPair& braPrim,
     // p-shell regression found against the unfolded path and pyscf).
     // std::array: zero-initialized (the pad entries of the slice triangle
     // beyond tier |t| are never written but must stay zero for the gather)
-    // and bounds-checked in MSVC Debug builds (RISK-4, 2026-08-21 - the
-    // off-by-one here already fired once as the p-shell regression).
+    // and bounds-checked in MSVC Debug builds (the off-by-one here already
+    // fired once as the p-shell regression).
     std::array<T, Hermite3DCount(L)> slice{};
     std::array<T, Hermite3DCount(L)> prevSlice{};
     // The pq entry |r~| = 0 is the seed [0]^(0) itself - written at every

@@ -26,14 +26,17 @@
 #include "internal/md_batch.hpp"
 #include "internal/md_derivative.hpp"
 #include "internal/md_engine.hpp"
+#include "internal/md_eri_derivative.hpp"
 #include "internal/md_one_electron.hpp"
 #include "internal/shells_flat.hpp"
 #include "qcx/integrals/eri_batch.hpp"
 #include "qcx/integrals/limits.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -408,6 +411,274 @@ qcx::Result<std::vector<PairDerivativeBounds>> ComputeDerivativeAwareBounds(
         internal::ReleaseChunkPairData(store, chunkPairs);
 
         start = end;
+    }
+
+    return bounds;
+}
+
+namespace {
+
+/// The radial finite-difference step (Bohr) of a pair bound whose derivative
+/// the tier cannot reach: O(h^2) truncation against an O(eps Q / h)
+/// cancellation error, near 1e-13 of a bound of O(1) at this step.
+constexpr double kPairBoundRadialStep = 1.0e-4;
+
+/// The factor the radial difference carries so its truncation cannot put the
+/// bound under the derivative it bounds.
+constexpr double kPairBoundRadialSafety = 1.0e-6;
+
+/// The pair's diagonal quartet with the shells of one atom displaced along the
+/// pair's separation. A quartet's value depends on its shells' centres and
+/// exponents alone, so this is the same pair at another separation, reached
+/// without rebuilding the molecule.
+/// \param quartet The pair's diagonal quartet.
+/// \param atom The atom whose shells are displaced.
+/// \param direction The unit direction of the pair's separation.
+/// \param delta The displacement (Bohr).
+/// \param storage The displaced shells; must outlive the result.
+/// \returns The displaced quartet.
+internal::MdEriDerivativeQuartet ShiftedQuartet(const internal::MdEriDerivativeQuartet& quartet,
+                                                std::size_t atom,
+                                                const std::array<double, 3>& direction,
+                                                double delta,
+                                                std::array<internal::MdShellInput, 4>& storage) {
+    for (std::size_t slot = 0; slot < 4; ++slot)
+    {
+        storage[slot] = *quartet.shells[slot];
+
+        if (quartet.atoms[slot] == atom)
+        {
+            storage[slot].cx += delta * direction[0];
+            storage[slot].cy += delta * direction[1];
+            storage[slot].cz += delta * direction[2];
+        }
+    }
+
+    internal::MdEriDerivativeQuartet shifted;
+    shifted.atoms = quartet.atoms;
+
+    for (std::size_t slot = 0; slot < 4; ++slot)
+    {
+        shifted.shells[slot] = &storage[slot];
+    }
+
+    return shifted;
+}
+
+/// The largest diagonal element of one (ab|ab) block: the element the bound is
+/// the square root of, at the offsets the engine's own block layout names.
+/// \param block The block.
+/// \param nBra The first shell's function count.
+/// \param nKet The second shell's function count.
+/// \returns The largest diagonal element.
+double LargestDiagonal(std::span<const double> block, std::size_t nBra, std::size_t nKet) {
+    double largest = 0.0;
+
+    for (std::size_t fa = 0; fa < nBra; ++fa)
+    {
+        for (std::size_t fb = 0; fb < nKet; ++fb)
+        {
+            const std::size_t diagonal = EriBlockIndex(fa, fb, fa, fb, nBra, nKet, nBra, nKet);
+            largest = std::max(largest, block[diagonal]);
+        }
+    }
+
+    return largest;
+}
+
+} // namespace
+
+qcx::Result<std::vector<TwoElectronPairBound>> ComputeTwoElectronPairBounds(
+    const qcx::molecule::Molecule& molecule, const qcx::basisset::BasisSet& basisSet) {
+    auto pairList = BuildShellPairs(molecule, basisSet);
+
+    if (!pairList.has_value())
+    {
+        return std::unexpected(pairList.error());
+    }
+
+    for (const ShellInfo& shell : pairList->shells)
+    {
+        if (!SupportsL(shell.angularMomentum))
+        {
+            return std::unexpected(
+                qcx::Error{qcx::ErrorCode::kUnimplemented,
+                           "shell angular momentum exceeds kMaxEngineL of this build"});
+        }
+    }
+
+    const std::size_t nPairs = pairList->pairs.size();
+    std::vector<TwoElectronPairBound> bounds(nPairs);
+
+    if (nPairs == 0)
+    {
+        return bounds;
+    }
+
+    auto shells = internal::FlattenShells(molecule, basisSet, *pairList);
+
+    if (!shells.has_value())
+    {
+        return std::unexpected(shells.error());
+    }
+
+    std::vector<std::size_t> coordinates;
+    std::vector<double> block;
+    std::vector<double> derivatives;
+    internal::MdEriDerivativeScratch scratch;
+
+    for (std::size_t pairIndex = 0; pairIndex < nPairs; ++pairIndex)
+    {
+        const ShellPairIndex& pair = pairList->pairs[pairIndex];
+        const std::size_t braAtom = pairList->shells[pair.i].atomIndex;
+        const std::size_t ketAtom = pairList->shells[pair.j].atomIndex;
+        const int pairAngular =
+            pairList->shells[pair.i].angularMomentum + pairList->shells[pair.j].angularMomentum;
+
+        // A pair whose shells add past kMaxShellL has a diagonal block reaching
+        // Hermite order 2 (l_i + l_j), past the 2 kMaxShellL the kernel table
+        // covers: this build can produce neither the block nor its derivative,
+        // so the pair carries no bound at either order and every quartet that
+        // touches it stays. A finite stand-in would be a number nothing
+        // derives, and a dropped quartet is a gradient that is smoothly wrong.
+        if (pairAngular > internal::kMaxShellL)
+        {
+            bounds[pairIndex] = TwoElectronPairBound{std::numeric_limits<double>::infinity(),
+                                                     std::numeric_limits<double>::infinity()};
+            continue;
+        }
+
+        const std::array<std::size_t, 4> indices = {pair.i, pair.j, pair.i, pair.j};
+        internal::MdEriDerivativeQuartet quartet;
+
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            const std::size_t index = indices[static_cast<std::size_t>(slot)];
+            quartet.shells[static_cast<std::size_t>(slot)] = &(*shells)[index];
+            quartet.atoms[static_cast<std::size_t>(slot)] = pairList->shells[index].atomIndex;
+        }
+
+        coordinates.clear();
+
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            coordinates.push_back(3 * braAtom + static_cast<std::size_t>(axis));
+        }
+
+        if (ketAtom != braAtom)
+        {
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                coordinates.push_back(3 * ketAtom + static_cast<std::size_t>(axis));
+            }
+        }
+
+        const std::size_t nBra = internal::EriShellFunctions(*quartet.shells[0]);
+        const std::size_t nKet = internal::EriShellFunctions(*quartet.shells[1]);
+        const std::size_t elements = nBra * nKet * nBra * nKet;
+
+        block.assign(elements, 0.0);
+        internal::BuildEriQuartetValue(quartet, 0, block, scratch);
+        const double largestDiagonal = LargestDiagonal(block, nBra, nKet);
+
+        TwoElectronPairBound bound;
+        bound.value = std::sqrt(largestDiagonal);
+
+        // A zero Schwarz numerator is an exactly zero block: every diagonal
+        // element of a real Gaussian pair's own block is a self-repulsion, so
+        // the block vanishing is the pair contributing nothing at either
+        // order - and the division below has no denominator.
+        if (largestDiagonal > 0.0)
+        {
+            if (ketAtom == braAtom)
+            {
+                // Both shells sit on one atom, so that atom's movement is a
+                // rigid translation of the pair and the bound does not move
+                // with it: the derivative is zero, exactly.
+                bound.derivative = 0.0;
+            } else if (2 * pairAngular + 2 <= 2 * internal::kMaxShellL)
+            {
+                derivatives.assign(
+                    internal::MdEriDerivativeBlockCount(quartet, 1, coordinates.size()), 0.0);
+                auto built = internal::BuildEriQuartetDerivative(
+                    quartet, 1, coordinates, derivatives, scratch, molecule.AtomCount());
+
+                if (!built.has_value())
+                {
+                    return std::unexpected(built.error());
+                }
+
+                // The bound's own derivative: m is the largest of the diagonal
+                // elements, so |dm/dX| is at most the largest |dq/dX| over
+                // them, and dQ_ab/dX is that over 2 sqrt(m). The pair's block
+                // depends on its two centres through their separation alone, so
+                // the ket atom's coordinates carry the bra's derivative with
+                // the opposite sign and the largest over the pair's
+                // coordinates is the one number that bounds every centre the
+                // pair carries.
+                double largestDerivative = 0.0;
+
+                for (std::size_t tuple = 0; tuple < coordinates.size(); ++tuple)
+                {
+                    const std::span<const double> tupleBlock =
+                        std::span<const double>(derivatives).subspan(tuple * elements, elements);
+
+                    for (std::size_t fa = 0; fa < nBra; ++fa)
+                    {
+                        for (std::size_t fb = 0; fb < nKet; ++fb)
+                        {
+                            const std::size_t diagonal = ((fb * nBra + fa) * nKet + fb) * nBra + fa;
+                            largestDerivative =
+                                std::max(largestDerivative, std::abs(tupleBlock[diagonal]));
+                        }
+                    }
+                }
+
+                bound.derivative = largestDerivative / (2.0 * bound.value);
+            } else
+            {
+                // The tier's derivative of this pair's diagonal quartet would
+                // reach Hermite order 2 (l_i + l_j) + 2, past the table, so the
+                // bound's derivative is measured instead. The bound depends on
+                // the pair's geometry only through the two shells' separation,
+                // so its derivative along that separation is the largest of the
+                // pair's centre-axis derivatives - each of the others is this
+                // one times a direction cosine.
+                const internal::MdShellInput& braShell = (*shells)[pair.i];
+                const internal::MdShellInput& ketShell = (*shells)[pair.j];
+                const std::array<double, 3> separation = {ketShell.cx - braShell.cx,
+                                                          ketShell.cy - braShell.cy,
+                                                          ketShell.cz - braShell.cz};
+                const double distance =
+                    std::sqrt(separation[0] * separation[0] + separation[1] * separation[1] +
+                              separation[2] * separation[2]);
+                // Two shells on distinct atoms at one point: every direction
+                // changes the separation by its own step, so the difference
+                // below is zero there - which is the derivative.
+                const std::array<double, 3> direction = {
+                    distance > 0.0 ? separation[0] / distance : 1.0,
+                    distance > 0.0 ? separation[1] / distance : 0.0,
+                    distance > 0.0 ? separation[2] / distance : 0.0};
+                std::array<internal::MdShellInput, 4> storage;
+                std::array<double, 2> shiftedDiagonal = {};
+                const std::array<double, 2> deltas = {kPairBoundRadialStep, -kPairBoundRadialStep};
+
+                for (std::size_t step = 0; step < deltas.size(); ++step)
+                {
+                    const internal::MdEriDerivativeQuartet shifted =
+                        ShiftedQuartet(quartet, braAtom, direction, deltas[step], storage);
+                    block.assign(elements, 0.0);
+                    internal::BuildEriQuartetValue(shifted, 0, block, scratch);
+                    shiftedDiagonal[step] = LargestDiagonal(block, nBra, nKet);
+                }
+
+                bound.derivative =
+                    std::abs(std::sqrt(shiftedDiagonal[0]) - std::sqrt(shiftedDiagonal[1])) /
+                    (2.0 * kPairBoundRadialStep) * (1.0 + kPairBoundRadialSafety);
+            }
+        }
+
+        bounds[pairIndex] = bound;
     }
 
     return bounds;

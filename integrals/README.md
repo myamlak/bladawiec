@@ -19,13 +19,13 @@ consumed by: scf, storage, io, properties, driver. Machine-checked by
 
 ## Public headers / key types
 
-- `integrals/include/qcx/integrals/`: `boys.hpp`, `boys_cuda.hpp`, `f16.hpp`,
+- `integrals/include/qcx/integrals/`: `boys.hpp`, `f16.hpp`,
   `eri_batch.hpp`, `eri_dense.hpp`, `eri_cuda.hpp`, `eri_cache.hpp`,
   `one_electron.hpp`, `two_electron.hpp`, `shell_pairs.hpp`, `screening.hpp`,
   `fock_build.hpp`, `gpu_fock_build.hpp`, `incremental_fock.hpp`,
   `ri_engine.hpp`, `qfmm_fock_build.hpp`, `aux_basis.hpp`, `accuracy.hpp`,
   `limits.hpp`, `symmetry_reduction.hpp`, `engine_version.hpp`
-- `BoysBatch` / `BoysSingle` — the Boys kernel.
+- `BoysAllOrders` / `BoysSingle` — the Boys kernel.
 - `ComputeEriBatch` / `ComputeEriBatchCertified` — the batched ERI API and its
   certified fp32 lane.
 - `DirectJkFockBuilder` — the density-screened direct J/K builder behind the

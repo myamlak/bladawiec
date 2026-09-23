@@ -705,6 +705,28 @@ struct RunPropertiesInput {
     /// io::WriteMoldenFile on the SCF branch. Empty (the default, and the
     /// meaning of an empty string in the input) runs no export.
     std::string molden;
+    /// The `xc_gradient` request: true makes a Kohn-Sham run assemble the
+    /// exchange-correlation contribution to the nuclear gradient at its
+    /// converged density, on the grid the energy was integrated over.
+    ///
+    /// It is a CONTRIBUTION and the name says so, because the quantity is not
+    /// a total nuclear gradient: the walk holds the density matrix fixed, so
+    /// the density's own response to a displaced nucleus - the SCF's
+    /// analytic-derivative term - is not in it, and neither are the
+    /// one-electron, Coulomb or exchange terms. What it reports is the
+    /// derivative of the exchange-correlation energy the run already
+    /// integrated, which is the term only the grid and the functional
+    /// contribute.
+    ///
+    /// False (the default) keeps the zero-cost path every run had before the
+    /// key existed: no derivative provider is built and the record carries no
+    /// gradient block. Consumed on the Kohn-Sham lanes only - the walk
+    /// differentiates a functional over a quadrature, and an rhf/uhf run named
+    /// neither - so the key is REFUSED on them rather than ignored
+    /// (validate_input.cpp's XcKeyPolicyFor, the `functional` and `[grid]`
+    /// rule). Appended last so the aggregate's earlier fields keep their
+    /// positions.
+    bool xcGradient = false;
 };
 
 /// The initial-guess selection. kGwh serves RHF and UHF (the RHF gwh

@@ -1,5 +1,5 @@
 // The Boys-kernel paper's comparative benchmark: the matched-accuracy
-// throughput comparator - the qcx BoysBatch ladder vs libint2's
+// throughput comparator - the qcx BoysAllOrders ladder vs libint2's
 // FmEval_Chebyshev7<double> ladder on the SAME (n, x) input streams at the
 // SAME accuracy target. Custom main() rather than a Google Benchmark
 // harness, following the runs-log protocol: --self-check first (the
@@ -19,9 +19,9 @@
 // 1:1): the plain F_m(T) = int_0^1 u^(2m) exp(-T u^2) du with no prefactor.
 // libint2 states it in-header (FmEval_Reference2's erf anchor F0 =
 // (sqrt(pi)/2) erf(sqrt(T))/sqrt(T) and the (2m+1)/(2T) upward recursion,
-// boys.h) and qcx's certified BoysSingle/BoysBatch carry the same plain
+// boys.h) and qcx's certified BoysSingle/BoysAllOrders carry the same plain
 // definition (external/boys). Each side evaluates the identical per-input
-// ladder F_0(x)..F_n(x) - BoysBatch fills out[0..n], libint2 eval fills
+// ladder F_0(x)..F_n(x) - BoysAllOrders fills out[0..n], libint2 eval fills
 // Fm[0..m_max] - so a stream pass does the same work on both sides.
 //
 // The streams are the paper's benchmark streams, generated verbatim like
@@ -47,7 +47,7 @@
 // AVX note: libint2's 4-wide Chebyshev interpolation path is compile-time
 // gated on __AVX__ (boys.h), so this TU is built with /arch:AVX2 (see the
 // CMake target); the banner below records which path was timed. qcx's SIMD
-// BoysBatch lives in the linked library (boys_simd.cpp, /arch:AVX2).
+// BoysAllOrders lives in the linked library (boys_simd.cpp, /arch:AVX2).
 // libint2's vector_x86.h pulls intrinsics via <intrin.h> on MSVC and
 // <x86intrin.h> elsewhere, and its SIMD sections key on the GCC-style
 // feature macros (__SSE2__, __SSE__, __AVX__) that MSVC never defines
@@ -200,14 +200,14 @@ std::vector<Item> MolecularInputs() {
     return items;
 }
 
-// One full-stream pass of the qcx ladder: BoysBatch evaluates F_0..F_n per
+// One full-stream pass of the qcx ladder: BoysAllOrders evaluates F_0..F_n per
 // input (the engine pattern); the input's own row feeds the sink.
 void QcxLadderSweep(const std::vector<Item>& items, volatile double& sink) {
     std::array<double, kLadderSize> f{};
 
     for (const Item& item : items)
     {
-        qcx::integrals::BoysBatch(item.n, item.x, f.data());
+        qcx::integrals::BoysAllOrders(item.n, item.x, f.data());
         sink += f[static_cast<std::size_t>(item.n)];
     }
 }
@@ -239,7 +239,7 @@ double MaxMutualDiff(const libint2::FmEval_Chebyshev7<double>& fm,
 
     for (const Item& item : items)
     {
-        qcx::integrals::BoysBatch(item.n, item.x, qcxF.data());
+        qcx::integrals::BoysAllOrders(item.n, item.x, qcxF.data());
         fm.eval(libint2F.data(), item.x, item.n);
         const std::size_t row = static_cast<std::size_t>(item.n);
         const double err = std::abs(qcxF[row] - libint2F[row]);
@@ -299,7 +299,7 @@ void PrintBanner() {
     const char* cpu = std::getenv("PROCESSOR_IDENTIFIER");
     const char* nProc = std::getenv("NUMBER_OF_PROCESSORS");
     std::printf(
-        "comparator: qcx BoysBatch vs libint2 FmEval_Chebyshev7<double> - matched accuracy\n");
+        "comparator: qcx BoysAllOrders vs libint2 FmEval_Chebyshev7<double> - matched accuracy\n");
     std::printf("libint2 pin: v2.13.1 = 5fb07b4862f219749c51d59ee08073d20a56d506, header-only\n");
 #if defined(__AVX__)
     std::printf("libint2 path timed: 4-wide AVX Chebyshev interpolation (__AVX__ set)\n");

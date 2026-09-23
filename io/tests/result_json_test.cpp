@@ -35,7 +35,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsThirtyNine) {
+TEST(ResultJsonTest, SchemaVersionIsForty) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -99,7 +99,15 @@ TEST(ResultJsonTest, SchemaVersionIsThirtyNine) {
     // pairing and needs none: a requirement the resolved builder cannot supply
     // is refused by name before serialization, so a document carrying this key
     // is one whose kernels executed where the input said they must.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 39);
+    // v39 -> v40: the `properties` block GAINS `xc_gradient` (RunXcGradient),
+    // the fixed-density exchange-correlation contribution to the nuclear
+    // gradient: the 3N vector in hartree/bohr and the energy the same walk
+    // integrated, absent unless the run asked for it. A key added, so the
+    // number moves with it - and it is the first record member that is a
+    // DERIVATIVE of an energy the same document carries, which is why the
+    // block's own name states the fixed-density limitation rather than leaving
+    // a reader to read the vector as a total nuclear gradient.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 40);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -459,6 +467,39 @@ TEST(ResultJsonTest, MoldenBlockAbsentWhenNotRequested) {
     qcx::io::RunResult result;
     const std::string json = qcx::io::SerializeRunResultJson(result);
     EXPECT_EQ(json.find("molden"), std::string::npos);
+}
+
+TEST(ResultJsonTest, XcGradientBlockEmittedWhenRequested) {
+    // The fixed-density exchange-correlation contribution: the 3N vector and
+    // the energy the same walk integrated. dump(2) writes one array element
+    // per line, so the vector is pinned by its key and by each element's own
+    // text rather than by a whole-array line the format would decide; the six
+    // values below are distinct as text, so each count pins one element.
+    qcx::io::RunResult result;
+    qcx::io::RunProperties properties;
+    properties.xcGradient =
+        qcx::io::RunXcGradient{{0.125, -0.375, 0.625, -0.875, 1.125, -1.375}, -8.125};
+    result.properties = std::move(properties);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"xc_gradient\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"gradient\": ["), 1);
+
+    for (const char* element : {"0.125", "-0.375", "0.625", "-0.875", "1.125", "-1.375"})
+    {
+        EXPECT_EQ(CountOccurrences(json, element), 1) << element;
+    }
+
+    EXPECT_EQ(CountOccurrences(json, "\"energy_hartree\": -8.125"), 1);
+}
+
+TEST(ResultJsonTest, XcGradientBlockAbsentWhenNotRequested) {
+    // Absent, never a zero-filled block: a record without the key states that
+    // no walk ran, which a block of zeros would misstate as a zero
+    // contribution.
+    qcx::io::RunResult result;
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(json.find("xc_gradient"), std::string::npos);
 }
 
 TEST(ResultJsonTest, SelectionBlockEmittedWhenPresent) {

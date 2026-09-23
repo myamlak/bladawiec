@@ -9,6 +9,7 @@
 #include "qcx/error.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -65,6 +66,27 @@ struct MoTwoElectronTensor {
 };
 
 /// \ingroup qcx-response
+/// A term the orbital-Hessian action gains beyond the Hartree-Fock one.
+///
+/// The equation an orbital response solves has one structure for every method,
+/// and a method changes it by adding a term to the operator and a term to the
+/// right-hand side. This is the operator's side of that seam: for a density
+/// functional it carries the exchange-correlation kernel's contribution, which
+/// is quadratic in the response amplitudes like the two-electron part and so
+/// belongs on the left, not in the right-hand side.
+///
+/// The callback ADDS its term into `y`; it is handed the trial vector and a
+/// zeroed result, so contributions accumulate. Wiring in a term that is linear
+/// in the trial vector is the caller's responsibility - the seam cannot tell a
+/// kernel from a right-hand side, which is exactly why the placement decision
+/// has to be made from the energy derivative and not from the code's shape.
+///
+/// \param x Trial vector, size Dimension().
+/// \param y Result to add into, size Dimension().
+using HessianExtraTermFn =
+    std::function<qcx::Result<void>(std::span<const double> x, std::span<double> y)>;
+
+/// \ingroup qcx-response
 /// The closed-shell Hartree-Fock orbital-Hessian operator, applied matrix-free.
 ///
 /// This is the coupled-perturbed Hartree-Fock matrix that the orbital response
@@ -95,6 +117,22 @@ public:
                                                       OrbitalEnergies orbitalEnergies,
                                                       MoTwoElectronTensor moTwoElectron);
 
+    /// Builds the action with a term the Hartree-Fock action does not carry.
+    /// \param layout Occupied/virtual counts; both must be non-zero.
+    /// \param orbitalEnergies Canonical orbital energies, occupied orbitals
+    /// first, size `layout.numOccupied + layout.numVirtual`.
+    /// \param moTwoElectron MO-basis two-electron integrals in chemists'
+    /// notation (pq|rs), full n^4 at `n = layout.numOccupied + layout.numVirtual`.
+    /// Neither is copied.
+    /// \param extraTerm The term added to every action; must be non-null.
+    /// \returns The operator, or an Error (kInvalidArgument for a zero block, a
+    /// length mismatch, an integral array that is not n^4 long, or a null
+    /// extra term).
+    static qcx::Result<OrbitalHessianOperator> Create(ResponseLayout layout,
+                                                      OrbitalEnergies orbitalEnergies,
+                                                      MoTwoElectronTensor moTwoElectron,
+                                                      HessianExtraTermFn extraTerm);
+
     /// Applies the operator: y = A x.
     /// \param x Trial vector, size Dimension().
     /// \param y Result vector, size Dimension(); must not alias \p x.
@@ -123,12 +161,19 @@ public:
 private:
     OrbitalHessianOperator(ResponseLayout layout,
                            OrbitalEnergies orbitalEnergies,
-                           MoTwoElectronTensor moTwoElectron);
+                           MoTwoElectronTensor moTwoElectron,
+                           HessianExtraTermFn extraTerm);
+
+    /// Runs the Hartree-Fock action alone, without the extra term.
+    /// \param x Trial vector, size Dimension().
+    /// \param y Result vector, size Dimension().
+    void ApplyHartreeFock(std::span<const double> x, std::span<double> y) const;
 
     ResponseLayout _layout;
     std::size_t _numOrbitals = 0;
     std::span<const double> _orbitalEnergies;
     std::span<const double> _moTwoElectron;
+    HessianExtraTermFn _extraTerm;
 };
 
 /// \ingroup qcx-response

@@ -20,30 +20,26 @@ qcx::Result<void> ValidateLayout(const ResponseLayout& layout) {
     return {};
 }
 
-/// Validates a matrix against the layout whose squared dimension it must hold.
-/// \param layout The occupied/virtual block structure.
-/// \param matrix Row-major matrix, required to be Dimension() squared long.
-/// \returns An Error (kInvalidArgument) on a length mismatch.
-qcx::Result<void> ValidateMatrix(const ResponseLayout& layout, std::span<const double> matrix) {
-    if (matrix.size() != layout.Dimension() * layout.Dimension())
-    {
-        return std::unexpected(
-            qcx::Error{qcx::ErrorCode::kInvalidArgument, "the matrix must be Dimension() squared"});
-    }
-
-    return {};
-}
-
 } // namespace
 
 OrbitalHessianOperator::OrbitalHessianOperator(ResponseLayout layout,
                                                OrbitalEnergies orbitalEnergies,
-                                               MoTwoElectronTensor moTwoElectron) :
+                                               MoTwoElectronTensor moTwoElectron,
+                                               HessianExtraTermFn extraTerm) :
     _layout(layout), _numOrbitals(layout.numOccupied + layout.numVirtual),
-    _orbitalEnergies(orbitalEnergies.values), _moTwoElectron(moTwoElectron.values) {}
+    _orbitalEnergies(orbitalEnergies.values), _moTwoElectron(moTwoElectron.values),
+    _extraTerm(std::move(extraTerm)) {}
 
 qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
     ResponseLayout layout, OrbitalEnergies orbitalEnergies, MoTwoElectronTensor moTwoElectron) {
+    return Create(layout, orbitalEnergies, moTwoElectron, HessianExtraTermFn{});
+}
+
+qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
+    ResponseLayout layout,
+    OrbitalEnergies orbitalEnergies,
+    MoTwoElectronTensor moTwoElectron,
+    HessianExtraTermFn extraTerm) {
     auto layoutStatus = ValidateLayout(layout);
 
     if (!layoutStatus.has_value())
@@ -67,7 +63,7 @@ qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
             "the two-electron tensor must be the full fourth power of the orbital count"});
     }
 
-    return OrbitalHessianOperator(layout, orbitalEnergies, moTwoElectron);
+    return OrbitalHessianOperator(layout, orbitalEnergies, moTwoElectron, std::move(extraTerm));
 }
 
 qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
@@ -81,6 +77,35 @@ qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
                                           "numOccupied * numVirtual"});
     }
 
+    ApplyHartreeFock(x, y);
+
+    if (_extraTerm == nullptr)
+    {
+        return {};
+    }
+
+    // The extra term is handed a zeroed buffer and added afterwards: it is a
+    // term of the action, not a correction to another term, and giving it the
+    // accumulated result would make its output depend on the order the terms
+    // happen to be written in.
+    std::vector<double> extra(dimension, 0.0);
+    auto status = _extraTerm(x, extra);
+
+    if (!status.has_value())
+    {
+        return std::unexpected(status.error());
+    }
+
+    for (std::size_t i = 0; i < dimension; ++i)
+    {
+        y[i] += extra[i];
+    }
+
+    return {};
+}
+
+void OrbitalHessianOperator::ApplyHartreeFock(std::span<const double> x,
+                                              std::span<double> y) const {
     const std::size_t numOccupied = _layout.numOccupied;
     const std::size_t numVirtual = _layout.numVirtual;
     const std::size_t numOrbitals = _numOrbitals;
@@ -127,8 +152,6 @@ qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
             y[i * numVirtual + a] = value;
         }
     }
-
-    return {};
 }
 
 qcx::Result<void> OrbitalHessianOperator::Preconditioner(std::span<double> diagonal) const {
@@ -158,20 +181,6 @@ DenseResponseOperator::DenseResponseOperator(ResponseLayout layout,
 
 qcx::Result<DenseResponseOperator> DenseResponseOperator::Create(ResponseLayout layout,
                                                                  std::span<const double> matrix) {
-    auto layoutStatus = ValidateLayout(layout);
-
-    if (!layoutStatus.has_value())
-    {
-        return std::unexpected(layoutStatus.error());
-    }
-
-    auto matrixStatus = ValidateMatrix(layout, matrix);
-
-    if (!matrixStatus.has_value())
-    {
-        return std::unexpected(matrixStatus.error());
-    }
-
     const std::size_t dimension = layout.Dimension();
     std::vector<double> diagonal(dimension);
 
@@ -192,14 +201,13 @@ qcx::Result<DenseResponseOperator> DenseResponseOperator::Create(
         return std::unexpected(layoutStatus.error());
     }
 
-    auto matrixStatus = ValidateMatrix(layout, matrix);
-
-    if (!matrixStatus.has_value())
-    {
-        return std::unexpected(matrixStatus.error());
-    }
-
     const std::size_t dimension = layout.Dimension();
+
+    if (matrix.size() != dimension * dimension)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument, "the matrix must be Dimension() squared"});
+    }
 
     if (preconditioner.size() != dimension)
     {

@@ -2183,6 +2183,15 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
         // different valid value, so empty means "not requested").
         input.properties.molden = moldenPath->value_or("");
 
+        auto xcGradient = ReadBool(properties, "properties.xc_gradient");
+
+        if (!xcGradient.has_value())
+        {
+            return std::unexpected(xcGradient.error());
+        }
+
+        input.properties.xcGradient = xcGradient->value_or(false);
+
         auto espName = ReadString(properties, "properties.esp");
 
         if (!espName.has_value())

@@ -14,7 +14,9 @@
 #include "qcx/integrals/shell_pairs.hpp"
 #include "qcx/molecule/molecule.hpp"
 
+#include <cmath>
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -154,8 +156,9 @@ inline std::vector<ScreenedElement> RetainedElements(std::span<const PairDerivat
 }
 
 /// One canonical pair's bound for the two-electron screen: the largest
-/// magnitude the pair's own blocks carry, and the largest magnitude their
-/// derivative carries with respect to the pair's own centre coordinates.
+/// magnitude the pair's own blocks carry, and the largest magnitude the
+/// bound's own derivative carries with respect to the pair's own centre
+/// coordinates.
 ///
 /// The pair pass that produces these is the two-electron companion of
 /// ComputeDerivativeAwareBounds, and the quantities are the two-electron
@@ -163,9 +166,63 @@ inline std::vector<ScreenedElement> RetainedElements(std::span<const PairDerivat
 /// do not bound a quartet's blocks.
 /// \ingroup qcx-integrals
 struct TwoElectronPairBound {
-    double value = 0.0; ///< Largest |(ab|..)| magnitude the pair carries.
-    double derivative = 0.0; ///< Largest |d(ab|..)/dX| magnitude it carries.
+    /// The pair's Schwarz bound: the square root of its largest diagonal
+    /// element.
+    double value = 0.0;
+    double derivative = 0.0; ///< Largest |d(value)/dX| over the pair's centre coordinates.
+
+    /// Both fields are infinite for a pair with no evaluable diagonal block
+    /// (ComputeTwoElectronPairBounds), which is a pair the screen keeps.
+    /// \returns True when the pair carries a bound.
+    bool hasBound() const noexcept {
+        return std::isfinite(value) && std::isfinite(derivative);
+    }
 };
+
+/// Computes the two-electron pair bound of every canonical pair, in
+/// ShellPairList::pairs order - the pair numbers QuartetDerivativeProduct
+/// multiplies.
+///
+/// One diagonal (ab|ab) quartet per pair, whose diagonal elements give the
+/// value: the same numbers the Schwarz sweep reads, so the two agree by
+/// construction. The derivative is the bound's OWN derivative with respect to
+/// the pair's centre coordinates (the bra atom's three axes, then the ket
+/// atom's - three only when both shells sit on one atom), and it is read off
+/// the same diagonal elements: Q_ab = sqrt(m) with m the largest diagonal
+/// element, so |dQ_ab/dX| is |dm/dX| / (2 sqrt(m)) and |dm/dX| is at most the
+/// largest |dq/dX| over the elements m maximizes.
+///
+/// The distinction is the whole point of the pair. Bounding the derivative by
+/// the value instead gives zero derivative wherever the value vanishes - and a
+/// pair whose bound passes through zero at a symmetric geometry is exactly the
+/// one whose quartet contributions do not.
+///
+/// The tier holds no pair store - it builds one quartet's tables per pair and
+/// releases them - so this pass is not chunked the way the Schwarz and
+/// one-electron sweeps are, and takes no chunk cap.
+///
+/// The analytic derivative needs the kernel table to reach Hermite order
+/// 2 (l_i + l_j) + 2, and the table covers 2 kMaxShellL; past that the
+/// derivative is measured instead: one central difference of the bound along
+/// the pair's separation, which bounds every centre-axis derivative of the
+/// bound because the bound depends on the pair's geometry through that
+/// separation alone.
+///
+/// A pair whose shells add past kMaxShellL has a diagonal block reaching
+/// Hermite order 2 (l_i + l_j), past the table, so this build produces neither
+/// the bound nor its derivative: both fields are infinite for such a pair, and
+/// every quartet that touches it survives the screen. Fitting bases are where
+/// such pairs appear - an f and a g shell on one centre is one pair of an
+/// unusable block apiece - and a quartet that is kept costs work, while one
+/// that is dropped on a number nothing derives costs the gradient.
+/// \param molecule Molecule providing the atom coordinates (Bohr).
+/// \param basisSet Basis set; every shell must satisfy l <= kMaxEngineL
+/// (kUnimplemented otherwise).
+/// \returns The bound per canonical pair, or an Error (kUnimplemented for a
+/// shell beyond kMaxEngineL; the tier's errors otherwise).
+/// \ingroup qcx-integrals
+qcx::Result<std::vector<TwoElectronPairBound>> ComputeTwoElectronPairBounds(
+    const qcx::molecule::Molecule& molecule, const qcx::basisset::BasisSet& basisSet);
 
 /// One quartet's bound for the two-electron screen - the product companion of
 /// TwoElectronPairBound one level up.
@@ -177,26 +234,38 @@ struct QuartetDerivativeBound {
 
 /// The quartet-level product bound of two pair bounds.
 ///
-/// A quartet's two centres are the product centres of two pairs: moving a
-/// centre of the bra pair moves that pair's coefficient tables and the centre
-/// its kernel is measured from, and nothing of the ket pair - and the other
-/// way round. The derivative of the quartet is therefore a sum of one
-/// bra-pair-differentiated term and one ket-pair-differentiated term, and
-/// each is a bilinear form in its own pair's differentiated data against the
-/// other pair's plain data. Bounding each factor by its pair's bound gives
-/// the product rule below. It is O(1) per quartet and builds nothing, which
-/// is the point: a screen that costs an integral evaluation per candidate is
-/// not a screen.
+/// A quartet's derivative splits into a bra-pair-differentiated term and a
+/// ket-pair-differentiated term, each a bilinear form in its own pair's
+/// differentiated data against the other pair's plain data, so the product
+/// rule below reads one derivative from each pair.
 ///
-/// Both bounds are maxima over their pair's elements, so neither is under the
-/// quantity it bounds; the product of two maxima bounds the product, and the
-/// sum bounds the sum.
+/// The value half is the trivially conservative Schwarz product - two maxima,
+/// so never under the quartet's value. The derivative half is the product of
+/// the two bounds' own derivatives, which is the derivative of the bound; it
+/// is an estimate and not a ceiling (a pair whose bound is stationary, as one
+/// whose shells sit on a single atom is, contributes nothing to it while the
+/// quartet's own derivative need not vanish). The two halves are read against
+/// the same threshold and a quartet survives on the larger, so the derivative
+/// half only ever keeps quartets the value half would drop, and the screen
+/// keeps every quartet a value-only Schwarz screen keeps.
+///
+/// A pair with no bound (TwoElectronPairBound::hasBound) makes the product
+/// unbounded at both orders, which keeps every quartet that touches it.
 /// \param bra The bra pair's bound.
 /// \param ket The ket pair's bound.
 /// \returns The quartet's bound.
 /// \ingroup qcx-integrals
 inline QuartetDerivativeBound QuartetDerivativeProduct(const TwoElectronPairBound& bra,
                                                        const TwoElectronPairBound& ket) noexcept {
+    // A pair with no bound keeps every quartet it touches, at both orders: the
+    // product of an unbounded term with a zero would be a NaN, which reads as
+    // neither above nor below the threshold.
+    if (!bra.hasBound() || !ket.hasBound())
+    {
+        return QuartetDerivativeBound{std::numeric_limits<double>::infinity(),
+                                      std::numeric_limits<double>::infinity()};
+    }
+
     return QuartetDerivativeBound{bra.value * ket.value,
                                   bra.derivative * ket.value + bra.value * ket.derivative};
 }

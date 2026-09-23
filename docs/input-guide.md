@@ -272,6 +272,7 @@ not requested is **absent** from the result rather than present as a block of ze
 | `density_at_nuclei` | bool | `false` | the density at every nucleus |
 | `qtaim` | bool | `false` | Bader bond critical points |
 | `molden` | string | `""` | path; the Molden file to write |
+| `xc_gradient` | bool | `false` | the exchange-correlation part of the nuclear gradient |
 | `nocv_fragments` | array | — | atom-index arrays; the ETS-NOCV decomposition |
 
 Several of these cost more than the SCF they follow, because they run SCFs of their own:
@@ -292,6 +293,17 @@ because a path cannot be mistyped into a different valid path.
 non-negative. The indices count the `atoms` rows as written in the file, starting at 0. The groups
 must be disjoint and must cover every atom exactly once. The decomposition is closed-shell only,
 so it is refused on a `uhf` or `uks` run.
+
+`xc_gradient` is a Kohn-Sham key and is **refused** on `rhf` and `uhf`, like the `functional` key and
+the `[grid]` block: there is no functional on those lanes to differentiate. It reports the derivative
+of the exchange-correlation energy the run integrated, with respect to the nuclear positions, at the
+density the run converged to and on the grid it integrated over. The density is held fixed, so the
+density's own response to a displaced nucleus is **not** in it — neither are the one-electron,
+Coulomb or exchange terms. It is the exchange-correlation contribution to the nuclear gradient and
+never the whole of one. The result block carries three numbers per atom, in Hartree per Bohr, in the
+molecule's canonical atom order — the order every per-atom block of the result uses, which is the
+renumbering the molecule applies on construction and not necessarily the order the `atoms` rows were
+written in.
 
 Two analyses are limited by the element table this version carries: `hirshfeld` needs the atomic
 fragments of the SAD guess, which stops at Z = 10, and `nalewajski` needs isolated-atom fragment

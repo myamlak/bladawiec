@@ -137,6 +137,36 @@ struct RegionWorsts {
 
 std::vector<ReferenceRow> gReference = LoadReference();
 
+// The grid carries every order at every argument, so a reference value is a
+// row lookup.
+double ReferenceValue(int n, double x) {
+    for (const auto& row : gReference)
+    {
+        if (row.n == n && row.x == x)
+        {
+            return row.value;
+        }
+    }
+
+    ADD_FAILURE() << "no reference row for n=" << n << " x=" << x;
+    return 0.0;
+}
+
+// The grid's distinct arguments: its rows of one order.
+std::vector<double> GridArguments() {
+    std::vector<double> xs;
+
+    for (const auto& row : gReference)
+    {
+        if (row.n == 0)
+        {
+            xs.push_back(row.x);
+        }
+    }
+
+    return xs;
+}
+
 #if QcxIntegralsFp16
 // The fp16 lane tests reuse the certified accuracy targets in their
 // absolute sense: the reference is the certified double lane (5e-14)
@@ -247,128 +277,6 @@ void RunReferenceChecks(const char* label) {
         batchWorstTolerance.e);
 }
 
-// SIMD-lane sweep shared by the F16/Bf16 tests: each region lane must agree
-// with the scalar fp16 lane within one half-ULP (both compute in the F32
-// engine and round to the same half type). The draw ranges keep the
-// fp16-rounded arguments inside their region bands (fp16 spacing near x0 is
-// 2^-7, near x1 2^-6 - the double ranges used above would round across the
-// region boundaries).
-template <typename Half,
-          Half (*SingleFn)(int, Half) noexcept,
-          void (*BatchFn)(int, Half, Half*) noexcept,
-          void (*SimdAFn)(int, const Half*, Half*, std::size_t) noexcept,
-          void (*SimdBFn)(int, const Half*, Half*, std::size_t) noexcept,
-          void (*SimdCFn)(int, const Half*, Half*, std::size_t) noexcept>
-void RunSimdLaneChecks() {
-    std::mt19937_64 rng(97531);
-    constexpr std::size_t kCount = 4096;
-    const int n = 8;
-    std::vector<Half> x(kCount);
-    std::vector<Half> out(kCount);
-    std::vector<Half> batchOut(kCount * (qcx::integrals::kMaxBoysOrder + 1));
-
-    // Region A (x < x0): same-n array. The tolerance is one full ULP (and
-    // the same in regions B and C below): the SIMD kernel maps x to the
-    // Chebyshev argument with one fused multiply-add while the scalar lane
-    // rounds each step separately, so the two F32 values can sit on opposite
-    // sides of a half grid step when the fit value lands within ~1e-10 of an
-    // fp16 rounding boundary (the F16 grid spans many binades across region
-    // A, from 1/(2n+1) at x = 0 down to subnormals at x0).
-    std::uniform_real_distribution<float> xdA(1e-4f, 11.85f);
-
-    for (auto& v : x)
-    {
-        v = static_cast<Half>(xdA(rng));
-    }
-
-    SimdAFn(n, x.data(), out.data(), kCount);
-
-    for (std::size_t i = 0; i < kCount; ++i)
-    {
-        const Half scalar = SingleFn(n, x[i]);
-        EXPECT_LE(std::abs(static_cast<float>(out[i]) - static_cast<float>(scalar)),
-                  2.0 * HalfUlp(scalar))
-            << "region A i=" << i << " x=" << static_cast<float>(x[i]);
-    }
-
-    // Region B (x0 <= x < x1): full batch layout.
-    std::uniform_real_distribution<float> xdB(11.95f, 28.95f);
-
-    for (auto& v : x)
-    {
-        v = static_cast<Half>(xdB(rng));
-    }
-
-    SimdBFn(n, x.data(), batchOut.data(), kCount);
-
-    for (std::size_t i = 0; i < kCount; ++i)
-    {
-        std::array<Half, qcx::integrals::kMaxBoysOrder + 1> scalar{};
-        BatchFn(n, x[i], scalar.data());
-
-        for (int k = 0; k <= n; ++k)
-        {
-            EXPECT_LE(std::abs(static_cast<float>(batchOut[k * kCount + i]) -
-                               static_cast<float>(scalar[k])),
-                      2.0 * HalfUlp(scalar[k]))
-                << "region B i=" << i << " k=" << k << " x=" << static_cast<float>(x[i]);
-        }
-    }
-
-    // Region C (x >= x1).
-    std::uniform_real_distribution<float> xdC(29.1f, 60.0f);
-
-    for (auto& v : x)
-    {
-        v = static_cast<Half>(xdC(rng));
-    }
-
-    SimdCFn(n, x.data(), out.data(), kCount);
-
-    for (std::size_t i = 0; i < kCount; ++i)
-    {
-        const Half scalar = SingleFn(n, x[i]);
-        EXPECT_LE(std::abs(static_cast<float>(out[i]) - static_cast<float>(scalar)),
-                  2.0 * HalfUlp(scalar))
-            << "region C i=" << i << " x=" << static_cast<float>(x[i]);
-    }
-
-    // Tail fallbacks: counts that are not multiples of eight exercise the
-    // scalar tail; count = 0 must be a no-op. Each region function receives
-    // arguments from its own domain (the documented precondition).
-    const std::array<Half, 5> tailA = {static_cast<Half>(1.0f),
-                                       static_cast<Half>(2.0f),
-                                       static_cast<Half>(5.0f),
-                                       static_cast<Half>(8.0f),
-                                       static_cast<Half>(11.0f)};
-    const std::array<Half, 5> tailC = {static_cast<Half>(30.0f),
-                                       static_cast<Half>(35.0f),
-                                       static_cast<Half>(40.0f),
-                                       static_cast<Half>(45.0f),
-                                       static_cast<Half>(50.0f)};
-    std::array<Half, 5> tailOut{};
-    SimdAFn(n, tailA.data(), tailOut.data(), 5);
-
-    for (std::size_t i = 0; i < 5; ++i)
-    {
-        EXPECT_LE(
-            std::abs(static_cast<float>(tailOut[i]) - static_cast<float>(SingleFn(n, tailA[i]))),
-            HalfUlp(SingleFn(n, tailA[i])));
-    }
-
-    SimdCFn(n, tailC.data(), tailOut.data(), 5);
-
-    for (std::size_t i = 0; i < 5; ++i)
-    {
-        EXPECT_LE(
-            std::abs(static_cast<float>(tailOut[i]) - static_cast<float>(SingleFn(n, tailC[i]))),
-            HalfUlp(SingleFn(n, tailC[i])));
-    }
-
-    SimdAFn(n, tailA.data(), tailOut.data(), 0);
-    SimdBFn(n, tailA.data(), batchOut.data(), 0);
-    SimdCFn(n, tailC.data(), tailOut.data(), 0);
-}
 #endif // QcxIntegralsFp16
 
 } // namespace
@@ -416,7 +324,7 @@ TEST(BoysTest, BatchMatchesReferenceDouble) {
 
     for (const auto& row : gReference)
     {
-        qcx::integrals::BoysBatch(row.n, row.x, batch.data());
+        qcx::integrals::BoysAllOrders(row.n, row.x, batch.data());
 
         for (int k = 0; k <= row.n; ++k)
         {
@@ -449,7 +357,7 @@ TEST(BoysTest, BatchMatchesReferenceDouble) {
     EXPECT_LE(regionWorst.c, kDoubleTolerance) << "batch region C (x >= kX1)";
     EXPECT_LE(regionWorst.e, kDoubleTolerance) << "batch extended band (kExtendedBX0 <= x < kX0)";
 
-    std::printf("BoysBatch: worst |error| = %.3e (region A %.3e, region B %.3e, region C %.3e, "
+    std::printf("BoysAllOrders: worst |error| = %.3e (region A %.3e, region B %.3e, region C %.3e, "
                 "extended band %.3e)\n",
                 worst,
                 regionWorst.a,
@@ -505,7 +413,7 @@ TEST(BoysTest, BatchMatchesReferenceFloat) {
             continue;
         }
 
-        qcx::integrals::BoysBatchF32(row.n, static_cast<float>(row.x), batch.data());
+        qcx::integrals::BoysAllOrdersF32(row.n, static_cast<float>(row.x), batch.data());
 
         for (int k = 0; k <= row.n; ++k)
         {
@@ -536,13 +444,14 @@ TEST(BoysTest, BatchMatchesReferenceFloat) {
     EXPECT_LE(regionWorst.e, static_cast<double>(kFloatTolerance))
         << "batch extended band (kExtendedBX0 <= x < kX0)";
 
-    std::printf("BoysBatchF32: worst |error| = %.3e (region A %.3e, region B %.3e, region C %.3e, "
-                "extended band %.3e)\n",
-                worst,
-                regionWorst.a,
-                regionWorst.b,
-                regionWorst.c,
-                regionWorst.e);
+    std::printf(
+        "BoysAllOrdersF32: worst |error| = %.3e (region A %.3e, region B %.3e, region C %.3e, "
+        "extended band %.3e)\n",
+        worst,
+        regionWorst.a,
+        regionWorst.b,
+        regionWorst.c,
+        regionWorst.e);
 }
 
 TEST(BoysTest, ZeroArgumentIsExact) {
@@ -554,7 +463,7 @@ TEST(BoysTest, ZeroArgumentIsExact) {
     }
 
     double batch[qcx::integrals::kMaxBoysOrder + 1];
-    qcx::integrals::BoysBatch(8, 0.0, batch);
+    qcx::integrals::BoysAllOrders(8, 0.0, batch);
 
     for (int k = 0; k <= 8; ++k)
     {
@@ -562,7 +471,7 @@ TEST(BoysTest, ZeroArgumentIsExact) {
     }
 
     float batchF32[qcx::integrals::kMaxBoysOrder + 1];
-    qcx::integrals::BoysBatchF32(8, 0.0f, batchF32);
+    qcx::integrals::BoysAllOrdersF32(8, 0.0f, batchF32);
 
     for (int k = 0; k <= 8; ++k)
     {
@@ -581,7 +490,7 @@ TEST(BoysTest, BatchConsistentWithSingleDouble) {
     {
         const double x = xd(rng);
         const int nmax = static_cast<int>(rng() % (qcx::integrals::kMaxBoysOrder + 1));
-        qcx::integrals::BoysBatch(nmax, x, batch.data());
+        qcx::integrals::BoysAllOrders(nmax, x, batch.data());
 
         for (int k = 0; k <= nmax; ++k)
         {
@@ -754,110 +663,137 @@ TEST(BoysTest, FootprintSizes) {
                 flatExpBytes / 1000.0);
 }
 
-TEST(BoysTest, SimdMatchesScalarWhenAvailable) {
+// The many-argument entry is the public shape that reaches the vector lanes,
+// so its gate is the committed reference grid: every distinct argument of the
+// grid, at every order, against the grid's own values.
+TEST(BoysTest, AllNMatchesReferenceDouble) {
     if (!qcx::integrals::BoysAvx2Available())
     {
         GTEST_SKIP() << "AVX2 not available on this CPU";
     }
 
-    std::mt19937_64 rng(67890);
-    constexpr std::size_t kCount = 4096;
-    std::vector<double> x(kCount);
-    std::vector<double> out(kCount);
-    std::vector<double> batchOut(kCount * (qcx::integrals::kMaxBoysOrder + 1));
+    const std::vector<double> xs = GridArguments();
+    ASSERT_FALSE(xs.empty());
+    constexpr int n = qcx::integrals::kMaxBoysOrder;
+    const std::size_t count = xs.size();
+    std::vector<double> out(count * (static_cast<std::size_t>(n) + 1u));
+    qcx::integrals::BoysAllN(n, xs.data(), out.data(), count);
 
-    // Region A (x < x0): same-n array. The SIMD lane serves the extended
-    // band with the region-A per-order fits (its untouched path); the
-    // scalar single serves it with the per-range extended seed, so the
-    // band draws agree within the two paths' combined budgets (3e-14 +
-    // 1e-15) while the below-band draws keep the old bit-close 1e-15.
-    std::uniform_real_distribution<double> xdA(1e-4, 11.89);
+    double worst = 0.0;
+    RegionWorsts regionWorst;
 
-    for (auto& v : x)
+    for (std::size_t i = 0; i < count; ++i)
     {
-        v = xdA(rng);
-    }
-
-    const int n = 8;
-    qcx::integrals::BoysRegionASimd(n, x.data(), out.data(), kCount);
-
-    for (std::size_t i = 0; i < kCount; ++i)
-    {
-        const double tolerance =
-            x[i] >= qcx::integrals::detail::kExtendedBX0 ? 3e-14 + 1e-15 : 1e-15;
-        EXPECT_NEAR(out[i], qcx::integrals::BoysSingle(n, x[i]), tolerance);
-    }
-
-    // Region B (x0 <= x < x1): full batch layout.
-    std::uniform_real_distribution<double> xdB(11.90, 28.98);
-
-    for (auto& v : x)
-    {
-        v = xdB(rng);
-    }
-
-    qcx::integrals::BoysRegionBSimd(n, x.data(), batchOut.data(), kCount);
-
-    for (std::size_t i = 0; i < kCount; ++i)
-    {
-        double scalar[qcx::integrals::kMaxBoysOrder + 1];
-        qcx::integrals::BoysBatch(n, x[i], scalar);
-
         for (int k = 0; k <= n; ++k)
         {
-            EXPECT_NEAR(batchOut[k * kCount + i], scalar[k], 1e-15);
+            const double reference = ReferenceValue(k, xs[i]);
+            const double value = out[static_cast<std::size_t>(k) * count + i];
+            const double error = std::abs(value - reference);
+            EXPECT_LE(error, kDoubleTolerance)
+                << "k=" << k << " x=" << xs[i] << " got=" << value << " want=" << reference;
+            worst = std::max(worst, error);
+            regionWorst.Update(error, xs[i]);
         }
     }
 
-    // Region C (x >= x1).
-    std::uniform_real_distribution<double> xdC(28.99, 60.0);
+    // The entry promises the batch lane's 5.5e-14 per value in every region.
+    EXPECT_LE(regionWorst.a, kDoubleTolerance) << "region A (x < kX0)";
+    EXPECT_LE(regionWorst.b, kDoubleTolerance) << "region B (kX0 <= x < kX1)";
+    EXPECT_LE(regionWorst.c, kDoubleTolerance) << "region C (x >= kX1)";
+    EXPECT_LE(regionWorst.e, kDoubleTolerance) << "extended band (kExtendedBX0 <= x < kX0)";
 
-    for (auto& v : x)
+    std::printf("BoysAllN: worst |error| = %.3e (region A %.3e, region B %.3e, region C %.3e, "
+                "extended band %.3e)\n",
+                worst,
+                regionWorst.a,
+                regionWorst.b,
+                regionWorst.c,
+                regionWorst.e);
+}
+
+TEST(BoysTest, AllNSortedArgsMatchesUnsortedDouble) {
+    if (!qcx::integrals::BoysAvx2Available())
     {
-        v = xdC(rng);
+        GTEST_SKIP() << "AVX2 not available on this CPU";
     }
 
-    qcx::integrals::BoysRegionCSimd(n, x.data(), out.data(), kCount);
+    // The overload states a property of the caller's array, so the two entries
+    // are run on the same non-decreasing array and compared value by value.
+    // The grid's x column is not ascending, so the arguments are sorted here.
+    std::vector<double> xs = GridArguments();
+    ASSERT_FALSE(xs.empty());
+    std::sort(xs.begin(), xs.end());
+    constexpr int n = qcx::integrals::kMaxBoysOrder;
+    const std::size_t count = xs.size();
+    const std::size_t values = count * (static_cast<std::size_t>(n) + 1u);
+    std::vector<double> sorted(values);
+    std::vector<double> unsorted(values);
+    qcx::integrals::BoysAllN(n, xs.data(), sorted.data(), count, qcx::integrals::BoysSortedArgs{});
+    qcx::integrals::BoysAllN(n, xs.data(), unsorted.data(), count);
+
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < values; ++i)
+    {
+        const double error = std::abs(sorted[i] - unsorted[i]);
+        EXPECT_LE(error, 2.0 * kDoubleTolerance)
+            << "k=" << i / count << " x=" << xs[i % count] << " sorted=" << sorted[i]
+            << " unsorted=" << unsorted[i];
+        worst = std::max(worst, error);
+    }
+
+    std::printf("BoysAllN sorted overload: worst |difference| = %.3e\n", worst);
+}
+
+TEST(BoysTest, AllNCountZeroWritesNothing) {
+    const double x[2] = {1.0, 2.0};
+    double out[4];
+    std::fill(out, out + 4, -1.0);
+    qcx::integrals::BoysAllN(1, x, out, 0);
+
+    for (double value : out)
+    {
+        EXPECT_EQ(value, -1.0);
+    }
+}
+
+TEST(BoysTest, AllNTailAndWorkspaceMatchReference) {
+    // A count that is not a multiple of the vector width exercises the tail,
+    // and a caller-supplied workspace must give the same values as the
+    // internally allocated one.
+    const double xs[5] = {1.0, 2.0, 5.0, 8.0, 30.0};
+    constexpr int n = 8;
+    constexpr std::size_t kCount = 5;
+    constexpr std::size_t kValues = kCount * (static_cast<std::size_t>(n) + 1u);
+    double out[kValues];
+    qcx::integrals::BoysAllN(n, xs, out, kCount);
 
     for (std::size_t i = 0; i < kCount; ++i)
     {
-        EXPECT_NEAR(out[i], qcx::integrals::BoysSingle(n, x[i]), 1e-15);
+        for (int k = 0; k <= n; ++k)
+        {
+            const double reference = ReferenceValue(k, xs[i]);
+            EXPECT_LE(std::abs(out[static_cast<std::size_t>(k) * kCount + i] - reference),
+                      kDoubleTolerance)
+                << "k=" << k << " x=" << xs[i];
+        }
     }
 
-    // Tail fallbacks: counts that are not multiples of four (count = 5
-    // exercises the scalar tail; count = 0 must be a no-op). Each region
-    // function receives arguments from its own domain (the documented
-    // precondition). The band draws of the A tail use the combined
-    // SIMD-region-A/scalar-extended budgets, as in the main loop above.
-    double tailA[5] = {1.0, 2.0, 5.0, 8.0, 11.0};
-    double tailC[5] = {30.0, 35.0, 40.0, 45.0, 50.0};
-    double tailOut[5] = {};
-    qcx::integrals::BoysRegionASimd(n, tailA, tailOut, 5);
+    std::array<std::size_t, qcx::integrals::BoysAllNWorkspaceSize(kCount)> workspace{};
+    double outWorkspace[kValues];
+    qcx::integrals::BoysAllN(n, xs, outWorkspace, kCount, workspace.data());
 
-    for (std::size_t i = 0; i < 5; ++i)
+    for (std::size_t i = 0; i < kValues; ++i)
     {
-        const double tolerance =
-            tailA[i] >= qcx::integrals::detail::kExtendedBX0 ? 3e-14 + 1e-15 : 1e-15;
-        EXPECT_NEAR(tailOut[i], qcx::integrals::BoysSingle(n, tailA[i]), tolerance);
+        EXPECT_EQ(outWorkspace[i], out[i]) << "i=" << i;
     }
-
-    qcx::integrals::BoysRegionCSimd(n, tailC, tailOut, 5);
-
-    for (std::size_t i = 0; i < 5; ++i)
-    {
-        EXPECT_NEAR(tailOut[i], qcx::integrals::BoysSingle(n, tailC[i]), 1e-15);
-    }
-
-    qcx::integrals::BoysRegionASimd(n, tailA, tailOut, 0);
-    qcx::integrals::BoysRegionBSimd(n, tailA, batchOut.data(), 0);
-    qcx::integrals::BoysRegionCSimd(n, tailC, tailOut, 0);
 }
 
 #if QcxIntegralsFp16
 TEST(BoysTest, SingleMatchesReferenceF16) {
     RunReferenceChecks<qcx::integrals::F16,
                        qcx::integrals::BoysSingleF16,
-                       qcx::integrals::BoysBatchF16>("BoysF16");
+                       qcx::integrals::BoysAllOrdersF16>("BoysF16");
 }
 
 TEST(BoysTest, BatchMatchesReferenceF16) {
@@ -865,19 +801,19 @@ TEST(BoysTest, BatchMatchesReferenceF16) {
     // batch gate explicitly for the fp16 lane.
     RunReferenceChecks<qcx::integrals::F16,
                        qcx::integrals::BoysSingleF16,
-                       qcx::integrals::BoysBatchF16>("BoysF16(batch)");
+                       qcx::integrals::BoysAllOrdersF16>("BoysF16(batch)");
 }
 
 TEST(BoysTest, SingleMatchesReferenceBf16) {
     RunReferenceChecks<qcx::integrals::Bf16,
                        qcx::integrals::BoysSingleBf16,
-                       qcx::integrals::BoysBatchBf16>("BoysBf16");
+                       qcx::integrals::BoysAllOrdersBf16>("BoysBf16");
 }
 
 TEST(BoysTest, BatchMatchesReferenceBf16) {
     RunReferenceChecks<qcx::integrals::Bf16,
                        qcx::integrals::BoysSingleBf16,
-                       qcx::integrals::BoysBatchBf16>("BoysBf16(batch)");
+                       qcx::integrals::BoysAllOrdersBf16>("BoysBf16(batch)");
 }
 
 TEST(BoysTest, ZeroArgumentIsExactF16) {
@@ -893,7 +829,7 @@ TEST(BoysTest, ZeroArgumentIsExactF16) {
     }
 
     std::array<qcx::integrals::F16, qcx::integrals::kMaxBoysOrder + 1> batchF16{};
-    qcx::integrals::BoysBatchF16(8, qcx::integrals::F16{0.0f}, batchF16.data());
+    qcx::integrals::BoysAllOrdersF16(8, qcx::integrals::F16{0.0f}, batchF16.data());
 
     for (int k = 0; k <= 8; ++k)
     {
@@ -917,7 +853,7 @@ TEST(BoysTest, ZeroArgumentIsExactBf16) {
     }
 
     std::array<qcx::integrals::Bf16, qcx::integrals::kMaxBoysOrder + 1> batchBf16{};
-    qcx::integrals::BoysBatchBf16(8, qcx::integrals::Bf16{0.0f}, batchBf16.data());
+    qcx::integrals::BoysAllOrdersBf16(8, qcx::integrals::Bf16{0.0f}, batchBf16.data());
 
     for (int k = 0; k <= 8; ++k)
     {
@@ -944,7 +880,7 @@ TEST(BoysTest, BatchConsistentWithSingleF16) {
     {
         const qcx::integrals::F16 x = static_cast<qcx::integrals::F16>(xd(rng));
         const int nmax = static_cast<int>(rng() % (qcx::integrals::kMaxBoysOrder + 1));
-        qcx::integrals::BoysBatchF16(nmax, x, batch.data());
+        qcx::integrals::BoysAllOrdersF16(nmax, x, batch.data());
 
         for (int k = 0; k <= nmax; ++k)
         {
@@ -968,7 +904,7 @@ TEST(BoysTest, BatchConsistentWithSingleBf16) {
     {
         const qcx::integrals::Bf16 x = static_cast<qcx::integrals::Bf16>(xd(rng));
         const int nmax = static_cast<int>(rng() % (qcx::integrals::kMaxBoysOrder + 1));
-        qcx::integrals::BoysBatchBf16(nmax, x, batch.data());
+        qcx::integrals::BoysAllOrdersBf16(nmax, x, batch.data());
 
         for (int k = 0; k <= nmax; ++k)
         {
@@ -980,31 +916,4 @@ TEST(BoysTest, BatchConsistentWithSingleBf16) {
     }
 }
 
-TEST(BoysTest, SimdMatchesScalarF16) {
-    if (!qcx::integrals::BoysAvx2Available())
-    {
-        GTEST_SKIP() << "AVX2 not available on this CPU";
-    }
-
-    RunSimdLaneChecks<qcx::integrals::F16,
-                      qcx::integrals::BoysSingleF16,
-                      qcx::integrals::BoysBatchF16,
-                      qcx::integrals::BoysRegionASimdF16,
-                      qcx::integrals::BoysRegionBSimdF16,
-                      qcx::integrals::BoysRegionCSimdF16>();
-}
-
-TEST(BoysTest, SimdMatchesScalarBf16) {
-    if (!qcx::integrals::BoysAvx2Available())
-    {
-        GTEST_SKIP() << "AVX2 not available on this CPU";
-    }
-
-    RunSimdLaneChecks<qcx::integrals::Bf16,
-                      qcx::integrals::BoysSingleBf16,
-                      qcx::integrals::BoysBatchBf16,
-                      qcx::integrals::BoysRegionASimdBf16,
-                      qcx::integrals::BoysRegionBSimdBf16,
-                      qcx::integrals::BoysRegionCSimdBf16>();
-}
 #endif // QcxIntegralsFp16

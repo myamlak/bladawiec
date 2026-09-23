@@ -301,6 +301,16 @@ std::string SerializeRunResultJson(const RunResult& result) {
         {
             document["molden"] = nlohmann::json{{"file", result.properties->molden->file}};
         }
+
+        // The fixed-density exchange-correlation contribution (schema 40):
+        // absent unless the run asked for it, so an absent key is "no walk
+        // ran" and never "the contribution was zero".
+        if (result.properties->xcGradient.has_value())
+        {
+            const auto& xcGradient = *result.properties->xcGradient;
+            document["xc_gradient"] = nlohmann::json{{"gradient", xcGradient.gradient},
+                                                     {"energy_hartree", xcGradient.energyHartree}};
+        }
     } else
     {
         // Same honesty policy as spin_squared: null means "not computed",

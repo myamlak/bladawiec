@@ -183,7 +183,7 @@ TEST(BoysCudaTest, BatchF32MatchesCpu) {
 
     for (std::size_t i = 0; i < kCount; ++i)
     {
-        boys::BoysBatchF32(hostN[i], static_cast<float>(hostX[i]), cpuBatch.data());
+        boys::BoysAllOrdersF32(hostN[i], static_cast<float>(hostX[i]), cpuBatch.data());
 
         for (int k = 0; k <= hostN[i]; ++k)
         {
@@ -230,7 +230,7 @@ TEST(BoysCudaTest, BatchF64MatchesCpu) {
 
     for (std::size_t i = 0; i < kCount; ++i)
     {
-        boys::BoysBatch(hostN[i], hostX[i], cpuBatch.data());
+        boys::BoysAllOrders(hostN[i], hostX[i], cpuBatch.data());
 
         for (int k = 0; k <= hostN[i]; ++k)
         {
@@ -360,7 +360,7 @@ TEST(BoysCudaTest, BatchF16MatchesCpu) {
 
     for (std::size_t i = 0; i < kCount; ++i)
     {
-        boys::BoysBatchF16(hostN[i], hostX[i], cpuBatch.data());
+        boys::BoysAllOrdersF16(hostN[i], hostX[i], cpuBatch.data());
 
         for (int k = 0; k <= hostN[i]; ++k)
         {
@@ -409,7 +409,7 @@ TEST(BoysCudaTest, BatchF16MatchesCpuOnAStream) {
 
     for (std::size_t i = 0; i < kCount; ++i)
     {
-        boys::BoysBatchF16(hostN[i], hostX[i], cpuBatch.data());
+        boys::BoysAllOrdersF16(hostN[i], hostX[i], cpuBatch.data());
 
         for (int k = 0; k <= hostN[i]; ++k)
         {
