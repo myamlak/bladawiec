@@ -27,13 +27,18 @@
 // The streams are the paper's benchmark streams, generated verbatim like
 // boys_benchmark.cpp: uniform (n in [0, 32], x in [0, 40], mt19937_64(42),
 // 4,194,304 inputs) and molecular (benzene 6-31G(d) NAI-style pairs,
-// mt19937_64(43)). Both sit entirely inside libint2's table region
-// (m <= 32 <= 40, x <= 40 <= 117), so no cross-library region logic
-// differs.
+// mt19937_64(43)). The uniform stream sits entirely inside libint2's table
+// region (n <= 32 <= 40, x <= 40 <= 117); the molecular stream does not -
+// its x = p*|P - C|^2 reaches 3.26e5 and 61.8% of its inputs exceed the
+// table's tmax of 117, where libint2 runs its large-T recursion and qcx its
+// own large-argument branch. Both sides evaluate the same F_0..F_n ladder
+// over the same inputs on either stream; only the branch taken differs.
 //
 // Accuracy gate: both sides evaluate at their documented epsilon-level
-// floors (qcx |F_hat - F| <= m*B_region with m = 1.0; libint2's generated
-// table documents per-interval worst relative error 1.17e-16). The
+// floors (qcx |F_hat - F| <= m*5.5e-14 per value in every region - the batch
+// row of the contract table at m = 1.0, the tighter per-region column being
+// the single-value entries' promise; libint2's table header documents its own
+// relative floor as numeric_limits<double>::epsilon()). The
 // self-check asserts max |qcx - libint2| over each stream against the shared
 // budget 5.5e-14 (the qcx absolute contract is pinned by the certified
 // reference suite; libint2's ~1e-16 floor leaves headroom). A convention
