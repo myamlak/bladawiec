@@ -20,6 +20,30 @@ qcx::Result<void> ValidateLayout(const ResponseLayout& layout) {
     return {};
 }
 
+/// Validates the dense operator's layout and matrix shape.
+/// \param layout The layout to check.
+/// \param matrix The matrix to check.
+/// \returns An Error (kInvalidArgument) when a block is empty or the matrix is
+/// not Dimension() squared.
+qcx::Result<void> ValidateDenseShape(const ResponseLayout& layout, std::span<const double> matrix) {
+    auto layoutStatus = ValidateLayout(layout);
+
+    if (!layoutStatus.has_value())
+    {
+        return std::unexpected(layoutStatus.error());
+    }
+
+    const std::size_t dimension = layout.Dimension();
+
+    if (matrix.size() != dimension * dimension)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument, "the matrix must be Dimension() squared"});
+    }
+
+    return {};
+}
+
 } // namespace
 
 OrbitalHessianOperator::OrbitalHessianOperator(ResponseLayout layout,
@@ -181,6 +205,16 @@ DenseResponseOperator::DenseResponseOperator(ResponseLayout layout,
 
 qcx::Result<DenseResponseOperator> DenseResponseOperator::Create(ResponseLayout layout,
                                                                  std::span<const double> matrix) {
+    // The diagonal below is read out of the matrix, so the shape is settled
+    // here: the overload that validates would otherwise be reached only after
+    // the read had already happened.
+    auto shapeStatus = ValidateDenseShape(layout, matrix);
+
+    if (!shapeStatus.has_value())
+    {
+        return std::unexpected(shapeStatus.error());
+    }
+
     const std::size_t dimension = layout.Dimension();
     std::vector<double> diagonal(dimension);
 
@@ -194,20 +228,14 @@ qcx::Result<DenseResponseOperator> DenseResponseOperator::Create(ResponseLayout 
 
 qcx::Result<DenseResponseOperator> DenseResponseOperator::Create(
     ResponseLayout layout, std::span<const double> matrix, std::span<const double> preconditioner) {
-    auto layoutStatus = ValidateLayout(layout);
+    auto shapeStatus = ValidateDenseShape(layout, matrix);
 
-    if (!layoutStatus.has_value())
+    if (!shapeStatus.has_value())
     {
-        return std::unexpected(layoutStatus.error());
+        return std::unexpected(shapeStatus.error());
     }
 
     const std::size_t dimension = layout.Dimension();
-
-    if (matrix.size() != dimension * dimension)
-    {
-        return std::unexpected(
-            qcx::Error{qcx::ErrorCode::kInvalidArgument, "the matrix must be Dimension() squared"});
-    }
 
     if (preconditioner.size() != dimension)
     {
