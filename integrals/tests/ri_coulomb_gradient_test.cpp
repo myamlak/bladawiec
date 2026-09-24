@@ -750,6 +750,16 @@ TEST(RiCoulombGradientTest, TheFittedGradientTracksTheAuxiliaryFittingError) {
         GTEST_SKIP() << "the auxiliary ladder runs in Release configurations only";
     }
 
+    // The ladder's top rung is the vendored Coulomb-fitting set, whose oxygen
+    // carries f and g shells: a capped build refuses that basis at the engine's
+    // entry point rather than fitting anything with it, so the residuals the
+    // two rungs above are compared across never form.
+    if (!qcx::integrals::SupportsL(4))
+    {
+        GTEST_SKIP() << "the ladder's f and g aux shells exceed this build's kMaxEngineL "
+                        "(CI lmax=2)";
+    }
+
     auto fixture = MakeFixture();
 
     if (!fixture.has_value())
