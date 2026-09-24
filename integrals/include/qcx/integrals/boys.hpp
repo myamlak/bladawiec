@@ -31,7 +31,61 @@ namespace qcx::integrals {
 
 using boys::BoysAllN;
 using boys::BoysAllNWorkspaceSize;
+
+/// F_0(x)..F_nmax(x) in double precision: the entry this framework's Boys
+/// kernel calls, and the measurement behind that choice.
+///
+/// The library offers three call shapes at the certified accuracy, all three
+/// forwarded here: this one, the many-argument entry `BoysAllN` called once per
+/// order run, and that same call with the arguments declared already sorted
+/// (`BoysAllN` with `BoysSortedArgs`). This framework calls this one - per
+/// argument, one seed then the recursion up to that argument's order - in the
+/// MD engine's `MdBoysBatch` and in the derivative kernels.
+///
+/// **The choice was measured, on the development machine, and it is that
+/// machine's.** 12 logical processors with the AVX2+FMA tier present, MSVC 14.51
+/// release build of the submodule at the revision this tree pins, the library's
+/// option probe (`boys::RunOptionProbe`, whose entry the pinned revision
+/// predates), 16384 arguments log-uniform on [1e-3, 40] with each argument's
+/// highest order drawn as the sum of two shell angular momenta over 0..16. Over
+/// eleven runs in which all three shapes produced a figure, this entry was the
+/// fastest in ten, by 1.0% to 6.9% over the next.
+///
+/// **The probe did not separate them, and the default rests on that refusal
+/// rather than on a ranking.** Each run's resolution - the wider of its
+/// fixed-work canary's own disagreement inside an admitted pass and the leading
+/// option's disagreement across its admitted passes - came out between 5.2% and
+/// 56.2%, never tighter than the margin it was asked to order. Every run
+/// therefore reported that it could not determine a winner: nothing here places
+/// this entry ahead of the other two. It is the entry the probe never placed
+/// behind either of them, and so the one not worse than they are within the
+/// resolution this machine could measure. It is also the shape already in force,
+/// so the measurement confirms the default rather than moving it.
+///
+/// None of this is a claim about another machine. The probe is run where its
+/// numbers are used, and a host with a steadier clock may separate the three.
+/// The resolution moved with how steady the machine was rather than with how
+/// busy it was, and on this laptop in both directions: the same protocol gave
+/// 5.2% to 32.7% while a second job held the machine and 35.9% to 56.2% once it
+/// had ended, because the term that dominated was the leading option's own
+/// spread across its admitted passes, and an idle machine's clock state differs
+/// from pass to pass.
+///
+/// Several options the library exposes are outside this choice because this tree
+/// cannot reach them, and no default among them is expressed here. The relaxed
+/// accuracy tiers are the run-time selection below and trade accuracy for speed.
+/// The fit route, the evaluation scheme, the interval granularity and the
+/// packing axis are a later revision's option space; the revision pinned here
+/// predates it, so this tree names none of them. The multiply-add route is a
+/// property of the build rather than of a call, and this build's arithmetic does
+/// not contract a bare product-plus-add. The CUDA lane the same probe measured
+/// fastest is not consumed here at all: the CUDA engine evaluates Boys from the
+/// submodule's coefficient tables in its own device kernels rather than calling
+/// the library's CUDA lane.
+///
+/// \ingroup qcx-integrals
 using boys::BoysAllOrders;
+
 using boys::BoysAllOrdersF32;
 using boys::BoysAvx2Available;
 using boys::BoysSingle;
