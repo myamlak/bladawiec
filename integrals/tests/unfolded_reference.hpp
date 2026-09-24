@@ -184,7 +184,7 @@ inline std::vector<double> UnfoldedEriBlock(const MdPairData& bra, const MdPairD
             // Seeds and the VRR over explicit (tx,ty,tz,m) loops:
             // slices[m][Hermite3DIndex(t)] = [t]^(m) for |t| + m <= lTotal.
             std::vector<double> seeds(lTotal + 1);
-            qcx::integrals::BoysBatch(lTotal, x, seeds.data());
+            qcx::integrals::BoysAllOrders(lTotal, x, seeds.data());
             const std::size_t sliceSize = static_cast<std::size_t>(Hermite3DCount(lTotal));
             std::vector<std::vector<double>> slices(lTotal + 1,
                                                     std::vector<double>(sliceSize, 0.0));

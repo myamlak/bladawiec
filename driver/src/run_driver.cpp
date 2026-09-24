@@ -734,6 +734,12 @@ qcx::Result<std::optional<qcx::io::RunQtaim>> BuildQtaimBlock(
     const qcx::basisset::BasisSet& basis,
     const Eigen::MatrixXd& spinSummed,
     const qcx::io::RunInput& input);
+qcx::Result<std::optional<qcx::io::RunXcGradient>> BuildXcGradientBlock(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basis,
+    const Eigen::MatrixXd& alphaDensity,
+    const Eigen::MatrixXd& betaDensity,
+    const qcx::io::RunInput& input);
 
 // The Molden export: writes the [Molden Format]
 // [Atoms] (AU) [5D] [7F] [GTO] [MO] file of the converged or
@@ -923,6 +929,15 @@ qcx::Result<void> FillProperties(
     }
 
     properties.qtaim = std::move(*qtaim);
+
+    auto xcGradient = BuildXcGradientBlock(molecule, basis, alphaDensity, betaDensity, input);
+
+    if (!xcGradient.has_value())
+    {
+        return std::unexpected(xcGradient.error());
+    }
+
+    properties.xcGradient = std::move(*xcGradient);
 
     result.properties = std::move(properties);
     return {};
@@ -6235,6 +6250,87 @@ qcx::Result<std::optional<qcx::io::RunDensityAtNuclei>> BuildDensityAtNucleiBloc
 
     qcx::io::RunDensityAtNuclei block;
     block.values = ToStdVector(*values);
+    return block;
+}
+
+// The opt-in fixed-density exchange-correlation gradient block: the derivative
+// of the exchange-correlation energy this run integrated, taken at the density
+// it converged to and on the grid it integrated over.
+//
+// The functional name, the `[grid]` block and the screening tolerance are
+// resolved HERE exactly as the energy path resolved them (ResolveKsContext and
+// the same two helpers), so the walk differentiates the energy the run
+// computed. That is the whole risk in this block: a walk built from re-read or
+// re-derived keys screens by another rule or truncates another point set, and
+// the gradient it reports is then the derivative of a different energy while
+// every number in it still looks reasonable. The tolerance and the settings
+// object go to CreateKsGrid together for the same reason the energy path hands
+// them over together. The grid engine itself is built a second time rather than
+// carried from the SCF, because the energy path's engine does not outlive its
+// branch; the KEYS are what must not diverge, and they are read once here.
+//
+// The densities arrive in the same convention the energy path was given: on the
+// restricted lane both spins carry half the converged density matrix, which is
+// the split the engine's own closed-shell entry point performs.
+//
+// Driver-internal helper of FillProperties (the forward declarations above).
+qcx::Result<std::optional<qcx::io::RunXcGradient>> BuildXcGradientBlock(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basis,
+    const Eigen::MatrixXd& alphaDensity,
+    const Eigen::MatrixXd& betaDensity,
+    const qcx::io::RunInput& input) {
+    if (!input.properties.xcGradient)
+    {
+        return std::nullopt;
+    }
+
+    // The validator refuses this key on a method that names no functional
+    // (validate_input.cpp's key policy), so the absent case here is a
+    // programmatic caller that never passed through validation.
+    if (!input.method.functional.has_value())
+    {
+        return std::unexpected(
+            Err(qcx::ErrorCode::kInvalidArgument,
+                "properties.xc_gradient: no method.functional to differentiate"));
+    }
+
+    auto functional = qcx::driver::internal::ResolveKsFunctional(*input.method.functional);
+
+    if (!functional.has_value())
+    {
+        return std::unexpected(functional.error());
+    }
+
+    const qcx::grid::XcGridSettings settings =
+        ResolveXcGridSettings(input.grid.value_or(qcx::io::RunGridInput{}));
+    const double tolerance =
+        input.method.screeningTolerance.value_or(qcx::io::kDefaultScreeningTolerance);
+
+    auto grid =
+        qcx::driver::internal::CreateKsGrid(molecule, basis, functional->name, settings, tolerance);
+
+    if (!grid.has_value())
+    {
+        return std::unexpected(grid.error());
+    }
+
+    // The walk adds into a total, so the block's gradient is the walk's own
+    // vector carried in the run's total-gradient shape: 3N, atom-major, in the
+    // molecule's own atom order (the ordering the grid's geometry was built in).
+    Eigen::VectorXd total =
+        Eigen::VectorXd::Zero(3 * static_cast<Eigen::Index>(molecule.AtomCount()));
+    auto walk =
+        qcx::driver::internal::AddXcGradientContribution(*grid, alphaDensity, betaDensity, total);
+
+    if (!walk.has_value())
+    {
+        return std::unexpected(walk.error());
+    }
+
+    qcx::io::RunXcGradient block;
+    block.gradient = ToStdVector(total);
+    block.energyHartree = walk->energy;
     return block;
 }
 

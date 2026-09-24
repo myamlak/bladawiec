@@ -78,7 +78,7 @@ inline constexpr int kEriCudaMaxSharedBytes = 45056;
 inline constexpr int kEriCudaMaxClassL = 12;
 
 /// The certified seed/roundoff epsilon (md_vrr.hpp kCertifiedEpsilon): the
-/// BoysBatchF32 absolute tolerance and the fp32 roundoff bound of the
+/// BoysAllOrdersF32 absolute tolerance and the fp32 roundoff bound of the
 /// transform terms.
 inline constexpr double kEriCudaCertifiedEpsilon = 1e-7;
 
@@ -391,7 +391,7 @@ __device__ __forceinline__ float DevRegionBSeed32(const EriCudaBoysTables& table
     return DevClenshawSplit32(tables.bcoeffs32, tables.bDeg32, t);
 }
 
-/// The Boys batch of order 0..nmax (boys.cpp BoysBatch, verbatim: division
+/// The Boys batch of order 0..nmax (boys.cpp BoysAllOrders, verbatim: division
 /// in region C - not rsqrt; region-B upward recursion; region-A downward
 /// recursion with exp(-x) via exp).
 template <typename T>
@@ -478,7 +478,7 @@ __device__ __forceinline__ void DevBoysBatch<float>(const EriCudaBoysTables& tab
     {
         // The seed must be double precision: the downward recursion amplifies
         // a float seed error far beyond the certified 1.5e-7 float budget
-        // (boys.cpp BoysBatchF32). The recursion itself stays in float.
+        // (boys.cpp BoysAllOrdersF32). The recursion itself stays in float.
         const double seed = DevChebyshevValue64(tables, nmax, x);
         out[nmax] = static_cast<float>(seed);
         float f = out[nmax];

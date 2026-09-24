@@ -19,9 +19,9 @@ qcx_apply_blas_runtime(qcx-bench-molecule)
 # The benchmark partitions inputs with the
 # exact region boundaries, so it includes the generated detail header.
 add_executable(qcx-bench-boys boys_benchmark.cpp)
-# The Boys kernel internals live in the boys submodule now (the
-# table constants the driver reads come from its src/).
-target_include_directories(qcx-bench-boys PRIVATE ${CMAKE_SOURCE_DIR}/external/boys/src)
+# The Boys kernel lives in the boys submodule; the table constants the driver
+# reads are part of its published surface (external/boys/include/boys/).
+target_include_directories(qcx-bench-boys PRIVATE ${CMAKE_SOURCE_DIR}/external/boys/include)
 target_compile_features(qcx-bench-boys PRIVATE cxx_std_23)
 target_link_libraries(qcx-bench-boys PRIVATE qcx-integrals benchmark::benchmark)
 target_precompile_headers(qcx-bench-boys PRIVATE
@@ -37,7 +37,7 @@ qcx_apply_blas_runtime(qcx-bench-boys)
 if (QCX_ARCH_X86_64)
     add_executable(qcx-bench-boys-unsorted-simd boys_unsorted_simd_benchmark.cpp)
     target_include_directories(qcx-bench-boys-unsorted-simd PRIVATE
-        ${CMAKE_SOURCE_DIR}/external/boys/src)
+        ${CMAKE_SOURCE_DIR}/external/boys/include)
     target_compile_features(qcx-bench-boys-unsorted-simd PRIVATE cxx_std_23)
     target_link_libraries(qcx-bench-boys-unsorted-simd PRIVATE qcx-integrals)
     target_precompile_headers(qcx-bench-boys-unsorted-simd PRIVATE
@@ -59,7 +59,7 @@ else()
     message(STATUS "qcx-bench-boys-unsorted-simd: non-x86-64 target - its AVX2 lane is not built")
 endif()
 
-# The matched-accuracy throughput comparator: the qcx BoysBatch ladder vs
+# The matched-accuracy throughput comparator: the qcx BoysAllOrders ladder vs
 # libint2's FmEval_Chebyshev7<double> ladder on the identical benchmark input
 # streams. The comparator set was resolved to libint2
 # because libcint v6.1.3 exposes no public F_m
@@ -154,6 +154,72 @@ target_precompile_headers(qcx-bench-boys-share PRIVATE
     <qcx/integrals/boys.hpp>
     <qcx/integrals/lean_fock_build.hpp>)
 qcx_apply_blas_runtime(qcx-bench-boys-share)
+
+# The Boys argument probe: the (order, argument) joint distribution of one
+# real Fock build and the run structure the engine presents those calls in.
+# It reuses the Boys-share probe's walk and adds the joint tabulation and the
+# run lengths; it reads the region and band boundaries from the boys
+# submodule's own generated table, so that header is on the include path.
+add_executable(qcx-bench-boys-argument boys_argument_probe.cpp)
+target_include_directories(qcx-bench-boys-argument PRIVATE
+    ${CMAKE_SOURCE_DIR}/integrals/src
+    ${CMAKE_SOURCE_DIR}/linalg/include
+    ${CMAKE_SOURCE_DIR}/tests/fixtures
+    ${CMAKE_SOURCE_DIR}/external/boys/include)
+target_compile_features(qcx-bench-boys-argument PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-boys-argument PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-boys-argument PRIVATE qcx-integrals qcx-test-fixtures)
+target_precompile_headers(qcx-bench-boys-argument PRIVATE
+    <qcx/integrals/boys.hpp>
+    <qcx/integrals/lean_fock_build.hpp>)
+qcx_apply_blas_runtime(qcx-bench-boys-argument)
+
+# The Boys-argument size-scaling probe: the same census as the argument probe
+# over a ladder of one chemistry family, on the screened-in AND the
+# screened-out side, with an optional split of the screened-in side by the
+# QFMM octree's own near/far interaction lists (--near-field). It reads the
+# region boundaries from the boys submodule's table and the octree from
+# integrals/src/internal, so both trees are on the include path.
+add_executable(qcx-bench-boys-argument-scaling boys_argument_scaling_probe.cpp)
+target_include_directories(qcx-bench-boys-argument-scaling PRIVATE
+    ${CMAKE_SOURCE_DIR}/integrals/src
+    ${CMAKE_SOURCE_DIR}/linalg/include
+    ${CMAKE_SOURCE_DIR}/tests/fixtures
+    ${CMAKE_SOURCE_DIR}/external/boys/include)
+target_compile_features(qcx-bench-boys-argument-scaling PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-boys-argument-scaling PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-boys-argument-scaling PRIVATE qcx-integrals qcx-test-fixtures)
+target_precompile_headers(qcx-bench-boys-argument-scaling PRIVATE
+    <qcx/integrals/boys.hpp>
+    <qcx/integrals/lean_fock_build.hpp>)
+qcx_apply_blas_runtime(qcx-bench-boys-argument-scaling)
+
+# The Boys replay probe: does the region-partitioned path's advantage survive
+# paying for the sort, on the arguments a real Fock build produces? The same
+# walk as the argument probe, replayed per call through the batch entry and
+# through a counting sort by (region, order) followed by one many-argument
+# call per bucket, with the decomposition of the argument into its exponent
+# and separation factors counted alongside. It reads the region boundaries
+# from the boys submodule's own table, like the argument probe.
+add_executable(qcx-bench-boys-replay boys_replay_probe.cpp)
+target_include_directories(qcx-bench-boys-replay PRIVATE
+    ${CMAKE_SOURCE_DIR}/integrals/src
+    ${CMAKE_SOURCE_DIR}/linalg/include
+    ${CMAKE_SOURCE_DIR}/tests/fixtures
+    ${CMAKE_SOURCE_DIR}/external/boys/include)
+target_compile_features(qcx-bench-boys-replay PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-boys-replay PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-boys-replay PRIVATE qcx-integrals qcx-test-fixtures)
+target_precompile_headers(qcx-bench-boys-replay PRIVATE
+    <qcx/integrals/boys.hpp>
+    <qcx/integrals/lean_fock_build.hpp>)
+qcx_apply_blas_runtime(qcx-bench-boys-replay)
 
 # The survived-quartet recurrence of the direct Fock path across a real SCF
 # run - per-iteration screened counts, cumulative-union hit rate, the
@@ -371,7 +437,7 @@ if (QCX_ENABLE_CUDA AND TARGET qcx-integrals-cuda)
     # The driver is the submodule's canonical copy (boys namespace,
     # BoysStatus semantics); the kernels TU is CUDA-clean and unchanged.
     target_include_directories(qcx-bench-boys-cuda PRIVATE
-        ${CMAKE_SOURCE_DIR}/external/boys/src)
+        ${CMAKE_SOURCE_DIR}/external/boys/include)
     target_compile_features(qcx-bench-boys-cuda PRIVATE cxx_std_23)
     target_compile_definitions(qcx-bench-boys-cuda PRIVATE NOMINMAX)
     target_link_libraries(qcx-bench-boys-cuda PRIVATE qcx-integrals-cuda)

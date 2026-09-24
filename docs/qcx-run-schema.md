@@ -258,6 +258,7 @@ type is a parse error). The population/moment block has no switch
 | `[properties] density_at_nuclei` | bool; the electron density at every nucleus, a point evaluation with no quadrature |
 | `[properties] qtaim` | bool; the Bader QTAIM bond critical points: the (3,-1) critical points of rho with their bond paths, ellipticity and laplacian; failed searches are reported in the output, never a run failure |
 | `[properties] molden` | string; the path of the Molden-format F-file written from the SCF result: the [Molden Format] [Atoms] (AU) [5D] [7F] [GTO] [MO] sections, RHF one spin block, UHF alpha then beta; an empty string counts as absent, and a file that cannot be written fails the run |
+| `[properties] xc_gradient` | bool; the fixed-density exchange-correlation contribution to the nuclear gradient, differentiated at the converged density on the grid the run integrated. A Kohn-Sham key: refused on `rhf`/`uhf` with the `functional` key and the `[grid]` block (see §2.3) |
 | `[properties] nocv_fragments` | array of non-empty arrays of non-negative atom indices (0-based, file row order); ETS-NOCV, closed-shell only (see §5) |
 
 ### 2.3 Validation and combination rules
@@ -356,7 +357,7 @@ bumped whenever a consumer must notice a change (§7).
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | The schema version; currently 37 (`RunResult::kSchemaVersion`) |
+| `schema_version` | int | The schema version; currently 40 (`RunResult::kSchemaVersion`) |
 | `molecule_units` | string | Schema 28. The unit the run's geometry was **read under** — the RESOLVED `[molecule] units` value, `"angstrom"` or `"bohr"`, never a request left for a consumer to apply. **Always present**, and `"angstrom"` is the value an absent key resolves to (the parser's default is a judgement, and the disclosure rule makes a judgement stateable). It exists so a record is self-describing on the one convention that has produced a wasted hunt twice in this project (2026-08-26, pyscf's Ångström default; 2026-09-15, Bohr numbers in an Ångström input file): a reader holding the JSON alone can now tell at what scale the geometry was read without consulting the input file. It describes the INPUT, not the numbers — the internal geometry is Bohr under either value |
 | `converged` | bool | True when a convergence criterion fired |
 | `iterations` | int | Iterations spent; the budget when not converged |
@@ -439,6 +440,7 @@ which are always present and use null.
 | `density_at_nuclei` | `values` — rho(R_A) per atom in the molecule's canonical atom order | electrons/bohr³ |
 | `qtaim` | `bond_critical_points` (each: `atom_a`, `atom_b`, `position_bohr`, `density`, `laplacian`, `ellipticity`, `eigenvalues` ascending, `bond_path` — the two gradient rays BCP -> nucleus), `other_critical_points` (`position_bohr`, `rank`, `signature_sum`), `unconverged_seeds` (3 each) | electrons/bohr³; electrons/bohr⁵ |
 | `molden` | `file` — the path of the written Molden-format F-file | path |
+| `xc_gradient` | `gradient` — dE_xc/dR at the converged density, 3 per atom in the molecule's canonical atom order; `energy_hartree` — the exchange-correlation energy the walk integrated. **Fixed density**: this is the exchange-correlation contribution to the nuclear gradient and never a total gradient | hartree/bohr; hartree |
 
 ### 3.5 Null vs absent — stated precisely
 
@@ -451,7 +453,7 @@ A JSON consumer must distinguish three cases:
    requested). The key exists; the value is null.
 3. **Key absent** — applies to the opt-in analysis blocks (`charges`, `esp`,
    `eddb`, `fukui`, `nalewajski`, `nocv`, `density_at_nuclei`, `qtaim`,
-   `molden`) when the run did not request the analysis, to
+   `molden`, `xc_gradient`) when the run did not request the analysis, to
    `certified_bound` (§3.9) when no Fock build reported the quantity, and to
    `qfmm_model` (§3.10) when the run wired no composed-QFMM builder.
    The key does not exist at all.
@@ -1168,7 +1170,7 @@ What to notice in this output:
 - No opt-in analysis key (`charges`, `esp`, `eddb`, `fukui`, `nalewajski`,
   `nocv`, `density_at_nuclei`, `qtaim`) appears anywhere — none was
   requested (§3.4).
-- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 37.
+- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 40.
 
 ### Other pin fixtures
 
@@ -1741,6 +1743,43 @@ an alias by construction cannot.
   block, with `error_aware_admission` as the answer for a build that did not
   arm the error arm, rather than omitted, so absence never means "the budget
   was met".
+- 37 → 38 (the ERI store's disclosure widens): **no key added and none
+  removed** — what a consumer must notice is WHICH RUNS carry
+  `resources_resolved.eri_store` (§3.6). At 33 an unrestricted (UHF/UKS) run
+  carrying `method.eri_cache_store` was refused by name before
+  serialization, so the block could only ever appear on a restricted run; the
+  seam is wired on the direct family's per-spin halves, so a UHF or UKS run
+  on that family emits the block on the same honoured-or-demoted rule its
+  restricted sibling follows. The refusal is narrowed rather than deleted. A
+  consumer keyed on "no `eri_store` on an unrestricted run" is the one that
+  will notice. (This entry and the next are written by a later change: the
+  two bumps did not reach this document, which is the gap the versioning
+  policy above forbids.)
+- 38 → 39 (the device requirement reaches the record): `builder_axes.device`
+  added (§8.4) — the device the run **required**, in the input's own selector
+  vocabulary (`"host"` or `"cuda:<index>"`), present exactly when the file
+  wrote `[builder] device`. A key added, so the number moves with it. It
+  carries no requested-vs-ran pairing and needs none: a requirement the
+  resolved builder cannot supply is refused by name before serialization, so
+  a document carrying this key is a document whose kernels executed where the
+  input said they must.
+- 39 → 40 (the exchange-correlation gradient's first input key): the
+  `[properties] xc_gradient` key and the `xc_gradient` output block added
+  (§2.2, §3.4) — the fixed-density exchange-correlation contribution to the
+  nuclear gradient in hartree/bohr (three per atom, in the molecule's
+  canonical atom order, like every other per-atom block) and the
+  exchange-correlation energy the walk integrated.
+  A key added, so the number moves with it; and it is the first record member
+  that is a **derivative** of an energy the same document carries, so a
+  consumer comparing records across this change compares a document with a
+  gradient term against one that could not carry any. The claim is
+  deliberately narrow and the block says so: the density is held at the
+  converged matrices, so the density's own response to a displaced nucleus is
+  not in it, and neither are the one-electron, Coulomb or exchange terms —
+  this is the exchange-correlation contribution and never a total nuclear
+  gradient. Absent unless the run asked (the `xc_grid` presence rule beside
+  it), and present on the Kohn-Sham lanes only: a request on `rhf`/`uhf` is
+  refused by name before serialization rather than recorded as absent.
 
 ## 8. The builder-selection axes (schema 35)
 

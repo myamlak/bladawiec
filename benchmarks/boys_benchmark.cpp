@@ -5,11 +5,11 @@
 // x-distribution sampled from real benzene 6-31G(d) primitive pairs
 // (NAI-style x = p*|P-C|^2 with the nuclear-attraction center C; the ERI-style
 // second primitive pair of the design study is not recreated here - the
-// NAI-style values dominate the x-range of interest). The SIMD lanes are
+// NAI-style values dominate the x-range of interest). The grouped entry is
 // measured on region-sorted arrays (the engine pattern); the unsorted
 // penalty is measured by the mixed per-vector kernel in
 // boys_unsorted_simd_benchmark.cpp.
-#include "boys_coefficients.hpp"
+#include "boys/boys_coefficients.hpp"
 #include "qcx/integrals/boys.hpp"
 
 #include <benchmark/benchmark.h>
@@ -148,14 +148,14 @@ void RunBatch(const std::vector<Item>& items, bool f32) {
     {
         for (const auto& item : items)
         {
-            qcx::integrals::BoysBatchF32(item.n, static_cast<float>(item.x), batchF);
+            qcx::integrals::BoysAllOrdersF32(item.n, static_cast<float>(item.x), batchF);
             gSink += batchF[item.n];
         }
     } else
     {
         for (const auto& item : items)
         {
-            qcx::integrals::BoysBatch(item.n, item.x, batchD);
+            qcx::integrals::BoysAllOrders(item.n, item.x, batchD);
             gSink += batchD[item.n];
         }
     }
@@ -231,20 +231,25 @@ static void BmBoysSingleF32Uniform(benchmark::State& state) {
 
 BENCHMARK(BmBoysSingleF32Uniform);
 
-// SIMD lane: region-sorted same-n arrays (the engine pattern). The unsorted
-// mixed variant measured a 2.3x divergence penalty in the design study.
+// The many-argument entry on a region-sorted stream (the engine pattern). The
+// regions are ordered intervals, so A ++ B ++ C is non-decreasing and the
+// sorted-arguments overload states that property and skips the sort the general
+// call would pay for. The unsorted mixed variant measured a 2.3x divergence
+// penalty in the design study.
 namespace {
 
-struct SimdInputs {
-    std::vector<double> xA, xB, xC;
-    std::vector<double> outA, outB, outC;
+struct GroupedInputs {
+    std::vector<double> sorted; // region A ++ region B ++ region C: non-decreasing
+    std::vector<double> out;
+    std::size_t count = 0;
 };
 
-SimdInputs BuildSimdInputs(int n) {
-    SimdInputs s;
-    s.xA.reserve(kInputCount);
-    s.xB.reserve(kInputCount);
-    s.xC.reserve(kInputCount);
+GroupedInputs BuildGroupedInputs(int n) {
+    GroupedInputs s;
+    std::vector<double> xA, xB, xC;
+    xA.reserve(kInputCount);
+    xB.reserve(kInputCount);
+    xC.reserve(kInputCount);
     std::mt19937_64 rng(44);
     std::uniform_real_distribution<double> xd(1e-4, 60.0);
 
@@ -254,30 +259,32 @@ SimdInputs BuildSimdInputs(int n) {
 
         if (x < qcx::integrals::detail::kX0)
         {
-            s.xA.push_back(x);
+            xA.push_back(x);
         } else if (x < qcx::integrals::detail::kX1)
         {
-            s.xB.push_back(x);
+            xB.push_back(x);
         } else
         {
-            s.xC.push_back(x);
+            xC.push_back(x);
         }
     }
 
-    s.outA.resize(s.xA.size());
-    s.outB.resize(s.xB.size() * static_cast<std::size_t>(n + 1));
-    s.outC.resize(s.xC.size());
+    s.sorted = xA;
+    s.sorted.insert(s.sorted.end(), xB.begin(), xB.end());
+    s.sorted.insert(s.sorted.end(), xC.begin(), xC.end());
+    s.count = s.sorted.size();
+    s.out.assign(s.count * static_cast<std::size_t>(n + 1), 0.0);
     return s;
 }
 
-SimdInputs gSimd = BuildSimdInputs(8);
+GroupedInputs gGrouped = BuildGroupedInputs(8);
 
 } // namespace
 
-static void BmBoysSimdSortedN8(benchmark::State& state) {
+static void BmBoysAllNSortedN8(benchmark::State& state) {
     if (!qcx::integrals::BoysAvx2Available())
     {
-        state.SkipWithError("AVX2 required for the SIMD lanes");
+        state.SkipWithError("AVX2 required for the grouped entry's vector lane");
         return;
     }
 
@@ -286,18 +293,18 @@ static void BmBoysSimdSortedN8(benchmark::State& state) {
     for (auto _ : state) // NOLINT(clang-analyzer-deadcode.DeadStores): the GoogleBenchmark loop
                          // variable is deliberately unused.
     {
-        qcx::integrals::BoysRegionASimd(n, gSimd.xA.data(), gSimd.outA.data(), gSimd.xA.size());
-        qcx::integrals::BoysRegionBSimd(n, gSimd.xB.data(), gSimd.outB.data(), gSimd.xB.size());
-        qcx::integrals::BoysRegionCSimd(n, gSimd.xC.data(), gSimd.outC.data(), gSimd.xC.size());
-        benchmark::DoNotOptimize(gSimd.outA.data());
-        benchmark::DoNotOptimize(gSimd.outB.data());
-        benchmark::DoNotOptimize(gSimd.outC.data());
+        qcx::integrals::BoysAllN(n,
+                                 gGrouped.sorted.data(),
+                                 gGrouped.out.data(),
+                                 gGrouped.count,
+                                 qcx::integrals::BoysSortedArgs{});
+        benchmark::DoNotOptimize(gGrouped.out.data());
     }
 
-    state.SetItemsProcessed(static_cast<int64_t>(kInputCount) * state.iterations());
+    state.SetItemsProcessed(static_cast<int64_t>(gGrouped.count) * state.iterations());
 }
 
-BENCHMARK(BmBoysSimdSortedN8);
+BENCHMARK(BmBoysAllNSortedN8);
 
 #if QcxIntegralsFp16
 // The fp16 lane: F16/Bf16 I/O around the certified fp32 engine (the certified
@@ -324,46 +331,6 @@ void RunBatchHalf(const std::vector<Item>& items) {
         gSink += static_cast<float>(batch[item.n]);
     }
 }
-
-struct SimdInputsF16 {
-    std::vector<qcx::integrals::F16> xA, xB, xC;
-    std::vector<qcx::integrals::F16> outA, outB, outC;
-};
-
-SimdInputsF16 BuildSimdInputsF16(int n) {
-    SimdInputsF16 s;
-    s.xA.reserve(kInputCount);
-    s.xB.reserve(kInputCount);
-    s.xC.reserve(kInputCount);
-    std::mt19937_64 rng(45);
-    std::uniform_real_distribution<float> xd(1e-4f, 60.0f);
-
-    for (std::size_t i = 0; i < kInputCount; ++i)
-    {
-        // Region membership is decided on the fp16-rounded argument (the
-        // value the SIMD kernel sees), not the unrounded draw.
-        const qcx::integrals::F16 x16 = static_cast<qcx::integrals::F16>(xd(rng));
-        const double x = static_cast<double>(x16);
-
-        if (x < qcx::integrals::detail::kX0)
-        {
-            s.xA.push_back(x16);
-        } else if (x < qcx::integrals::detail::kX1)
-        {
-            s.xB.push_back(x16);
-        } else
-        {
-            s.xC.push_back(x16);
-        }
-    }
-
-    s.outA.resize(s.xA.size());
-    s.outB.resize(s.xB.size() * static_cast<std::size_t>(n + 1));
-    s.outC.resize(s.xC.size());
-    return s;
-}
-
-SimdInputsF16 gSimdF16 = BuildSimdInputsF16(8);
 
 } // namespace
 
@@ -397,7 +364,7 @@ static void BmBoysBatchF16Uniform(benchmark::State& state) {
     for (auto _ : state) // NOLINT(clang-analyzer-deadcode.DeadStores): the GoogleBenchmark loop
                          // variable is deliberately unused.
     {
-        RunBatchHalf<qcx::integrals::F16, qcx::integrals::BoysBatchF16>(gUniform);
+        RunBatchHalf<qcx::integrals::F16, qcx::integrals::BoysAllOrdersF16>(gUniform);
         benchmark::DoNotOptimize(gSink);
     }
 
@@ -410,7 +377,7 @@ static void BmBoysBatchF16Molecular(benchmark::State& state) {
     for (auto _ : state) // NOLINT(clang-analyzer-deadcode.DeadStores): the GoogleBenchmark loop
                          // variable is deliberately unused.
     {
-        RunBatchHalf<qcx::integrals::F16, qcx::integrals::BoysBatchF16>(gMolecular);
+        RunBatchHalf<qcx::integrals::F16, qcx::integrals::BoysAllOrdersF16>(gMolecular);
         benchmark::DoNotOptimize(gSink);
     }
 
@@ -436,7 +403,7 @@ static void BmBoysBatchBf16Uniform(benchmark::State& state) {
     for (auto _ : state) // NOLINT(clang-analyzer-deadcode.DeadStores): the GoogleBenchmark loop
                          // variable is deliberately unused.
     {
-        RunBatchHalf<qcx::integrals::Bf16, qcx::integrals::BoysBatchBf16>(gUniform);
+        RunBatchHalf<qcx::integrals::Bf16, qcx::integrals::BoysAllOrdersBf16>(gUniform);
         benchmark::DoNotOptimize(gSink);
     }
 
@@ -444,34 +411,6 @@ static void BmBoysBatchBf16Uniform(benchmark::State& state) {
 }
 
 BENCHMARK(BmBoysBatchBf16Uniform);
-
-static void BmBoysSimdF16SortedN8(benchmark::State& state) {
-    if (!qcx::integrals::BoysAvx2Available())
-    {
-        state.SkipWithError("AVX2 required for the SIMD lanes");
-        return;
-    }
-
-    constexpr int n = 8;
-
-    for (auto _ : state) // NOLINT(clang-analyzer-deadcode.DeadStores): the GoogleBenchmark loop
-                         // variable is deliberately unused.
-    {
-        qcx::integrals::BoysRegionASimdF16(
-            n, gSimdF16.xA.data(), gSimdF16.outA.data(), gSimdF16.xA.size());
-        qcx::integrals::BoysRegionBSimdF16(
-            n, gSimdF16.xB.data(), gSimdF16.outB.data(), gSimdF16.xB.size());
-        qcx::integrals::BoysRegionCSimdF16(
-            n, gSimdF16.xC.data(), gSimdF16.outC.data(), gSimdF16.xC.size());
-        benchmark::DoNotOptimize(gSimdF16.outA.data());
-        benchmark::DoNotOptimize(gSimdF16.outB.data());
-        benchmark::DoNotOptimize(gSimdF16.outC.data());
-    }
-
-    state.SetItemsProcessed(static_cast<int64_t>(kInputCount) * state.iterations());
-}
-
-BENCHMARK(BmBoysSimdF16SortedN8);
 #endif // QcxIntegralsFp16
 
 BENCHMARK_MAIN();

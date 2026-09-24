@@ -131,7 +131,7 @@ not run. Read absence as the statement, not as a missing value.
 | builder | `builder_axes`, `resources_resolved` |
 | SCF | `converged`, `iterations`, `total_energy_hartree`, `electronic_energy_hartree`, `energy_delta_hartree`, `rms_density_delta`, `spin_squared`, `num_removed_overlap_directions` |
 | symmetry | `symmetry`, `symmetry_beta`, `symmetry_blocking` |
-| properties | `populations`, `moments`, `charges`, `esp`, `eddb`, `fukui`, `nalewajski`, `nocv`, `density_at_nuclei`, `qtaim`, `molden` |
+| properties | `populations`, `moments`, `charges`, `esp`, `eddb`, `fukui`, `nalewajski`, `nocv`, `density_at_nuclei`, `qtaim`, `molden`, `xc_gradient` |
 | integrity | `term_counters`, `certified_bound`, `qfmm_model` |
 | timings | `timings_ms` |
 

@@ -1,8 +1,8 @@
 #pragma once
 
 // The Boys seed adapter of the MD engine: the fp64 pipeline consumes
-// BoysBatch directly, the certified fp32 pipeline consumes
-// BoysBatchF32 - whose region-A seeds are computed in double internally,
+// BoysAllOrders directly, the certified fp32 pipeline consumes
+// BoysAllOrdersF32 - whose region-A seeds are computed in double internally,
 // so the amplification-sensitive seeds are safe. The fp32-vs-fp64
 // choice is a per-call precision policy, never a per-quartet branch inside
 // the kernel: the caller's gate decides which pipeline each quartet goes
@@ -22,17 +22,33 @@ template <typename T> inline void MdBoysBatch(int nmax, double x, T* out) noexce
 
     if constexpr (std::is_same_v<T, double>)
     {
-        BoysBatch(nmax, x, out);
+        BoysAllOrders(nmax, x, out);
     } else
     {
         float seeds[1 + qcx::integrals::kMaxBoysOrder];
-        BoysBatchF32(nmax, static_cast<float>(x), seeds);
+        BoysAllOrdersF32(nmax, static_cast<float>(x), seeds);
 
         for (int m = 0; m <= nmax; ++m)
         {
             out[m] = seeds[m];
         }
     }
+}
+
+/// F_0(x)..F_nmax(x) into out, at a run-time-selected tier.
+///
+/// Double only: the relaxed rungs exist for the fp64 pipeline. The fp32
+/// pipeline keeps its own 1e-7 contract with no tier to select, so it has no
+/// entry here. The reference tier is the compile-time default MdBoysBatch
+/// above reaches, so an engine that never selects a tier runs the code it
+/// runs today.
+/// \param tier the tier, a property of this call only
+template <typename T>
+inline void MdBoysBatchAtTier(AccuracyTier tier, int nmax, double x, T* out) noexcept {
+    static_assert(std::is_same_v<T, double>,
+                  "the relaxed tiers are instantiated for the fp64 pipeline only");
+
+    BoysAllOrdersAtTier(tier, nmax, x, out);
 }
 
 } // namespace qcx::integrals::internal

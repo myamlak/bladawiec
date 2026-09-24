@@ -56,8 +56,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input);
 /// unknown element symbol, a missing bundled basis or aux basis, and a
 /// method the driver does not classify as a run path;
 /// kUnimplemented for the not-yet-wired combinations - UHF with any
-/// non-direct builder, ri_jk, the Kohn-Sham methods (no run path folds the
-/// exchange-correlation potential into the Fock build), the guess/method
+/// non-direct builder, ri_jk, the guess/method
 /// combinations the schema documents, SAD beyond Z <= 10, and UHF with
 /// nocv_fragments; kDeviceError from the GPU builder without a device;
 /// kInvalidArgument for an out-of-range nocv_fragments atom index). The

@@ -612,7 +612,7 @@ inline void BuildCenterTable(const MdPrimPair& prim,
     const double dcz = prim.pz - center.z();
     const double x = prim.p * (dcx * dcx + dcy * dcy + dcz * dcz);
     double tmp[1 + kMaxBoysOrder];
-    BoysBatch(order, x, tmp);
+    BoysAllOrders(order, x, tmp);
 
     for (int m = 0; m <= order; ++m)
     {

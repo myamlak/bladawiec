@@ -145,6 +145,7 @@ struct XcKeyPolicy {
     bool takesFunctional = false;
     bool takesScreeningTolerance = false;
     bool takesXcGrid = false;
+    bool takesXcGradient = false;
 };
 
 std::optional<XcKeyPolicy> XcKeyPolicyFor(MethodType method) {
@@ -153,20 +154,22 @@ std::optional<XcKeyPolicy> XcKeyPolicyFor(MethodType method) {
     // The Hartree-Fock lanes take no key of this family. A `functional` on one
     // of them means the author expected a DFT run, and running HF under that
     // label is the failure the kRks/kUks refusal exists to prevent; the
-    // tolerance and the `[grid]` block are refused with it so all three share
-    // one rule rather than presenting a reader with an arbitrary asymmetry
-    // (the grid belongs to the family: an rhf/uhf run that wrote a
-    // quadrature would silently run the engine's default one, and the record's
-    // `xc_grid` - which exists precisely so a grid is never unnamed - would be
-    // absent exactly where the file had asked). Refused, never ignored (the
-    // no-silent-substitution posture).
+    // tolerance, the `[grid]` block and the `[properties] xc_gradient` request
+    // are refused with it so all four share one rule rather than presenting a
+    // reader with an arbitrary asymmetry (the grid belongs to the family: an
+    // rhf/uhf run that wrote a quadrature would silently run the engine's
+    // default one, and the record's `xc_grid` - which exists precisely so a
+    // grid is never unnamed - would be absent exactly where the file had
+    // asked; the gradient is the same term's derivative, and there is no
+    // functional on these lanes for it to differentiate). Refused, never
+    // ignored (the no-silent-substitution posture).
     case MethodType::kRhf:
     case MethodType::kUhf:
-        return XcKeyPolicy{false, false, false};
+        return XcKeyPolicy{false, false, false, false};
 
     case MethodType::kRks:
     case MethodType::kUks:
-        return XcKeyPolicy{true, true, true};
+        return XcKeyPolicy{true, true, true, true};
     }
 
     // A value no enumerator names (a programmatic caller's out-of-range cast):
@@ -294,6 +297,20 @@ ValidationReport ValidateInput(const RunInput& input) {
             "[grid]: " + std::string(MethodWord(input.method.method)) +
             " does not take an XC integration grid (no density functional is integrated, so "
             "nothing is evaluated on a grid; the Kohn-Sham methods rks and uks do)");
+    }
+
+    // `[properties] xc_gradient` is the same family's fourth key: the quantity
+    // it asks for is the derivative of the exchange-correlation energy the
+    // Kohn-Sham lanes integrate, so a run that names no functional has nothing
+    // to differentiate. Refused here rather than ignored for the reason above,
+    // and refused HERE rather than in the driver: this is the one place a
+    // method word's Kohn-Sham key policy is decided.
+    if (xcKeys.has_value() && !xcKeys->takesXcGradient && input.properties.xcGradient)
+    {
+        report.issues.push_back(
+            "properties.xc_gradient: " + std::string(MethodWord(input.method.method)) +
+            " does not take an exchange-correlation gradient (no density functional is "
+            "differentiated; the Kohn-Sham methods rks and uks do)");
     }
 
     if (auto issue = UnresolvedBasisIssue(input.basis.orbital); issue.has_value())

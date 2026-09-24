@@ -539,11 +539,13 @@ accuracy = "kNormal"
 [properties]
 density_at_nuclei = true
 qtaim = true
+xc_gradient = true
 )");
     ASSERT_TRUE(input.has_value());
 
     EXPECT_TRUE(input->properties.densityAtNuclei);
     EXPECT_TRUE(input->properties.qtaim);
+    EXPECT_TRUE(input->properties.xcGradient);
     EXPECT_FALSE(input->properties.hirshfeld);
     EXPECT_FALSE(input->properties.voronoi);
     EXPECT_FALSE(input->properties.eddb);
@@ -1526,6 +1528,10 @@ TEST(RunInputParseTest, RejectsWrongTypedScalarsInsteadOfSilentDefaults) {
          "[method]\ntype = \"rhf\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\n"
          "[properties]\nqtaim = \"yes\"\n",
          "properties.qtaim"},
+        {"[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+         "[method]\ntype = \"rhf\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\n"
+         "[properties]\nxc_gradient = \"yes\"\n",
+         "properties.xc_gradient"},
         // guess.type is a string; the wrong type must not fall back to core.
         {"[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
          "[method]\ntype = \"rhf\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\n"

@@ -186,6 +186,46 @@ struct RunMolden {
     std::string file; ///< The written file's path, as given in the input.
 };
 
+/// The FIXED-DENSITY exchange-correlation contribution to the nuclear
+/// gradient (schema 40), serialized as `xc_gradient`.
+///
+/// **What the block is, and what it is deliberately not.** It is the
+/// derivative of the exchange-correlation energy the run integrated - the
+/// energy the `xc_grid` block beside it describes - with respect to the nuclear
+/// positions, at the density matrix the run converged to and on the grid it
+/// integrated over. The density is HELD FIXED, so the density's own response to
+/// a displaced nucleus is not in it: that term belongs to the self-consistent
+/// field's analytic derivative and to the response layer, and it is not here.
+/// Neither are the one-electron, Coulomb or exchange terms. So the block is a
+/// CONTRIBUTION and its keys say so; it is never a total nuclear gradient, and
+/// nothing about it may be presented as one.
+///
+/// **Why a reader can use it.** The term it carries has no other home: the run's
+/// energy is a number with the whole gradient implicit in it, and before this
+/// key no input could ask for any part of that gradient, so the walk this block
+/// reports had no producer on a real run at all.
+///
+/// **Presence.** Absent unless the run asked (`[properties] xc_gradient`), so a
+/// record without the block states that no walk ran and not that the
+/// contribution was zero - the null-honesty rule the opt-in blocks beside it
+/// follow. It is written on the Kohn-Sham lanes only, because it is the
+/// derivative of a functional and an rhf/uhf run names none; a request on those
+/// lanes is refused by the validator rather than recorded as absent.
+/// \ingroup qcx-io
+struct RunXcGradient {
+    /// dE_xc/dR at fixed density, 3N entries in Hartree/Bohr, atom-major:
+    /// entry 3*i + d is direction d of atom i, in the molecule's canonical
+    /// atom order - the order every other per-atom block reads in, which is
+    /// the renumbering the molecule applies on construction and not
+    /// necessarily the order `[molecule] atoms` was written in.
+    std::vector<double> gradient;
+    /// The exchange-correlation energy this walk integrated, Hartree - the same
+    /// quantity the grid's energy path accumulated, reported here so the
+    /// derivative is tied to the energy it belongs to rather than to an
+    /// unstated one.
+    double energyHartree = 0.0;
+};
+
 /// The properties of one run, plain data so io stays free of Eigen (the
 /// driver converts from the properties module's matrix types). The
 /// population/moment block is always computed; the charge blocks
@@ -203,6 +243,7 @@ struct RunProperties {
     std::optional<RunDensityAtNuclei> densityAtNuclei; ///< Density at nuclei, opt-in.
     std::optional<RunQtaim> qtaim; ///< Bader QTAIM, opt-in.
     std::optional<RunMolden> molden; ///< Molden export, opt-in.
+    std::optional<RunXcGradient> xcGradient; ///< XC gradient contribution, opt-in.
 };
 
 /// One score row of the coefficients record: a candidate's MAD score
@@ -1551,7 +1592,19 @@ struct RunResult {
     /// is refused by name before serialization, so a document carrying this key
     /// is a document whose kernels executed where the input said they must - the
     /// same reading the `eri_store` block's refusal sentence states one rule over.
-    static constexpr int kSchemaVersion = 39;
+    ///
+    /// Schema 40 ADDS `properties.xc_gradient` (RunXcGradient): the fixed-density
+    /// exchange-correlation contribution to the nuclear gradient, `gradient` (3N
+    /// Hartree/Bohr, atom-major) and the `energy_hartree` the walk integrated. A
+    /// key added, so the number moves with it - and it is a key a consumer must
+    /// notice for a reason beyond its presence: it is the first record member
+    /// that is a DERIVATIVE of an energy the same document carries, so a consumer
+    /// comparing records across the schema change is comparing a document with a
+    /// gradient term against one that could not carry any. The block is absent
+    /// unless the run asked for it (the `xc_grid` presence rule beside it), and
+    /// it is present on the Kohn-Sham lanes only - a request on rhf/uhf is
+    /// refused before serialization rather than recorded as absent.
+    static constexpr int kSchemaVersion = 40;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.

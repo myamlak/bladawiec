@@ -26,13 +26,13 @@ set(QCX_INTEGRALS_FP16 ON CACHE BOOL
     "Build the certified fp16/bf16 Boys lane (F16/Bf16 I/O over the fp32 engine)")
 
 # The Boys-function kernel is consumed from the boys submodule
-# (external/boys, gitlink pinned at v1.0.0; upstream-first -
+# (external/boys, gitlink pinned at the Boys 2.0 release; upstream-first -
 # the public repo is the slice's source of truth, the monorepo bumps the
 # gitlink per release, never edits the submodule). The kernel compiles from
 # the submodule's sources into qcx-integrals; the qcx/integrals/boys.hpp and
 # f16.hpp headers are forwarding shims. The generated kernel files
-# (src/boys_coefficients.hpp, tests/data/boys_reference.csv) live in the
-# submodule and are pinned by boys-reference-regeneration below - the
+# (include/boys/boys_coefficients.hpp, tests/data/boys_reference.csv) live in
+# the submodule and are pinned by boys-reference-regeneration below - the
 # monorepo never regenerates or edits them.
 set(_qcxBoysExt "${CMAKE_SOURCE_DIR}/external/boys")
 
@@ -53,6 +53,7 @@ add_library(qcx-integrals
   src/ri_engine_chunk.cpp
   src/ri_occ_k.cpp
   src/ri_full_fock.cpp
+  src/ri_gradient.cpp
   src/screening.cpp
   src/shell_pairs.cpp
   src/symmetry_reduction.cpp
@@ -68,8 +69,7 @@ target_include_directories(qcx-integrals PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${_qcxBoysExt}/include)
 target_include_directories(qcx-integrals PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${_qcxBoysExt}/src)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(qcx-integrals PUBLIC cxx_std_23)
 # The public headers expose Molecule/BasisSet/Tensor/Result types, so the
 # consumers need those include paths too; Eigen stays implementation-only
@@ -246,6 +246,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/symmetry_parity_refusal_test.cpp
         tests/screening_test.cpp
         tests/screening_derivative_test.cpp
+        tests/screening_pair_bounds_test.cpp
         tests/screening_quartet_derivative_test.cpp
         tests/eri_batch_test.cpp
         tests/eri_cache_test.cpp
@@ -258,6 +259,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/incremental_fock_test.cpp
         tests/ri_engine_test.cpp
         tests/ri_engine_chunk_test.cpp
+        tests/ri_coulomb_gradient_test.cpp
         tests/ri_orbit_test.cpp
         tests/ri_occ_k_test.cpp
         tests/ri_full_fock_test.cpp
@@ -283,15 +285,15 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     # qcx/linalg/batched_ops.hpp through internal/fock_screen.hpp (the same
     # seam the CUDA-md target carries).
     # The unfolded reference path (tests/unfolded_reference.hpp) consumes
-    # the internal headers - test-only access. ${_qcxBoysExt}/src resolves
-    # the retained boys tests' direct includes of the submodule's internal
-    # kernel headers (boys_coefficients.hpp / boys_impl.hpp /
-    # boys_effective_degrees.hpp), and QcxBoysDataDir points at the
-    # submodule's committed reference grid (the retired monorepo copy was
-    # byte-identical - the CSV lives in the submodule now).
+    # the internal headers - test-only access. The retained boys tests'
+    # direct includes of the submodule's shipped kernel headers
+    # (boys/boys_coefficients.hpp / boys/boys_impl.hpp /
+    # boys/boys_effective_degrees.hpp) resolve through the PUBLIC
+    # ${_qcxBoysExt}/include qcx-integrals publishes, and QcxBoysDataDir
+    # points at the submodule's committed reference grid (the retired
+    # monorepo copy was byte-identical - the CSV lives in the submodule now).
     target_include_directories(qcx-integrals-tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${_qcxBoysExt}/src)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_definitions(qcx-integrals-tests PRIVATE
         QcxBoysDataDir="${_qcxBoysExt}/tests/data"
         QcxIntegralsDataDir="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
@@ -392,7 +394,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         add_test(NAME boys-reference-regeneration
                  COMMAND ${Python3_EXECUTABLE}
                      ${_qcxBoysExt}/tools/gen_boys_coefficients.py --check
-                     --header ${_qcxBoysExt}/src/boys_coefficients.hpp
+                     --header ${_qcxBoysExt}/include/boys/boys_coefficients.hpp
                      --reference ${_qcxBoysExt}/tests/data/boys_reference.csv)
         # The H2/STO-3G s-only grid has its own generator (the older
         # gen_integrals_reference.py) - without its own check it silently
@@ -425,8 +427,6 @@ if (QCX_ENABLE_CUDA)
         ${_qcxBoysExt}/src/boys_cuda.cu)
     target_include_directories(qcx-integrals-cuda PUBLIC
         ${_qcxBoysExt}/include)
-    target_include_directories(qcx-integrals-cuda PRIVATE
-        ${_qcxBoysExt}/src)
     target_link_libraries(qcx-integrals-cuda
         PUBLIC qcx-integrals)
     # CUDA-safe list only: qcx C++23 headers would poison the nvcc TUs.
@@ -624,7 +624,6 @@ if (QCX_ENABLE_CUDA)
     target_include_directories(qcx-integrals-cuda-md PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_include_directories(qcx-integrals-cuda-md PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${_qcxBoysExt}/src
         ${CMAKE_CURRENT_BINARY_DIR})
     target_compile_features(qcx-integrals-cuda-md PUBLIC cxx_std_23)
     target_link_libraries(qcx-integrals-cuda-md
