@@ -184,6 +184,7 @@ qcx::Result<std::vector<double>> MeasuredDiagonalBounds(const qcx::molecule::Mol
                                                         const qcx::basisset::BasisSet& basis,
                                                         const ShellPairList& pairList) {
     std::vector<ShellQuartet> diagonal;
+    diagonal.reserve(pairList.pairs.size());
 
     for (const ShellPairIndex& pair : pairList.pairs)
     {
@@ -244,6 +245,7 @@ std::vector<std::size_t> QuartetCoordinates(const std::array<std::size_t, 4>& at
 /// \param storage The displaced shells; must outlive the result.
 /// \returns The displaced quartet.
 MdEriDerivativeQuartet DisplacedQuartet(const MdEriDerivativeQuartet& quartet,
+                                        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                                         std::size_t flatCoordinate,
                                         double delta,
                                         std::array<MdShellInput, 4>& storage) {

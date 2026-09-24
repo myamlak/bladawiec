@@ -168,7 +168,10 @@ qcx::Result<Eigen::VectorXd> MetricInverseSolve(const Eigen::MatrixXd& metric,
 /// \param offset The shell's first auxiliary function.
 /// \param nFuncs The shell's function count.
 /// \returns The largest |w| over the shell.
-double AuxiliaryWeightMax(const Eigen::VectorXd& w, std::size_t offset, std::size_t nFuncs) {
+double AuxiliaryWeightMax(const Eigen::VectorXd& w,
+                          // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): offset, count.
+                          std::size_t offset,
+                          std::size_t nFuncs) {
     double largest = 0.0;
 
     for (std::size_t f = 0; f < nFuncs; ++f)
@@ -247,6 +250,7 @@ qcx::Result<PairBoundTable> BuildPairBoundTable(const qcx::molecule::Molecule& m
 /// \param weights The coefficient that multiplies each block element.
 /// \param gradient Out: the 3N gradient.
 void AccumulateQuartetGradient(const GradientQuartet& built,
+                               // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): blocks.
                                std::span<const double> derivatives,
                                std::span<const double> weights,
                                std::span<double> gradient) {

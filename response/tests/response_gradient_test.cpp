@@ -172,6 +172,7 @@ double NuclearRepulsionEnergy(const Geometry& geometry) {
 /// \param direction The Cartesian axis to displace along.
 /// \returns dE_nuc/dR, in Hartree/Bohr.
 double NuclearRepulsionDerivative(const Geometry& geometry,
+                                  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): atom.
                                   std::size_t atom,
                                   std::size_t direction) {
     const std::array<double, 3> moved = geometry.Position(atom);
@@ -252,7 +253,12 @@ qcx::Result<DerivativeData> BuildDerivativeData(const Geometry& geometry,
     data.core = (ToMatrix(*plusKinetic) + ToMatrix(*plusNuclear) - ToMatrix(*minusKinetic) -
                  ToMatrix(*minusNuclear)) *
                 inverseStep;
-    data.eri = Eigen::MatrixXd::Zero(numBasis * numBasis, numBasis * numBasis);
+    // The ERI supermatrix is nBasis^2 on a side, named once in Eigen's own
+    // index type: numBasis is an Eigen dimension widened into std::size_t just
+    // above, so the product is narrowed back to the type it came from rather
+    // than converted implicitly at the call.
+    const Eigen::Index eriSide = static_cast<Eigen::Index>(numBasis * numBasis);
+    data.eri = Eigen::MatrixXd::Zero(eriSide, eriSide);
 
     for (std::size_t mu = 0; mu < numBasis; ++mu)
     {
@@ -303,6 +309,7 @@ struct ReferenceState {
     /// \param atom The atom index.
     /// \param direction The Cartesian axis.
     /// \returns The displacement naming that coordinate.
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the displaced atom, then its axis.
     static NuclearDisplacement DisplacementOf(std::size_t atom, std::size_t direction) {
         NuclearDisplacement displacement;
         displacement.atom = atom;
