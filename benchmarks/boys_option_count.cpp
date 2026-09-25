@@ -18,7 +18,7 @@
 // values, and the checksum that proves the values came back - and no time at
 // all. The counters are the platform's, read from outside the process:
 //
-//     perf stat -e instructions:u,uops_retired.retire_slots:u \
+//     perf stat -e instructions:u,uops_retired.retire_slots:u
 //         qcx-bench-boys-option-count --option=tagged-fp64 --reps=64
 //
 // One option per run, because a process's own count carries its start-up, its
