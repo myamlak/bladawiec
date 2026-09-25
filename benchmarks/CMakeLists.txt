@@ -72,6 +72,24 @@ target_precompile_headers(qcx-bench-boys-option-count PRIVATE
     <qcx/integrals/boys.hpp>)
 qcx_apply_blas_runtime(qcx-bench-boys-option-count)
 
+# The option-cost probe: what the same options cost on the platform that
+# ships, measured from outside the process that runs them. The instrument is
+# QueryProcessCycleTime - a process's cycle count accrues only while one of its
+# threads runs, so a pass that is descheduled contributes nothing to it, which
+# is the term a wall clock cannot remove. It launches the option-count driver
+# as a child, one option per process, and takes the per-pass figure from two
+# child runs at two repetition counts. Windows-only: the instrument is a Win32
+# call and has no counterpart the other leg could be given.
+if (WIN32)
+    add_executable(qcx-bench-boys-option-cost boys_option_cost_windows.cpp)
+    target_compile_features(qcx-bench-boys-option-cost PRIVATE cxx_std_23)
+    target_compile_definitions(qcx-bench-boys-option-cost PRIVATE NOMINMAX)
+else()
+    message(STATUS "qcx-bench-boys-option-cost: non-Windows target - QueryProcessCycleTime "
+        "is the instrument and it has no counterpart here; the option-count driver still "
+        "builds and is counted from outside with the platform's own counters")
+endif()
+
 # The matched-accuracy throughput comparator: the qcx BoysAllOrders ladder vs
 # libint2's FmEval_Chebyshev7<double> ladder on the identical benchmark input
 # streams. The comparator set was resolved to libint2
