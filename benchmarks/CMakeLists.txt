@@ -59,6 +59,19 @@ else()
     message(STATUS "qcx-bench-boys-unsorted-simd: non-x86-64 target - its AVX2 lane is not built")
 endif()
 
+# The option-count probe: the fp64 evaluation options' work, counted from the
+# platform's instruction and retirement counters rather than from a clock, on
+# the option probe's own workload. Plain main(), one option per run, no Google
+# Benchmark: a count is read from outside the process and a per-pass figure is
+# the difference of two runs at two repetition counts.
+add_executable(qcx-bench-boys-option-count boys_option_count.cpp)
+target_compile_features(qcx-bench-boys-option-count PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-boys-option-count PRIVATE NOMINMAX)
+target_link_libraries(qcx-bench-boys-option-count PRIVATE qcx-integrals)
+target_precompile_headers(qcx-bench-boys-option-count PRIVATE
+    <qcx/integrals/boys.hpp>)
+qcx_apply_blas_runtime(qcx-bench-boys-option-count)
+
 # The matched-accuracy throughput comparator: the qcx BoysAllOrders ladder vs
 # libint2's FmEval_Chebyshev7<double> ladder on the identical benchmark input
 # streams. The comparator set was resolved to libint2
