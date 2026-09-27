@@ -45,8 +45,8 @@ using boys::BoysAllNWorkspaceSize;
 /// **The choice was measured, on the development machine, and it is that
 /// machine's.** 12 logical processors with the AVX2+FMA tier present, MSVC 14.51
 /// release build of the submodule at the revision this tree pins, the library's
-/// option probe (`boys::RunOptionProbe`, whose entry the pinned revision
-/// predates), 16384 arguments log-uniform on [1e-3, 40] with each argument's
+/// option probe (`boys::RunOptionProbe`), 16384 arguments log-uniform on
+/// [1e-3, 40] with each argument's
 /// highest order drawn as the sum of two shell angular momenta over 0..16. Over
 /// eleven runs in which all three shapes produced a figure, this entry was the
 /// fastest in ten, by 1.0% to 6.9% over the next.
@@ -71,12 +71,12 @@ using boys::BoysAllNWorkspaceSize;
 /// spread across its admitted passes, and an idle machine's clock state differs
 /// from pass to pass.
 ///
-/// Several options the library exposes are outside this choice because this tree
-/// cannot reach them, and no default among them is expressed here. The relaxed
+/// Several options the library exposes are not defaulted here. The relaxed
 /// accuracy tiers are the run-time selection below and trade accuracy for speed.
-/// The fit route, the evaluation scheme, the interval granularity and the
-/// packing axis are a later revision's option space; the revision pinned here
-/// predates it, so this tree names none of them. The multiply-add route is a
+/// The fit route, the evaluation scheme, the engine budget and the packing axis
+/// are the library's compile-time option space: this tree compiles and links
+/// every unit that serves them, and expresses no default among them, so the
+/// calls above take the library's own. The multiply-add route is a
 /// property of the build rather than of a call, and this build's arithmetic does
 /// not contract a bare product-plus-add. The CUDA lane the same probe measured
 /// fastest is not consumed here at all: the CUDA engine evaluates Boys from the

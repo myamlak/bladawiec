@@ -26,7 +26,7 @@ set(QCX_INTEGRALS_FP16 ON CACHE BOOL
     "Build the certified fp16/bf16 Boys lane (F16/Bf16 I/O over the fp32 engine)")
 
 # The Boys-function kernel is consumed from the boys submodule
-# (external/boys, gitlink pinned at the Boys 2.0 release; upstream-first -
+# (external/boys; upstream-first -
 # the public repo is the slice's source of truth, the monorepo bumps the
 # gitlink per release, never edits the submodule). The kernel compiles from
 # the submodule's sources into qcx-integrals; the qcx/integrals/boys.hpp and
@@ -36,9 +36,21 @@ set(QCX_INTEGRALS_FP16 ON CACHE BOOL
 # monorepo never regenerates or edits them.
 set(_qcxBoysExt "${CMAKE_SOURCE_DIR}/external/boys")
 
+# The kernel's seven translation units, not two. The option space is spread
+# across them - the C surface, the native half lane, the packed axis, the
+# transform, and the option probe that measures which option is fastest on the
+# machine it is called on - and a consumer can only link what this list
+# compiles. Leaving a unit out does not remove the option, it removes the
+# ability to reach it, and it arrives at the linker as an undefined symbol
+# rather than as an error here.
 add_library(qcx-integrals
   ${_qcxBoysExt}/src/boys.cpp
+  ${_qcxBoysExt}/src/boys_c.cpp
+  ${_qcxBoysExt}/src/boys_half_native.cpp
+  ${_qcxBoysExt}/src/boys_orders_simd.cpp
+  ${_qcxBoysExt}/src/boys_probe.cpp
   ${_qcxBoysExt}/src/boys_simd.cpp
+  ${_qcxBoysExt}/src/boys_transform.cpp
   src/one_electron.cpp
   src/two_electron.cpp
   src/eri_batch.cpp
@@ -102,11 +114,13 @@ if (QCX_ARCH_X86_64)
     if (MSVC)
         # /arch:AVX2 also enables the F16C intrinsics the fp16 lane uses.
         set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+        set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
         set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
     else()
         # -mf16c for the fp16 lane's F16C load/store (GCC does not imply it via
         # -mavx2, unlike MSVC's /arch:AVX2).
         set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
+        set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
         # -ffp-contract=off is LOAD-BEARING here, not hygiene (2026-09-13). The
         # TU's own BIT-IDENTITY section contracts this tier to the SCALAR kernels
         # the class TUs instantiate (no /arch flag), and simd_micro_gemm_test.cpp
@@ -120,6 +134,7 @@ if (QCX_ARCH_X86_64)
         set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-ffp-contract=off")
     endif()
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
     # Non-x86-64: no AVX2/FMA/F16C option exists to set, and neither TU defines
@@ -129,6 +144,7 @@ else()
     # and refuses to guess where the compiler is not x86-64. The PCH skip goes
     # with the flag it exists for.
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_DEFINITIONS "BOYS_SIMD_X86=0")
+    set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_DEFINITIONS "BOYS_SIMD_X86=0")
     message(STATUS "qcx-integrals: non-x86-64 target - the AVX2 micro-GEMM tier is excluded")
 endif()
 
