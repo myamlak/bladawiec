@@ -87,7 +87,8 @@ using boys::BoysAllNWorkspaceSize;
 ///
 /// **The choice was measured on the development machine, and it is that
 /// machine's.** 12 logical processors with the AVX2+FMA tier present, MSVC 14.51
-/// release build of the submodule at the revision this tree pins, the library's
+/// release build of the submodule at the revision the measurement was taken at,
+/// the library's
 /// option probe (`boys::RunOptionProbe`, the CPU-lane probe), 16384 arguments
 /// log-uniform on [1e-3, 40] with each argument's highest order drawn as the
 /// sum of two shell angular momenta over 0..16. Over eleven runs in which all
