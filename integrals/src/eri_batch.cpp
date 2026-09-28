@@ -92,6 +92,7 @@ qcx::Result<EriBatch> ComputeEriBatch(const qcx::molecule::Molecule& molecule,
     for (internal::MdClassBatch& batch : *batches)
     {
         batch.outF64 = result.values.data() + base;
+        batch.boysTier = options.boysTier;
 
         for (const internal::MdQuartetTask& task : batch.tasks)
         {

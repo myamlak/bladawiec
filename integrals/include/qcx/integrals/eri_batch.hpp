@@ -22,6 +22,7 @@
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/error.hpp"
 #include "qcx/integrals/accuracy.hpp"
+#include "qcx/integrals/boys.hpp"
 #include "qcx/integrals/shell_pairs.hpp"
 #include "qcx/molecule/molecule.hpp"
 
@@ -81,6 +82,29 @@ struct EriBatchOptions {
     AccuracyPreset accuracy =
         AccuracyPreset::kNormal; ///< Screening preset (future Fock consumers).
     std::size_t maxBatchBytes = 512 * 1024 * 1024; ///< Per-class batch cap (512 MB).
+    /// The Boys rung the fp64 entry seeds its ladder at: the library's
+    /// run-time accuracy tier, which is the one lever this framework offers
+    /// that trades the kernel's own accuracy for speed.
+    ///
+    /// The default is the reference rung, which is the certified lane exactly,
+    /// so a caller that does not name one gets the values this entry has
+    /// always delivered. A relaxed rung multiplies the fp64 lane's per-value
+    /// Boys bound by m - the library releases rungs at 64, 256, 1024, 4096,
+    /// 16384 and 65536, against a reference of 5.5e-14 - and the recursion
+    /// built on the seeded ladder amplifies that into the integrals.
+    ///
+    /// **This framework publishes no amplification figure for the fp64 lane**,
+    /// and so states the rung rather than a bound on the values: a caller that
+    /// needs a bound on the integrals it receives must measure one at the rung
+    /// it selects. The rung is also not a cosmetic speed knob on a batch that
+    /// something downstream is comparing against a certified reference - the
+    /// fp64 lane is that reference, which is why no Fock build selects a rung
+    /// here.
+    ///
+    /// The certified entry runs the fp32 pipeline, whose own 1e-7 contract is
+    /// the only accuracy it has; it has no rung to select and reads none of
+    /// this field.
+    AccuracyTier boysTier = AccuracyTier::kReference;
 };
 
 /// One fp64 batch result: values packed per the layout contract, and the

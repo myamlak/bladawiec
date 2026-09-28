@@ -22,6 +22,8 @@
 #include "shellset_fixture.hpp"
 #include "unfolded_reference.hpp"
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -173,6 +175,91 @@ TEST(EriBatchTest, CertifiedBoundsHoldOnH2) {
     const double deviation = std::abs(static_cast<double>(certified->values[0]) - fp64->values[0]);
     EXPECT_LE(deviation, certified->errorBounds[0]);
     EXPECT_GT(certified->errorBounds[0], 0.0);
+}
+
+TEST(EriBatchTest, TheBoysRungIsReachableAndTheDefaultIsUnchanged) {
+    auto basis = qcx::testing::MakeSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = qcx::testing::MakeH2Sto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+
+    const std::vector<qcx::integrals::ShellQuartet> quartets = {
+        {0, 0, 0, 0}, {0, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}};
+
+    qcx::integrals::EriBatchOptions referenceOptions;
+    referenceOptions.boysTier = qcx::integrals::AccuracyTier::kReference;
+    auto reference = qcx::integrals::ComputeEriBatch(*molecule, *basis, quartets, referenceOptions);
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    // A caller that names no rung gets the reference lane bit for bit: the
+    // option's default is the code this entry has always run, and a default
+    // that drifted would be a silent accuracy change for every existing
+    // consumer.
+    auto byDefault = qcx::integrals::ComputeEriBatch(*molecule, *basis, quartets);
+    ASSERT_TRUE(byDefault.has_value()) << byDefault.error().message;
+    ASSERT_EQ(byDefault->values.size(), reference->values.size());
+
+    for (std::size_t i = 0; i < reference->values.size(); ++i)
+    {
+        EXPECT_EQ(std::bit_cast<std::uint64_t>(byDefault->values[i]),
+                  std::bit_cast<std::uint64_t>(reference->values[i]))
+            << "the default rung moved element " << i;
+    }
+
+    // The certified fp32 lane's own published bound for the same quartets -
+    // the scale a relaxed fp64 rung must stay far inside to be worth calling
+    // itself the more accurate lane. The fixture is s-only, so each quartet's
+    // packed block is one value and the element index is the quartet index.
+    auto certified = qcx::integrals::ComputeEriBatchCertified(*molecule, *basis, quartets);
+    ASSERT_TRUE(certified.has_value()) << certified.error().message;
+    ASSERT_EQ(reference->values.size(), quartets.size());
+    ASSERT_EQ(certified->errorBounds.size(), quartets.size());
+
+    const std::array<qcx::integrals::AccuracyTier, 6> released = {
+        qcx::integrals::AccuracyTier::kRelaxed64,
+        qcx::integrals::AccuracyTier::kRelaxed256,
+        qcx::integrals::AccuracyTier::kRelaxed1024,
+        qcx::integrals::AccuracyTier::kRelaxed4096,
+        qcx::integrals::AccuracyTier::kRelaxed16384,
+        qcx::integrals::AccuracyTier::kRelaxed65536};
+
+    for (const qcx::integrals::AccuracyTier tier : released)
+    {
+        qcx::integrals::EriBatchOptions options;
+        options.boysTier = tier;
+        auto run = qcx::integrals::ComputeEriBatch(*molecule, *basis, quartets, options);
+        const double m = qcx::integrals::AccuracyMultiplier(tier);
+        ASSERT_TRUE(run.has_value()) << "m = " << m << ": " << run.error().message;
+        ASSERT_EQ(run->values.size(), reference->values.size()) << "m = " << m;
+
+        double worst = 0.0;
+
+        for (std::size_t i = 0; i < reference->values.size(); ++i)
+        {
+            ASSERT_TRUE(std::isfinite(run->values[i])) << "m = " << m << " element " << i;
+            const double delta = std::abs(run->values[i] - reference->values[i]);
+            worst = std::max(worst, delta);
+
+            // The rung is a loosening of the fp64 lane's own Boys bound, and
+            // the loosest released rung is 65536 x 5.5e-14 = 3.6e-9 - still
+            // two orders inside the certified fp32 lane's published bound for
+            // the same quartet. A rung that broke the integrals rather than
+            // relaxing them would not fit under it.
+            EXPECT_LE(delta, certified->errorBounds[i])
+                << "m = " << m << " element " << i << ": the rung left the fp64 lane's "
+                << "neighbourhood of the certified bound";
+        }
+
+        // The option must reach the kernel. An option that is accepted and
+        // ignored is the failure this pins, so the loosest rung is required to
+        // move at least one value.
+        if (tier == qcx::integrals::AccuracyTier::kRelaxed65536)
+        {
+            EXPECT_GT(worst, 0.0)
+                << "the loosest released rung reproduced the reference lane exactly: the rung "
+                << "is not reaching the fp64 seed";
+        }
+    }
 }
 
 TEST(EriBatchTest, DenseMatchesTheSOnlyCsvAndIsEightFoldBitExact) {

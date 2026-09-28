@@ -19,8 +19,12 @@ qcx_apply_blas_runtime(qcx-bench-molecule)
 # The benchmark partitions inputs with the
 # exact region boundaries, so it includes the generated detail header.
 add_executable(qcx-bench-boys boys_benchmark.cpp)
-# The Boys kernel lives in the boys submodule; the table constants the driver
-# reads are part of its published surface (external/boys/include/boys/).
+# The Boys kernel lives in the boys submodule. The region boundaries this
+# driver partitions by are that library's generated coefficients header - the
+# one it marks Not API, and the same read the CUDA engine's own table builder
+# makes. This target reaches past the published surface knowingly, which is
+# why the include path is stated here rather than implied: a revision that
+# moves those names breaks this target instead of being absorbed silently.
 target_include_directories(qcx-bench-boys PRIVATE ${CMAKE_SOURCE_DIR}/external/boys/include)
 target_compile_features(qcx-bench-boys PRIVATE cxx_std_23)
 target_link_libraries(qcx-bench-boys PRIVATE qcx-integrals benchmark::benchmark)
