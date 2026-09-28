@@ -450,8 +450,12 @@ if (QCX_ENABLE_CUDA)
         <cuda_runtime.h>)
 
     if (QCX_BUILD_TESTS AND TARGET gtest)
-        # tests/boys_cuda_test.cpp is the submodule's canonical test verbatim
-        # (boys namespace, BoysStatus) - single source of truth.
+        # tests/boys_cuda_test.cpp is the submodule's canonical test, copied
+        # across and then clang-formatted to this repository's own style file -
+        # the two configs break one declaration differently, so the copy is
+        # verbatim apart from formatting. It is the single source of truth for
+        # what the boys namespace and BoysStatus must do, and a pin bump does
+        # not update it: re-copy it from the new revision.
         add_executable(qcx-integrals-cuda-tests tests/boys_cuda_test.cpp)
         target_link_libraries(qcx-integrals-cuda-tests PRIVATE qcx-integrals-cuda gtest gtest_main)
 
