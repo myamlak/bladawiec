@@ -792,16 +792,25 @@ void StratifyMode(const libint2::FmEval_Chebyshev7<double>& fm,
     }
 
     char histogram[512];
-    int used = 0;
+    std::size_t used = 0;
 
-    for (std::size_t n = 0; n < orderCount && used < 400; ++n)
+    for (std::size_t n = 0; n < orderCount && used + 1 < sizeof(histogram); ++n)
     {
-        used += std::snprintf(histogram + used,
-                              sizeof(histogram) - static_cast<std::size_t>(used),
-                              "%s%zu:%zu",
-                              n == 0 ? "" : ",",
-                              n,
-                              orderOccupancy[n]);
+        // snprintf returns what it WOULD have written, not what it stored, so a
+        // truncated entry reports more than it placed. Advancing by that carries
+        // `used` past the buffer, and the next iteration's remaining-space
+        // subtraction then underflows to a huge size_t. Advance by what fits.
+        const std::size_t room = sizeof(histogram) - used;
+        const int written = std::snprintf(
+            histogram + used, room, "%s%zu:%zu", n == 0 ? "" : ",", n, orderOccupancy[n]);
+
+        if (written < 0)
+        {
+            break;
+        }
+
+        used += (static_cast<std::size_t>(written) < room) ? static_cast<std::size_t>(written)
+                                                           : room - 1;
     }
 
     std::printf("occupancy: stream %s | order_histogram: %s\n", streamName, histogram);
