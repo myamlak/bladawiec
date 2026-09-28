@@ -179,6 +179,14 @@ ALLOWED_TOKENS = frozenset({
     "uniform_real_distribution", "unique_lock", "unique_ptr", "unordered_map",
     "unordered_set",
     "value_or", "value_type", "write_raw",
+    # The Windows option-cost probe (benchmarks/boys_option_cost_windows.cpp):
+    # GetFileAttributesA answers with the SDK's INVALID_FILE_ATTRIBUTES, the
+    # performance counters hand back LARGE_INTEGER, and the summary's extremes
+    # come from std::minmax_element. fopen_s is the CRT's own checked fopen,
+    # the _s entry point _putenv_s above already is; va_list and its two macros
+    # are <cstdarg>'s.
+    "INVALID_FILE_ATTRIBUTES", "fopen_s", "minmax_element",
+    "LARGE_INTEGER", "va_list", "va_start", "va_end",
 })
 
 # The violation classes: classic snake_case identifiers, underscore-initial

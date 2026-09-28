@@ -20,7 +20,7 @@ or of a binary.
 | HighFive | 2.10.1 (pinned submodule) | HDF5 C++ wrapper (storage) | BSL-1.0 | `third_party/highfive/LICENSE` |
 | HDF5 | system or vcpkg package | checkpoint/restart file format (storage) | BSD-3-Clause (HDF Group / NCSA) | ships with the HDF5 package |
 | Boost.Graph | system or vcpkg package | molecular connectivity graphs (molecule) | BSL-1.0 | ships with the Boost package |
-| boys | v1.1.4 (pinned submodule; first-party) | Boys-function kernel, compiled into the integrals library | BSD-3-Clause | `external/boys/LICENSE` |
+| boys | 3.0.0 (pinned submodule; first-party) | Boys-function kernel, compiled into the integrals library | BSD-3-Clause | `external/boys/LICENSE` |
 | excgrid | pinned submodule (first-party) | molecular block grids and exchange-correlation kernels (grid) | BSD-3-Clause | `external/excgrid/LICENSE` |
 
 `boys` and `excgrid` are this project's own libraries, distributed under the
