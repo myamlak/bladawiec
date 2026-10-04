@@ -34,7 +34,7 @@ bool SameBits(double left, double right) {
 }
 
 /// The reference tier must be the certified lane exactly, so it is compared
-/// against the forwarding name every existing call site already uses.
+/// against the entry every existing call site already calls.
 int CheckReferenceIsTheForwardedName(const std::vector<Arg>& args) {
     double got[qcx::integrals::kMaxBoysOrder + 1];
     double want[qcx::integrals::kMaxBoysOrder + 1];
@@ -45,7 +45,7 @@ int CheckReferenceIsTheForwardedName(const std::vector<Arg>& args) {
     {
         qcx::integrals::BoysAllOrdersAtTier(
             qcx::integrals::AccuracyTier::kReference, arg.n, arg.x, got);
-        qcx::integrals::BoysBatch(arg.n, arg.x, want);
+        qcx::integrals::BoysAllOrders(arg.n, arg.x, want);
 
         for (int k = 0; k <= arg.n; ++k)
         {
@@ -58,7 +58,7 @@ int CheckReferenceIsTheForwardedName(const std::vector<Arg>& args) {
         }
     }
 
-    std::printf("reference tier against BoysBatch: %d of %d values differ\n", bad, checked);
+    std::printf("reference tier against BoysAllOrders: %d of %d values differ\n", bad, checked);
 
     return bad;
 }
@@ -77,7 +77,7 @@ int CheckRelaxedTierStaysInsideItsBound(const std::vector<Arg>& args,
     for (const Arg& arg : args)
     {
         qcx::integrals::BoysAllOrdersAtTier(tier, arg.n, arg.x, got);
-        qcx::integrals::BoysBatch(arg.n, arg.x, want);
+        qcx::integrals::BoysAllOrders(arg.n, arg.x, want);
 
         for (int k = 0; k <= arg.n; ++k)
         {

@@ -2,7 +2,7 @@
 
 // f16.hpp forwarding shim (the boys submodule switch):
 // the fp16/bf16 I/O types are now owned by the boys submodule
-// (external/boys, pinned gitlink - v1.0.0 at this flip), whose
+// (external/boys, pinned gitlink - 3.0.0), whose
 // public repo is the slice's source of truth. This header forwards the
 // public surface into namespace qcx::integrals so monorepo include sites
 // compile unchanged; the submodule's include/boys/f16.hpp is the

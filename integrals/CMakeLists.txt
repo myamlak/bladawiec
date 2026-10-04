@@ -25,8 +25,25 @@ set(QCX_REFERENCE_REGENERATION_CHECK OFF CACHE BOOL
 set(QCX_INTEGRALS_FP16 ON CACHE BOOL
     "Build the certified fp16/bf16 Boys lane (F16/Bf16 I/O over the fp32 engine)")
 
+# The multiply-add route the Boys kernel is compiled at: the one axis of the
+# submodule's option space this tree pins rather than inherits, and the only one
+# it can pin, because no call site can name it. The selection travels as a
+# public compile definition and the kernels are header-defined, so an inherited
+# change reaches every translation unit that instantiates one; the other axes
+# are read at a call and are left to the library's own defaults (see the
+# wrapper's header for that division and why it is drawn there).
+#
+# OFF is the fused route, one rounding, which is the route the bounds this
+# surface publishes are certified for. The wrapper (include/qcx/integrals/
+# boys.hpp) states this request again as QcxBoysMulAddSeparate and refuses to
+# compile a translation unit whose definitions do not agree with it; the record
+# (BoysBuildRecord) reads back the route the library reports the values were
+# computed at, which is a different question from the one a flag answers.
+set(QCX_INTEGRALS_BOYS_MULADD_SEPARATE OFF CACHE BOOL
+    "Compile the Boys kernel at the separate multiply-add route (two roundings) instead of the fused one (one rounding)")
+
 # The Boys-function kernel is consumed from the boys submodule
-# (external/boys, gitlink pinned at the Boys 2.0 release; upstream-first -
+# (external/boys; upstream-first -
 # the public repo is the slice's source of truth, the monorepo bumps the
 # gitlink per release, never edits the submodule). The kernel compiles from
 # the submodule's sources into qcx-integrals; the qcx/integrals/boys.hpp and
@@ -36,9 +53,62 @@ set(QCX_INTEGRALS_FP16 ON CACHE BOOL
 # monorepo never regenerates or edits them.
 set(_qcxBoysExt "${CMAKE_SOURCE_DIR}/external/boys")
 
+# The route's three definitions, on an interface target rather than on
+# qcx-integrals, because qcx-integrals is not the only target whose translation
+# units include <qcx/integrals/boys.hpp>: the per-class MD object libraries do
+# too, through their PCH, and link no further than qcx-core. An interface target
+# gives the pin one home, and the guard in the header turns a target that
+# includes the header without linking this into a build failure rather than a
+# translation unit compiled at another route.
+#
+# The submodule revision this build was configured against rides along, so the
+# record a maintainer reads names the revision its numbers came from. It is
+# captured here, at configure time: a gitlink move that nothing reconfigures is
+# not seen by this, which is why the record prints the library's own
+# compiled-in version beside it - that one moves with the source.
+set(_qcxBoysPin "unknown")
+if (EXISTS "${_qcxBoysExt}/.git")
+    execute_process(
+        COMMAND git -C "${_qcxBoysExt}" rev-parse "HEAD^{commit}"
+        OUTPUT_VARIABLE _qcxBoysPin
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _qcxBoysPinResult)
+    if (NOT _qcxBoysPinResult EQUAL 0)
+        set(_qcxBoysPin "unknown")
+    endif()
+endif()
+
+add_library(qcx-boys-route INTERFACE)
+target_compile_definitions(qcx-boys-route INTERFACE
+    QcxBoysMulAddSeparate=$<BOOL:${QCX_INTEGRALS_BOYS_MULADD_SEPARATE}>
+    QcxBoysPin="${_qcxBoysPin}")
+# The submodule's own route name, spelled the way the submodule's CMake option
+# spells it. It is set only when the route is separate, because the library
+# reads it with #if defined().
+if (QCX_INTEGRALS_BOYS_MULADD_SEPARATE)
+    target_compile_definitions(qcx-boys-route INTERFACE BOYS_MULADD_SEPARATE=1)
+    message(STATUS "qcx-integrals: Boys multiply-add route = separate (two roundings, asked for by QCX_INTEGRALS_BOYS_MULADD_SEPARATE); submodule ${_qcxBoysPin}")
+else()
+    message(STATUS "qcx-integrals: Boys multiply-add route = fused (one rounding); submodule ${_qcxBoysPin}")
+endif()
+
+# The kernel's seven translation units, not two. The option space is spread
+# across them - the C surface, the native half lane, the packed axis, the
+# transform, and the option probe that measures which option is fastest on the
+# machine it is called on - and a consumer can only link what this list
+# compiles. Leaving a unit out does not remove the option, it removes the
+# ability to reach it, and it arrives at the linker as an undefined symbol
+# rather than as an error here.
 add_library(qcx-integrals
   ${_qcxBoysExt}/src/boys.cpp
+  ${_qcxBoysExt}/src/boys_c.cpp
+  ${_qcxBoysExt}/src/boys_half_native.cpp
+  ${_qcxBoysExt}/src/boys_orders_simd.cpp
+  ${_qcxBoysExt}/src/boys_probe.cpp
   ${_qcxBoysExt}/src/boys_simd.cpp
+  ${_qcxBoysExt}/src/boys_transform.cpp
+  src/boys_build_record.cpp
   src/one_electron.cpp
   src/two_electron.cpp
   src/eri_batch.cpp
@@ -78,7 +148,7 @@ target_compile_features(qcx-integrals PUBLIC cxx_std_23)
 # integrals). ${_qcxBoysExt}/include (PUBLIC) lets the forwarding shims'
 # <boys/...> includes resolve in every consumer TU.
 target_link_libraries(qcx-integrals
-  PUBLIC qcx-core qcx-molecule qcx-basisset qcx-memory
+  PUBLIC qcx-core qcx-molecule qcx-basisset qcx-memory qcx-boys-route
   PRIVATE eigen qcx-linalg qcx-backend)
 # The engine caps consumed by the public limits.hpp and the internal
 # dispatch table (QcxIntegralsF32=0 is defined too so #if guards are
@@ -90,6 +160,7 @@ target_compile_definitions(qcx-integrals PUBLIC
     QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>
     QcxIntegralsFp16=$<BOOL:${QCX_INTEGRALS_FP16}>
     BoysFp16=$<BOOL:${QCX_INTEGRALS_FP16}>)
+
 if (QCX_INTEGRALS_CHUNKED_VRR)
     target_compile_definitions(qcx-integrals PUBLIC QcxIntegralsChunkedVrr=1)
 endif()
@@ -102,11 +173,13 @@ if (QCX_ARCH_X86_64)
     if (MSVC)
         # /arch:AVX2 also enables the F16C intrinsics the fp16 lane uses.
         set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+        set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
         set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
     else()
         # -mf16c for the fp16 lane's F16C load/store (GCC does not imply it via
         # -mavx2, unlike MSVC's /arch:AVX2).
         set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
+        set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
         # -ffp-contract=off is LOAD-BEARING here, not hygiene (2026-09-13). The
         # TU's own BIT-IDENTITY section contracts this tier to the SCALAR kernels
         # the class TUs instantiate (no /arch flag), and simd_micro_gemm_test.cpp
@@ -120,6 +193,7 @@ if (QCX_ARCH_X86_64)
         set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-ffp-contract=off")
     endif()
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
     # Non-x86-64: no AVX2/FMA/F16C option exists to set, and neither TU defines
@@ -129,6 +203,7 @@ else()
     # and refuses to guess where the compiler is not x86-64. The PCH skip goes
     # with the flag it exists for.
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_DEFINITIONS "BOYS_SIMD_X86=0")
+    set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_DEFINITIONS "BOYS_SIMD_X86=0")
     message(STATUS "qcx-integrals: non-x86-64 target - the AVX2 micro-GEMM tier is excluded")
 endif()
 
@@ -204,8 +279,10 @@ function(qcx_add_md_class_object lBra lKet)
     endif()
     # Usage requirements of the linked targets reach the object TU's compile
     # (include dirs, definitions); nothing links from the object lib itself.
+    # qcx-boys-route is the multiply-add pin these TUs' PCH needs: they include
+    # <qcx/integrals/boys.hpp> and would otherwise be refused by its guard.
     target_link_libraries(qcx-md-class-${lBra}-${lKet} PRIVATE
-        qcx-core qcx-molecule qcx-basisset qcx-memory qcx-linalg eigen)
+        qcx-core qcx-molecule qcx-basisset qcx-memory qcx-linalg eigen qcx-boys-route)
     target_precompile_headers(qcx-md-class-${lBra}-${lKet} PRIVATE
         <internal/md_vrr.hpp>)
 endfunction()
@@ -233,6 +310,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/boys_test.cpp
         tests/boys_accuracy_test.cpp
         tests/boys_boundary_test.cpp
+        tests/boys_build_record_test.cpp
         tests/f16_test.cpp
         tests/aux_basis_test.cpp
         tests/one_electron_test.cpp
@@ -434,8 +512,12 @@ if (QCX_ENABLE_CUDA)
         <cuda_runtime.h>)
 
     if (QCX_BUILD_TESTS AND TARGET gtest)
-        # tests/boys_cuda_test.cpp is the submodule's canonical test verbatim
-        # (boys namespace, BoysStatus) - single source of truth.
+        # tests/boys_cuda_test.cpp is the submodule's canonical test, copied
+        # across and then clang-formatted to this repository's own style file -
+        # the two configs break one declaration differently, so the copy is
+        # verbatim apart from formatting. It is the single source of truth for
+        # what the boys namespace and BoysStatus must do, and a pin bump does
+        # not update it: re-copy it from the new revision.
         add_executable(qcx-integrals-cuda-tests tests/boys_cuda_test.cpp)
         target_link_libraries(qcx-integrals-cuda-tests PRIVATE qcx-integrals-cuda gtest gtest_main)
 
