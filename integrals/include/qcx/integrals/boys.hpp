@@ -27,6 +27,47 @@
 #include "boys/boys.hpp"
 #include "qcx/integrals/f16.hpp"
 
+#include <string>
+
+// The multiply-add route, and the one axis of the library's option space this
+// header pins rather than inherits.
+//
+// It is a property of the build and not of a call: the library selects it with
+// its own CMake option (BOYS_MULADD_SEPARATE, off by default, which is the
+// fused route every published bound on this surface is stated for), the
+// selection travels as a public compile definition because the kernels are
+// header-defined, and no call site can name it. So it is the axis an
+// inheritance would move silently, and the tree that consumes the kernel is
+// where that has to be caught.
+//
+// This build states the route in QCX_INTEGRALS_BOYS_MULADD_SEPARATE
+// (integrals/CMakeLists.txt) and passes that statement here as
+// QcxBoysMulAddSeparate. The two are checked against each other before anything
+// else is compiled, so a library revision that flips its own default, or a flag
+// that fails to reach one translation unit, is a build failure and not a
+// different arithmetic. The three refusals below are the three ways that can
+// happen: a unit that includes this header without the build's statement, a unit
+// that asked for the separate route whose kernel is compiled fused, and a unit
+// that asked for the fused route whose kernel is compiled separate.
+//
+// What the arithmetic is actually delivered by is a separate question and it is
+// the library's to answer - a compiler flag is a licence rather than an
+// instruction - so it is read back from BoysBackends at run time and reported
+// by BoysBuildRecord below.
+#if !defined(QcxBoysMulAddSeparate)
+#error "qcx/integrals/boys.hpp: QcxBoysMulAddSeparate is undefined"
+#endif
+
+#if QcxBoysMulAddSeparate
+#if !defined(BOYS_MULADD_SEPARATE)
+#error "qcx/integrals/boys.hpp: separate route asked for, BOYS_MULADD_SEPARATE absent"
+#endif
+#else
+#if defined(BOYS_MULADD_SEPARATE)
+#error "qcx/integrals/boys.hpp: fused route asked for, BOYS_MULADD_SEPARATE defined"
+#endif
+#endif
+
 namespace qcx::integrals {
 
 // The many-argument entries: one call for a whole array of arguments, in the
@@ -124,9 +165,17 @@ using boys::BoysAllNWorkspaceSize;
 /// Those defaults moved between the revision this tree pins and the revision it
 /// moves to, so a caller that names none of the five axes compiles a different
 /// kernel than it did before - the accuracy contract each entry publishes is
-/// unchanged, and the arithmetic behind it is not. The multiply-add route is a
-/// property of the build rather than of a call, and this build's arithmetic
-/// does not contract a bare product-plus-add.
+/// unchanged, and the arithmetic behind it is not. That is the exposure this
+/// tree accepts in exchange for not maintaining a seam of its own, and
+/// BoysBuildRecord is where the combination in force is written down, so the
+/// next such move is read rather than discovered.
+///
+/// The multiply-add route is the exception, and it is pinned: it is a property
+/// of the build rather than of a call, so no call site can name it. The build
+/// states it (QCX_INTEGRALS_BOYS_MULADD_SEPARATE), the guards above refuse a
+/// translation unit that does not carry the statement, and the record prints
+/// the route the library reports the values were computed at beside the route
+/// this build asked for.
 ///
 /// The CUDA engine does not call the library's CUDA lane. It evaluates Boys in
 /// its own device kernels, from tables this tree builds out of the library's
@@ -179,6 +228,53 @@ using boys::EvalScheme;
 using boys::FitGranularity;
 using boys::FitRoute;
 using boys::PackAxis;
+
+// The multiply-add route, read back rather than assumed.
+//
+// The guards above pin the route this build asks for, and a request is all a
+// compile definition is: the library measures what a build actually does with a
+// bare product-plus-add, per translation unit, and reports the route the values
+// were computed at, which is not always the route that was selected. So the
+// request is stated once (kBoysMulAddRouteAskedFor) and the library's own
+// answer is read from BoysBackends, whose rows carry the route each arithmetic
+// was delivered at, and printed beside it by BoysBuildRecord. The two
+// disagreeing is a fact about a build, not a miscompilation: this tree's job is
+// to make it visible rather than silent, and the suite's is to fail on it.
+using boys::VersionString;
+using boys::backend::BackendInfo;
+using boys::backend::BoysBackends;
+using boys::backend::MulAddRoute;
+using boys::backend::MulAddRouteName;
+
+#if QcxBoysMulAddSeparate
+inline constexpr MulAddRoute kBoysMulAddRouteAskedFor = MulAddRoute::kSeparate;
+#else
+inline constexpr MulAddRoute kBoysMulAddRouteAskedFor = MulAddRoute::kFused;
+#endif
+
+/// What this build's Boys kernel actually is: the library revision, the
+/// multiply-add route this build asked for beside the route the library reports
+/// the values were computed at, the arithmetic backends this build carries, and
+/// the defaults the library's own entries take for the five axes this tree
+/// deliberately does not name.
+///
+/// Every fact in it is read from the library's own accessors at the moment of
+/// the call - `boys::VersionString`, `boys::backend::BoysBackends`,
+/// `BoysFitRoutes` and the default policy - so a library revision that moves a
+/// default moves this text, which is the point: an inherited default that moves
+/// between revisions is otherwise visible only to a reader diffing two
+/// coefficient tables. The one fact that does not come from the library is the
+/// submodule revision, which is a property of this tree's build and is captured
+/// from it (QcxBoysPin, configure time).
+///
+/// The record is a report and not a gate: it states what is, and the suite's
+/// `boys_build_record_test` is where a route that is not the one this build
+/// asked for fails.
+///
+/// \returns the record as text, one fact per line
+///
+/// \ingroup qcx-integrals
+std::string BoysBuildRecord();
 
 #if BoysFp16
 using boys::BoysAllOrdersBf16;
