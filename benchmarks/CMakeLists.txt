@@ -458,6 +458,35 @@ if (QCX_ENABLE_CUDA AND TARGET qcx-integrals-cuda-md)
         <benchmark/benchmark.h>
         <qcx/integrals/eri_cuda.hpp>)
     qcx_apply_blas_runtime(qcx-bench-gpu-eri)
+
+    # The Boys-swap A/B probe: one process, one fixture, both Boys ladders
+    # through the real Fock build (plain main(), no Google Benchmark). The
+    # frame is the alkane fixture the CPU share probe uses, so the two
+    # measurements describe the same molecule and the same basis. It needs the
+    # instrument compiled into the lane: without
+    # -DQCX_BOYS_SWAP_INSTRUMENT=ON it builds and reports that it has nothing
+    # to measure (exit 77).
+    add_executable(qcx-bench-boys-swap boys_cuda_swap_probe.cpp)
+    target_include_directories(qcx-bench-boys-swap PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/fixtures)
+    target_compile_features(qcx-bench-boys-swap PRIVATE cxx_std_23)
+    target_compile_definitions(qcx-bench-boys-swap PRIVATE
+        NOMINMAX
+        QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+    target_link_libraries(qcx-bench-boys-swap PRIVATE
+        qcx-integrals-cuda-md qcx-integrals qcx-test-fixtures)
+    # /FORCE:MULTIPLE is a workaround for the Boys pin (7e005f0), not a design
+    # choice: boys_cuda_device.hpp defines its entries as non-inline __device__
+    # functions, so each of the lane's 156 translation units emits a host
+    # definition of every entry and the linker reports LNK2005. The copies are
+    # byte-identical (one header, one set of flags), so resolving them by
+    # taking the first is correct - and it is a blunt flag that would also hide
+    # a real duplicate elsewhere. It comes off with the next pin bump, whose
+    # entries are templates and carry weak linkage.
+    target_link_options(qcx-bench-boys-swap PRIVATE /FORCE:MULTIPLE)
+    target_precompile_headers(qcx-bench-boys-swap PRIVATE
+        <qcx/integrals/eri_cuda.hpp>)
+    qcx_apply_blas_runtime(qcx-bench-boys-swap)
 endif()
 
 # The Boys GPU throughput

@@ -24,6 +24,7 @@
 #include "qcx/integrals/eri_cuda.hpp"
 
 #include "boys/boys_coefficients.hpp"
+#include "boys/boys_cuda.hpp"
 #include "internal/device_footprint.hpp"
 #include "internal/eri_cuda_fock.hpp"
 #include "internal/fock_screen.hpp"
@@ -65,7 +66,9 @@ using qcx::integrals::internal::Hermite3DCount;
 using qcx::integrals::internal::MdClassBatch;
 using qcx::integrals::internal::MdPairData;
 using qcx::integrals::internal::MdQuartetTask;
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
 using qcx::integrals::internal::cuda::EriCudaBoysTables;
+#endif
 using qcx::integrals::internal::cuda::EriCudaClassArgs;
 using qcx::integrals::internal::cuda::EriCudaClassDispatchEntry;
 using qcx::integrals::internal::cuda::EriCudaFockArgs;
@@ -273,11 +276,13 @@ int ComputeChunkRows(int lBra,
     return static_cast<int>(rows);
 }
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
 /// Flattens the Boys constants (boys_coefficients.hpp) into the device
 /// struct: per order, the pieces of kPieceStart[order]..kPieceStart[order+1]
 /// with the coefficients re-based into one running array (the boys_cuda.cu
 /// upload pattern; the device FindPiece is a linear scan over the order's
-/// pieces, identical semantics to the CPU kPieceStart loop).
+/// pieces, identical semantics to the CPU kPieceStart loop). Probe build
+/// only: production reads the library's own uploaded tables.
 Result<void> BuildBoysTables(EriCudaBoysTables& tables) {
     int runningOffset = 0;
 
@@ -370,6 +375,7 @@ Result<void> BuildBoysTables(EriCudaBoysTables& tables) {
 
     return {};
 }
+#endif // defined(QCX_BOYS_SWAP_INSTRUMENT)
 
 /// The flattened pair tables one Compute* call runs against (the 2e path:
 /// the engine's cached copies; the RI path: a per-call combined store).
@@ -492,6 +498,23 @@ void PartitionTaskRanges(const std::vector<MdQuartetTask>& tasks,
     ranges.push_back(static_cast<int>(tasks.size()));
 }
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+/// The A/B probe's device counter slots: the Boys cycles of the three
+/// evaluation regions, their call counts, the refusals, and the VRR span the
+/// Boys call sits inside - the layout EriCudaEngine::BoysProbeCounters reads
+/// and every kernel flushes into.
+inline constexpr std::size_t kBoysProbeSlots = 8;
+
+/// The A/B probe's context of one call (probe build only): the engine's own
+/// Boys tables as the active statics hold them, the arm that selects them,
+/// and the device counters the kernels accumulate into.
+struct BoysProbeArgs {
+    const EriCudaBoysTables* engineTables = nullptr;
+    int arm = 0;
+    unsigned long long* counters = nullptr;
+};
+#endif
+
 /// The shared per-batch runner: resolves the variant (heuristic or
 /// override), then dispatches to the fused kernels (kV0/kV1) or the V2
 /// global-memory + cuBLAS pipeline. All pointers are device pointers; the
@@ -501,7 +524,10 @@ Result<void> RunBatchOnDevice(const EriCudaOptions& options,
                               const EriCudaClassDispatchEntry* entry,
                               int lBra,
                               int lKet,
-                              const EriCudaBoysTables* boysPtr,
+                              const boys::BoysDeviceTables& boysDevice,
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                              const BoysProbeArgs& probe,
+#endif
                               const EriCudaPairMeta* pairMetaPtr,
                               // The host-resident pair meta: the host reads the
                               // GEMM offsets from it (pairMetaPtr is device-only
@@ -652,7 +678,12 @@ Result<void> RunBatchOnDevice(const EriCudaOptions& options,
             const int nFk = static_cast<int>(ket.nFuncs);
 
             EriCudaClassArgs args{};
-            args.boys = boysPtr;
+            args.boysDevice = boysDevice;
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+            args.engineBoys = probe.engineTables;
+            args.boysArm = probe.arm;
+            args.probe = probe.counters;
+#endif
             args.pairMeta = pairMetaPtr;
             args.primData = primDataPtr;
             args.braTransforms = braTransformsPtr;
@@ -998,7 +1029,12 @@ Result<void> RunBatchOnDevice(const EriCudaOptions& options,
                                   (1.0 + static_cast<double>(internal::kClassRounding[lBra][lKet]));
 
     EriCudaClassArgs args{};
-    args.boys = boysPtr;
+    args.boysDevice = boysDevice;
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    args.engineBoys = probe.engineTables;
+    args.boysArm = probe.arm;
+    args.probe = probe.counters;
+#endif
     args.pairMeta = pairMetaPtr;
     args.primData = primDataPtr;
     args.braTransforms = braTransformsPtr;
@@ -1031,7 +1067,9 @@ Result<void> RunBatchOnDevice(const EriCudaOptions& options,
 /// mode switch is invisible to them beyond the EnsureStatics call at the
 /// call entry.
 struct DeviceStatics {
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
     DeviceBuffer<EriCudaBoysTables, CudaTag> boys;
+#endif
     DeviceBuffer<EriCudaPairMeta, CudaTag> pairMeta;
     DeviceBuffer<double, CudaTag> primData;
     DeviceBuffer<double, CudaTag> braTransforms;
@@ -1045,10 +1083,16 @@ struct DeviceStatics {
     /// stages them.
     /// \param hostTables The host tables (the canonical BuildHostTables
     /// output; the caller keeps it alive).
-    /// \param boysHost The host Boys tables.
+    /// \param boysHost The host Boys tables (probe build only: production
+    /// reads the library's own resident tables and uploads none).
     /// \returns The statics, or an Error from any buffer create/sync step.
-    static Result<DeviceStatics> Upload(const HostTables& hostTables,
-                                        const EriCudaBoysTables& boysHost) {
+    static Result<DeviceStatics> Upload(const HostTables& hostTables
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                                        ,
+                                        const EriCudaBoysTables& boysHost
+#endif
+    ) {
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
         auto boysBuffer = DeviceBuffer<EriCudaBoysTables, CudaTag>::Create(1);
 
         if (!boysBuffer.has_value())
@@ -1065,6 +1109,7 @@ struct DeviceStatics {
             return std::unexpected(boysSync.error());
         }
 
+#endif
         auto pairMetaBuffer =
             DeviceBuffer<EriCudaPairMeta, CudaTag>::Create(hostTables.pairMeta.size());
 
@@ -1169,13 +1214,16 @@ struct DeviceStatics {
         // The aggregate initialization: every buffer was created, filled
         // and staged above (each step checked), so the aggregate can be
         // built with the moved buffers in member order.
-        return DeviceStatics{std::move(*boysBuffer),
-                             std::move(*pairMetaBuffer),
-                             std::move(*primDataBuffer),
-                             std::move(*braTransformsBuffer),
-                             std::move(*ketTransformsBuffer),
-                             std::move(*braTransformsF32Buffer),
-                             std::move(*ketTransformsF32Buffer)};
+        return DeviceStatics{
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+            std::move(*boysBuffer),
+#endif
+            std::move(*pairMetaBuffer),
+            std::move(*primDataBuffer),
+            std::move(*braTransformsBuffer),
+            std::move(*ketTransformsBuffer),
+            std::move(*braTransformsF32Buffer),
+            std::move(*ketTransformsF32Buffer)};
     }
 };
 
@@ -1195,7 +1243,19 @@ struct EriCudaEngine::Impl {
     std::vector<MdPairData> pairStore;
     ShellPairList pairList;
     HostTables hostTables;
+    /// The Boys library's device handle, filled once at Create by
+    /// BoysCuda::DeviceTables. Plain host data - pointers into the library's
+    /// resident tables - so it is copied into every launch's argument block
+    /// and never uploaded.
+    boys::BoysDeviceTables boysDevice{};
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    /// The A/B probe's arm and its device counters - {Boys cycles, calls,
+    /// refusals}, accumulated by the kernels over one call and read back by
+    /// EriCudaEngine::BoysProbeCounters.
     EriCudaBoysTables boysHost{};
+    int boysProbeArm = 0;
+    DeviceBuffer<unsigned long long, CudaTag> boysProbeCounters;
+#endif
     /// The uploaded device statics. On the FastPath this
     /// copy is uploaded once at Create and retained; on the LightPath it
     /// stays empty and the per-call paths upload and release the statics
@@ -1250,16 +1310,27 @@ struct EriCudaEngine::Impl {
          std::vector<MdPairData> pairStoreIn,
          ShellPairList pairListIn,
          HostTables hostTablesIn,
-         EriCudaBoysTables boysHostIn,
+         boys::BoysDeviceTables boysDeviceIn,
          std::optional<DeviceStatics> staticsIn,
          GpuDeviceFootprint deviceFootprintIn,
          FockBuildMode modeIn,
-         EriCudaModeInfo modeInfoIn) :
+         EriCudaModeInfo modeInfoIn
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+         ,
+         EriCudaBoysTables boysHostIn,
+         int boysProbeArmIn,
+         DeviceBuffer<unsigned long long, CudaTag> boysProbeCountersIn
+#endif
+         ) :
         options(optionsIn), deviceOrdinal(deviceOrdinalIn), cublas(cublasIn),
         pairStore(std::move(pairStoreIn)), pairList(std::move(pairListIn)),
-        hostTables(std::move(hostTablesIn)), boysHost(boysHostIn), statics(std::move(staticsIn)),
-        molecule(&moleculeIn), deviceFootprint(deviceFootprintIn), mode(modeIn),
-        modeInfo(modeInfoIn) {
+        hostTables(std::move(hostTablesIn)), boysDevice(boysDeviceIn),
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+        boysHost(boysHostIn), boysProbeArm(boysProbeArmIn),
+        boysProbeCounters(std::move(boysProbeCountersIn)),
+#endif
+        statics(std::move(staticsIn)), molecule(&moleculeIn), deviceFootprint(deviceFootprintIn),
+        mode(modeIn), modeInfo(modeInfoIn) {
         // The pass-bracket events (best-effort: a creation
         // failure leaves the event null and the span instrument silently
         // off - the engine Create probes just passed on this device, so a
@@ -1393,13 +1464,51 @@ Result<EriCudaEngine> EriCudaEngine::Create(const qcx::molecule::Molecule& molec
         return std::unexpected(hostTables.error());
     }
 
-    EriCudaBoysTables boysHost{};
-    auto boysTables = BuildBoysTables(boysHost);
+    // The Boys library's device handle: filled once here, before any device
+    // allocation, so a device that cannot serve the lane refuses Create
+    // rather than a kernel launch. Idempotent - the first call uploads the
+    // library's tables to the current device and every later call returns
+    // the same addresses. Nothing of the handle is uploaded: it is host
+    // data naming the library's own device-resident tables.
+    boys::BoysDeviceTables boysDevice{};
+    const boys::BoysStatus boysTables = boys::BoysCuda::DeviceTables(&boysDevice);
 
-    if (!boysTables.has_value())
+    if (boysTables != boys::BoysStatus::kSuccess)
     {
-        return std::unexpected(boysTables.error());
+        return std::unexpected(DeviceError("the Boys device tables were refused (status " +
+                                           std::to_string(static_cast<int>(boysTables)) + ")"));
     }
+
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    EriCudaBoysTables boysHost{};
+    auto boysEngineTables = BuildBoysTables(boysHost);
+
+    if (!boysEngineTables.has_value())
+    {
+        return std::unexpected(boysEngineTables.error());
+    }
+
+    // The A/B probe's counters: one device slot per accumulator, zeroed
+    // once here and read back (and re-zeroed) by BoysProbeCounters.
+    auto boysProbe = DeviceBuffer<unsigned long long, CudaTag>::Create(kBoysProbeSlots);
+
+    if (!boysProbe.has_value())
+    {
+        return std::unexpected(boysProbe.error());
+    }
+
+    for (std::size_t slot = 0; slot < kBoysProbeSlots; ++slot)
+    {
+        boysProbe->HostView()[slot] = 0;
+    }
+
+    auto boysProbeSync = boysProbe->SyncToDevice();
+
+    if (!boysProbeSync.has_value())
+    {
+        return std::unexpected(boysProbeSync.error());
+    }
+#endif
 
     // The Create-time device footprint estimate: the exact uploaded-table
     // bytes of the host tables just built, the fixed Boys copy, the
@@ -1427,11 +1536,22 @@ Result<EriCudaEngine> EriCudaEngine::Create(const qcx::molecule::Molecule& molec
 
     const bool hasKv2Classes = options.variant == EriCudaVariant::kV2 ||
                                (options.variant == EriCudaVariant::kAuto && 4 * lMax >= 9);
+    // The Boys residency term. Production charges nothing: the library's
+    // tables live in its own device image's constant memory - a fixed
+    // allocation of the module, not an engine allocation out of the pool the
+    // workspace budget governs - and the engine no longer uploads a Boys
+    // copy of its own. The library publishes no residency query, so there is
+    // no figure to charge even if the budget should carry one.
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    const std::size_t boysResidentBytes = sizeof(EriCudaBoysTables);
+#else
+    const std::size_t boysResidentBytes = 0;
+#endif
     const GpuDeviceFootprint deviceFootprint =
         internal::ComputeGpuDeviceFootprint(pairList->functionCount,
                                             options.maxBatchBytes,
                                             tablesBytes,
-                                            sizeof(EriCudaBoysTables),
+                                            boysResidentBytes,
                                             hasKv2Classes);
 
     // The Create-time mode decision: the FastPath/LightPath decision
@@ -1490,7 +1610,12 @@ Result<EriCudaEngine> EriCudaEngine::Create(const qcx::molecule::Molecule& molec
 
     if (mode == FockBuildMode::kFastPath)
     {
-        auto uploaded = DeviceStatics::Upload(*hostTables, boysHost);
+        auto uploaded = DeviceStatics::Upload(*hostTables
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                                              ,
+                                              boysHost
+#endif
+        );
 
         if (!uploaded.has_value())
         {
@@ -1515,11 +1640,18 @@ Result<EriCudaEngine> EriCudaEngine::Create(const qcx::molecule::Molecule& molec
                                        std::move(*pairStore),
                                        std::move(*pairList),
                                        std::move(*hostTables),
-                                       boysHost,
+                                       boysDevice,
                                        std::move(statics),
                                        deviceFootprint,
                                        mode,
-                                       modeInfo);
+                                       modeInfo
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                                       ,
+                                       boysHost,
+                                       options.boysProbeArm,
+                                       std::move(*boysProbe)
+#endif
+    );
     return EriCudaEngine{std::move(impl)};
 }
 
@@ -1539,6 +1671,46 @@ EriCudaTransferAccounting EriCudaEngine::TransferAccounting() const noexcept {
     return _impl->transferAccounting;
 }
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+EriCudaBoysProbeCounters EriCudaEngine::BoysProbeCounters() {
+    EriCudaBoysProbeCounters counters;
+    auto& buffer = _impl->boysProbeCounters;
+
+    if (buffer.Size() < kBoysProbeSlots)
+    {
+        return counters;
+    }
+
+    // Read, then zero, in one host visit: the record covers the calls since
+    // the previous read, so two reads never overlap. The device side was
+    // written by kernels, which no bandwidth accounting above can see, so the
+    // buffer is told before the copy - SyncToHost is a no-op without it.
+    buffer.MarkDeviceDirty();
+    (void)buffer.SyncToHost();
+    counters.boysCyclesA = buffer.HostView()[0];
+    counters.boysCyclesB = buffer.HostView()[1];
+    counters.boysCyclesC = buffer.HostView()[2];
+    counters.callsA = buffer.HostView()[3];
+    counters.callsB = buffer.HostView()[4];
+    counters.callsC = buffer.HostView()[5];
+    counters.refused = buffer.HostView()[6];
+    counters.vrrCycles = buffer.HostView()[7];
+
+    for (std::size_t slot = 0; slot < kBoysProbeSlots; ++slot)
+    {
+        buffer.HostView()[slot] = 0;
+    }
+
+    buffer.MarkHostDirty();
+    (void)buffer.SyncToDevice();
+    return counters;
+}
+
+int EriCudaEngine::BoysProbeArm() const noexcept {
+    return _impl->boysProbeArm;
+}
+#endif
+
 Result<DeviceStatics*> EriCudaEngine::Impl::EnsureStatics() {
     // The FastPath keeps the retained copy; the LightPath uploads the
     // statics at the call entry and releases them at the call end - the
@@ -1553,7 +1725,12 @@ Result<DeviceStatics*> EriCudaEngine::Impl::EnsureStatics() {
         return &*activeStatics;
     }
 
-    auto uploaded = DeviceStatics::Upload(hostTables, boysHost);
+    auto uploaded = DeviceStatics::Upload(hostTables
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                                          ,
+                                          boysHost
+#endif
+    );
 
     if (!uploaded.has_value())
     {
@@ -1650,8 +1827,10 @@ Result<EriCudaBatch> EriCudaEngine::ComputeBatch(const std::vector<ShellQuartet>
 
     Impl::StaticsGuard staticsGuard(*_impl);
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
     const auto* boysPtr =
         static_cast<const EriCudaBoysTables*>((*statics)->boys.DeviceHandle().Raw());
+#endif
     const auto* pairMetaPtr =
         static_cast<const EriCudaPairMeta*>((*statics)->pairMeta.DeviceHandle().Raw());
     const auto* primDataPtr = static_cast<const double*>((*statics)->primData.DeviceHandle().Raw());
@@ -1679,28 +1858,35 @@ Result<EriCudaBatch> EriCudaEngine::ComputeBatch(const std::vector<ShellQuartet>
                                                  ") is outside the instantiated CUDA matrix"));
         }
 
-        auto result = RunBatchOnDevice(_impl->options,
-                                       _impl->pairStore,
-                                       entry,
-                                       lBra,
-                                       lKet,
-                                       boysPtr,
-                                       pairMetaPtr,
-                                       _impl->hostTables.pairMeta.data(),
-                                       primDataPtr,
-                                       braTransformsPtr,
-                                       ketTransformsPtr,
-                                       braTransformsF32Ptr,
-                                       ketTransformsF32Ptr,
-                                       batch,
-                                       outF64,
-                                       nullptr,
-                                       nullptr,
-                                       outBase,
-                                       false,
-                                       static_cast<cudaStream_t>(stream),
-                                       _impl->cublas,
-                                       _impl->transferAccounting);
+        auto result =
+            RunBatchOnDevice(_impl->options,
+                             _impl->pairStore,
+                             entry,
+                             lBra,
+                             lKet,
+                             _impl->boysDevice,
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                             BoysProbeArgs{boysPtr,
+                                           _impl->boysProbeArm,
+                                           static_cast<unsigned long long*>(
+                                               _impl->boysProbeCounters.DeviceHandle().Raw())},
+#endif
+                             pairMetaPtr,
+                             _impl->hostTables.pairMeta.data(),
+                             primDataPtr,
+                             braTransformsPtr,
+                             ketTransformsPtr,
+                             braTransformsF32Ptr,
+                             ketTransformsF32Ptr,
+                             batch,
+                             outF64,
+                             nullptr,
+                             nullptr,
+                             outBase,
+                             false,
+                             static_cast<cudaStream_t>(stream),
+                             _impl->cublas,
+                             _impl->transferAccounting);
 
         if (!result.has_value())
         {
@@ -1818,8 +2004,10 @@ Result<EriCudaCertifiedBatch> EriCudaEngine::ComputeBatchCertified(
 
     Impl::StaticsGuard staticsGuard(*_impl);
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
     const auto* boysPtr =
         static_cast<const EriCudaBoysTables*>((*statics)->boys.DeviceHandle().Raw());
+#endif
     const auto* pairMetaPtr =
         static_cast<const EriCudaPairMeta*>((*statics)->pairMeta.DeviceHandle().Raw());
     const auto* primDataPtr = static_cast<const double*>((*statics)->primData.DeviceHandle().Raw());
@@ -1848,28 +2036,35 @@ Result<EriCudaCertifiedBatch> EriCudaEngine::ComputeBatchCertified(
                                                  ") is outside the instantiated CUDA matrix"));
         }
 
-        auto result = RunBatchOnDevice(_impl->options,
-                                       _impl->pairStore,
-                                       entry,
-                                       lBra,
-                                       lKet,
-                                       boysPtr,
-                                       pairMetaPtr,
-                                       _impl->hostTables.pairMeta.data(),
-                                       primDataPtr,
-                                       braTransformsPtr,
-                                       ketTransformsPtr,
-                                       braTransformsF32Ptr,
-                                       ketTransformsF32Ptr,
-                                       batch,
-                                       nullptr,
-                                       outF32,
-                                       errorBounds,
-                                       outBase,
-                                       true,
-                                       static_cast<cudaStream_t>(stream),
-                                       _impl->cublas,
-                                       _impl->transferAccounting);
+        auto result =
+            RunBatchOnDevice(_impl->options,
+                             _impl->pairStore,
+                             entry,
+                             lBra,
+                             lKet,
+                             _impl->boysDevice,
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                             BoysProbeArgs{boysPtr,
+                                           _impl->boysProbeArm,
+                                           static_cast<unsigned long long*>(
+                                               _impl->boysProbeCounters.DeviceHandle().Raw())},
+#endif
+                             pairMetaPtr,
+                             _impl->hostTables.pairMeta.data(),
+                             primDataPtr,
+                             braTransformsPtr,
+                             ketTransformsPtr,
+                             braTransformsF32Ptr,
+                             ketTransformsF32Ptr,
+                             batch,
+                             nullptr,
+                             outF32,
+                             errorBounds,
+                             outBase,
+                             true,
+                             static_cast<cudaStream_t>(stream),
+                             _impl->cublas,
+                             _impl->transferAccounting);
 
         if (!result.has_value())
         {
@@ -2233,8 +2428,10 @@ Result<EriCudaRiBatch> EriCudaEngine::ComputeRiBatch(const qcx::basisset::BasisS
 
     Impl::StaticsGuard staticsGuard(*_impl);
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
     const auto* boysPtr =
         static_cast<const EriCudaBoysTables*>((*statics)->boys.DeviceHandle().Raw());
+#endif
     const auto* pairMetaPtr =
         static_cast<const EriCudaPairMeta*>(pairMetaBuffer->DeviceHandle().Raw());
     const auto* primDataPtr = static_cast<const double*>(primDataBuffer->DeviceHandle().Raw());
@@ -2258,28 +2455,35 @@ Result<EriCudaRiBatch> EriCudaEngine::ComputeRiBatch(const qcx::basisset::BasisS
                                                  ") is outside the instantiated CUDA matrix"));
         }
 
-        auto result = RunBatchOnDevice(_impl->options,
-                                       combined,
-                                       entry,
-                                       lBra,
-                                       lKet,
-                                       boysPtr,
-                                       pairMetaPtr,
-                                       hostTables->pairMeta.data(),
-                                       primDataPtr,
-                                       braTransformsPtr,
-                                       ketTransformsPtr,
-                                       nullptr,
-                                       nullptr,
-                                       batch,
-                                       outF64,
-                                       nullptr,
-                                       nullptr,
-                                       outBase,
-                                       false,
-                                       static_cast<cudaStream_t>(stream),
-                                       _impl->cublas,
-                                       _impl->transferAccounting);
+        auto result =
+            RunBatchOnDevice(_impl->options,
+                             combined,
+                             entry,
+                             lBra,
+                             lKet,
+                             _impl->boysDevice,
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                             BoysProbeArgs{boysPtr,
+                                           _impl->boysProbeArm,
+                                           static_cast<unsigned long long*>(
+                                               _impl->boysProbeCounters.DeviceHandle().Raw())},
+#endif
+                             pairMetaPtr,
+                             hostTables->pairMeta.data(),
+                             primDataPtr,
+                             braTransformsPtr,
+                             ketTransformsPtr,
+                             nullptr,
+                             nullptr,
+                             batch,
+                             outF64,
+                             nullptr,
+                             nullptr,
+                             outBase,
+                             false,
+                             static_cast<cudaStream_t>(stream),
+                             _impl->cublas,
+                             _impl->transferAccounting);
 
         if (!result.has_value())
         {
@@ -2481,8 +2685,10 @@ qcx::Result<void> GpuJkFockBuilder::State::RunDevicePass(
         return std::unexpected(statics.error());
     }
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
     const auto* boysPtr =
         static_cast<const EriCudaBoysTables*>((*statics)->boys.DeviceHandle().Raw());
+#endif
     const auto* pairMetaPtr =
         static_cast<const EriCudaPairMeta*>((*statics)->pairMeta.DeviceHandle().Raw());
     const auto* primDataPtr = static_cast<const double*>((*statics)->primData.DeviceHandle().Raw());
@@ -2532,32 +2738,38 @@ qcx::Result<void> GpuJkFockBuilder::State::RunDevicePass(
                                                  ") is outside the instantiated CUDA matrix"));
         }
 
-        auto result =
-            RunBatchOnDevice(_engine._impl->options,
-                             _engine._impl->pairStore,
-                             entry,
-                             lBra,
-                             lKet,
-                             boysPtr,
-                             pairMetaPtr,
-                             _engine._impl->hostTables.pairMeta.data(),
-                             primDataPtr,
-                             braTransformsPtr,
-                             ketTransformsPtr,
-                             braTransformsF32Ptr,
-                             ketTransformsF32Ptr,
-                             batch,
-                             fp32 ? static_cast<double*>(nullptr)
-                                  : static_cast<double*>(outF64Buffer->DeviceHandle().Raw()),
-                             fp32 ? static_cast<float*>(outF32Buffer->DeviceHandle().Raw())
-                                  : static_cast<float*>(nullptr),
-                             fp32 ? static_cast<double*>(boundsBuffer->DeviceHandle().Raw())
-                                  : static_cast<double*>(nullptr),
-                             outBase,
-                             fp32,
-                             nullptr,
-                             _engine._impl->cublas,
-                             _engine._impl->transferAccounting);
+        auto result = RunBatchOnDevice(
+            _engine._impl->options,
+            _engine._impl->pairStore,
+            entry,
+            lBra,
+            lKet,
+            _engine._impl->boysDevice,
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+            BoysProbeArgs{boysPtr,
+                          _engine._impl->boysProbeArm,
+                          static_cast<unsigned long long*>(
+                              _engine._impl->boysProbeCounters.DeviceHandle().Raw())},
+#endif
+            pairMetaPtr,
+            _engine._impl->hostTables.pairMeta.data(),
+            primDataPtr,
+            braTransformsPtr,
+            ketTransformsPtr,
+            braTransformsF32Ptr,
+            ketTransformsF32Ptr,
+            batch,
+            fp32 ? static_cast<double*>(nullptr)
+                 : static_cast<double*>(outF64Buffer->DeviceHandle().Raw()),
+            fp32 ? static_cast<float*>(outF32Buffer->DeviceHandle().Raw())
+                 : static_cast<float*>(nullptr),
+            fp32 ? static_cast<double*>(boundsBuffer->DeviceHandle().Raw())
+                 : static_cast<double*>(nullptr),
+            outBase,
+            fp32,
+            nullptr,
+            _engine._impl->cublas,
+            _engine._impl->transferAccounting);
 
         if (!result.has_value())
         {
@@ -2744,7 +2956,12 @@ qcx::Result<GpuJkFockBuilder> GpuJkFockBuilder::Create(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basisSet,
     const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& coreHamiltonian,
-    const FockBuildOptions& options) {
+    const FockBuildOptions& options
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    ,
+    int boysProbeArm
+#endif
+) {
     if (options.maxBatchBytes == 0)
     {
         return std::unexpected(InvalidArgument("maxBatchBytes must be positive"));
@@ -2763,6 +2980,9 @@ qcx::Result<GpuJkFockBuilder> GpuJkFockBuilder::Create(
     // at the decision).
     engineOptions.deviceWorkspaceBudget = options.deviceWorkspaceBudget;
     engineOptions.forceLightPath = options.forceGpuLightPath;
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    engineOptions.boysProbeArm = boysProbeArm;
+#endif
 
     auto engine = EriCudaEngine::Create(molecule, basisSet, engineOptions);
 
@@ -3202,6 +3422,16 @@ const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& GpuJkFockBuilder::Co
 GpuDeviceFootprint GpuJkFockBuilder::DeviceFootprint() const {
     return _state->_engine.DeviceFootprint();
 }
+
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+EriCudaBoysProbeCounters GpuJkFockBuilder::BoysProbeCounters() {
+    return _state->_engine.BoysProbeCounters();
+}
+
+int GpuJkFockBuilder::BoysProbeArm() const noexcept {
+    return _state->_engine.BoysProbeArm();
+}
+#endif
 
 FockBuildMode GpuJkFockBuilder::Mode() const noexcept {
     return _state->_engine.Mode();

@@ -18,6 +18,58 @@
 #include <cstddef>
 #include <type_traits>
 
+// The direct-timing instrument of the Boys-share probe
+// (benchmarks/boys_share_probe.cpp). It is defined only where
+// QCX_BOYS_SHARE_INSTRUMENT is, which the build sets on qcx-integrals and on
+// that one benchmark and on nothing else, so every other build compiles this
+// header to the text it always had.
+//
+// Two instruments run at once, because they fail differently. The stamp
+// counter reads the calls' own cost in place, and the elision flag beside it
+// takes the library call out altogether so the same spans can be differenced
+// with no per-call model at all. The first is what the second checks.
+#if defined(QCX_BOYS_SHARE_INSTRUMENT)
+
+#include <cstdint>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <x86intrin.h>
+#endif
+
+namespace qcx::integrals::internal {
+
+/// The time-stamp counter, read at the instrument's two ends.
+inline std::uint64_t BoysShareStamp() noexcept {
+    return static_cast<std::uint64_t>(__rdtsc());
+}
+
+/// Cycles spent inside the instrumented calls, and how many of them, on the
+/// calling thread. Valid only while \c gBoysShareSkip is false: the elided
+/// arm times its own zero-fill instead.
+inline thread_local std::uint64_t gBoysShareCycles = 0;
+inline thread_local std::uint64_t gBoysShareCalls = 0;
+
+/// True while the probe runs the Boys-elided arm. The call is then skipped and
+/// the ladder left zeroed, so the arm executes the same instruction stream
+/// with the library's arithmetic taken out. It is one predictable branch per
+/// call and it is present in both arms, so it cancels in the difference.
+inline bool gBoysShareSkip = false;
+
+/// The ladder an elided call leaves: zeros, which no later step can turn into
+/// a denormal, so the rest of the kernel runs at its own speed.
+template <typename T> inline void BoysShareZero(int nmax, T* out) noexcept {
+    for (int l = 0; l <= nmax; ++l)
+    {
+        out[l] = T{};
+    }
+}
+
+} // namespace qcx::integrals::internal
+
+#endif
+
 namespace qcx::integrals::internal {
 
 /// F_0(x)..F_nmax(x) into out, in the working scalar type T.
@@ -33,6 +85,19 @@ namespace qcx::integrals::internal {
 template <typename T> inline void MdBoysBatch(int nmax, double x, T* out) noexcept {
     static_assert(std::is_same_v<T, double> || std::is_same_v<T, float>);
 
+#if defined(QCX_BOYS_SHARE_INSTRUMENT)
+    const std::uint64_t boysShareStart = BoysShareStamp();
+
+    if (gBoysShareSkip)
+    {
+        BoysShareZero(nmax, out);
+        gBoysShareCycles += BoysShareStamp() - boysShareStart;
+        ++gBoysShareCalls;
+
+        return;
+    }
+#endif
+
     if constexpr (std::is_same_v<T, double>)
     {
         BoysAllOrders(nmax, x, out);
@@ -46,6 +111,11 @@ template <typename T> inline void MdBoysBatch(int nmax, double x, T* out) noexce
         // amplification-sensitive seeds are safe).
         BoysAllOrdersF32(nmax, static_cast<float>(x), out);
     }
+
+#if defined(QCX_BOYS_SHARE_INSTRUMENT)
+    gBoysShareCycles += BoysShareStamp() - boysShareStart;
+    ++gBoysShareCalls;
+#endif
 }
 
 /// F_0(x)..F_nmax(x) into out, at a run-time-selected rung.

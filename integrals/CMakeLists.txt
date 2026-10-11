@@ -161,6 +161,38 @@ target_compile_definitions(qcx-integrals PUBLIC
     QcxIntegralsFp16=$<BOOL:${QCX_INTEGRALS_FP16}>
     BoysFp16=$<BOOL:${QCX_INTEGRALS_FP16}>)
 
+# The Boys-share probe's instrument, local-only and never in CI: it wraps the
+# engine's Boys seed call in the stamp counter and adds an elision switch, and
+# is compiled into this module and the one benchmark that reads it and nothing
+# else. QCX_BOYS_SHARE_INSTRUMENT is OFF in every configured build; a run that
+# wants the direct share sets it for one configure and rebuilds.
+set(QCX_BOYS_SHARE_INSTRUMENT OFF CACHE BOOL
+    "Compile the Boys-share probe's direct instrument into qcx-integrals (local-only)")
+if (QCX_BOYS_SHARE_INSTRUMENT)
+    # On qcx-boys-route and not on qcx-integrals, because the call being
+    # instrumented runs in the per-class MD object libraries, which link no
+    # further than qcx-core and take their definitions from qcx-boys-route
+    # alone. A define on qcx-integrals reaches the module and the benchmark and
+    # not one of the 154 class TUs the kernel is actually compiled into.
+    target_compile_definitions(qcx-boys-route INTERFACE QCX_BOYS_SHARE_INSTRUMENT=1)
+    message(STATUS "qcx-integrals: the Boys-share direct instrument is compiled in")
+endif()
+
+# The Boys-swap A/B probe's instrument, local-only and never in CI: it keeps
+# the engine's own device Boys ladder in the tree beside the library's lane,
+# adds the arm that selects between them and the cycle stamps around each, and
+# is compiled into the CUDA MD lane and the one benchmark that drives it and
+# nothing else. QCX_BOYS_SWAP_INSTRUMENT is OFF in every configured build; a
+# run that wants the two sides measured in one process sets it for one
+# configure and rebuilds. The define goes on qcx-integrals-cuda-md because
+# every per-class instantiation TU includes eri_cuda.cu and the kernels are
+# compiled there, and on the benchmark that reads the counters back.
+set(QCX_BOYS_SWAP_INSTRUMENT OFF CACHE BOOL
+    "Compile the Boys-swap A/B probe's arm switch and stamps into the CUDA MD lane (local-only)")
+if (QCX_BOYS_SWAP_INSTRUMENT)
+    message(STATUS "qcx-integrals: the Boys-swap A/B instrument is compiled in")
+endif()
+
 if (QCX_INTEGRALS_CHUNKED_VRR)
     target_compile_definitions(qcx-integrals PUBLIC QcxIntegralsChunkedVrr=1)
 endif()
@@ -649,10 +681,17 @@ if (QCX_ENABLE_CUDA)
         target_include_directories(qcx-md-cuda-class-${_qcxLb}-${_qcxLk} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_BINARY_DIR})
+            ${CMAKE_CURRENT_BINARY_DIR}
+            # The Boys library's device handle and device-callable entries
+            # (boys_device_tables.hpp in the registry TU's Part 1,
+            # boys_cuda_device.hpp in its Part 2): every instantiation TU
+            # includes eri_cuda.cu, and these object libraries link nothing
+            # that would carry the path in.
+            ${_qcxBoysExt}/include)
         target_compile_definitions(qcx-md-cuda-class-${_qcxLb}-${_qcxLk} PRIVATE
             QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>
-            QcxIntegralsCudaLMax=${_qcxCudaLmax})
+            QcxIntegralsCudaLMax=${_qcxCudaLmax}
+            $<$<BOOL:${QCX_BOYS_SWAP_INSTRUMENT}>:QCX_BOYS_SWAP_INSTRUMENT=1>)
         target_compile_features(qcx-md-cuda-class-${_qcxLb}-${_qcxLk} PRIVATE cxx_std_20)
         # CUDA-safe PCH only.
         target_precompile_headers(qcx-md-cuda-class-${_qcxLb}-${_qcxLk} PRIVATE
@@ -710,14 +749,21 @@ if (QCX_ENABLE_CUDA)
     target_compile_features(qcx-integrals-cuda-md PUBLIC cxx_std_23)
     target_link_libraries(qcx-integrals-cuda-md
         PUBLIC qcx-integrals qcx-core qcx-molecule qcx-basisset qcx-memory
-        PRIVATE qcx-linalg qcx-backend-cuda CUDA::cublas)
+        PRIVATE qcx-linalg qcx-backend-cuda CUDA::cublas qcx-integrals-cuda)
+    # qcx-integrals-cuda (the submodule's own CUDA lane) is PRIVATE and
+    # required at link time: the engine's Create calls BoysCuda::DeviceTables
+    # to fill the device handle its kernels read, and that symbol and the
+    # device image behind it live in that library. The device-callable entries
+    # themselves are header-defined (boys_cuda_device.hpp) and add no link
+    # dependency of their own.
     # qcx-linalg is PRIVATE but required at compile time: the eri_cuda.cpp
     # TU reaches md_transform.hpp's qcx/linalg/batched_ops.hpp through the
     # md_vrr_3c.hpp / md_engine.hpp chain (the class-object libraries
     # carry the same PRIVATE linalg link - the same implementation seam).
     target_compile_definitions(qcx-integrals-cuda-md PUBLIC
         QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>
-        QcxIntegralsCudaLMax=${_qcxCudaLmax})
+        QcxIntegralsCudaLMax=${_qcxCudaLmax}
+        $<$<BOOL:${QCX_BOYS_SWAP_INSTRUMENT}>:QCX_BOYS_SWAP_INSTRUMENT=1>)
     # CUDA-safe PCH only.
     target_precompile_headers(qcx-integrals-cuda-md PRIVATE
         <cuda_runtime.h>)

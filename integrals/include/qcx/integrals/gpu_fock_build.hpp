@@ -70,7 +70,12 @@ public:
         const qcx::molecule::Molecule& molecule,
         const qcx::basisset::BasisSet& basisSet,
         const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& coreHamiltonian,
-        const FockBuildOptions& options = {});
+        const FockBuildOptions& options = {}
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+        ,
+        int boysProbeArm = 0
+#endif
+    );
 
     /// Builds F(D) = H + 2J(rho) - K(rho) on the device for the given
     /// closed-shell density, with the CPU builder's screening semantics
@@ -115,6 +120,21 @@ public:
     /// \returns The estimate.
     /// \ingroup qcx-integrals
     GpuDeviceFootprint DeviceFootprint() const;
+
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    /// The A/B probe's Boys span record of the calls since the last read
+    /// (probe build only): forwarded to EriCudaEngine::BoysProbeCounters.
+    /// \returns The three sums.
+    /// \ingroup qcx-integrals
+    EriCudaBoysProbeCounters BoysProbeCounters();
+
+    /// The Boys arm this builder's engine was created with (probe build
+    /// only): the EriCudaOptions::boysProbeArm Create recorded.
+    /// \returns 0 for the Boys library's device lane, non-zero for the
+    /// engine's own retained ladder.
+    /// \ingroup qcx-integrals
+    int BoysProbeArm() const noexcept;
+#endif
 
     /// The Create-time mode: the FastPath/LightPath
     /// decision generalized to the device context. The light rung uploads

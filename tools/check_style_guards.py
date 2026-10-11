@@ -69,6 +69,11 @@ SANCTIONED_MACROS = frozenset({
     # header's own naming convention, not project snake_case.
     "BOYS_SUCCESS", "BOYS_ERROR_INVALID_ARGUMENT",
     "BOYS_ERROR_UNSUPPORTED_MULTIPLIER", "BOYS_MAX_ORDER",
+    # eri_cuda.cu's spelling of nvcc's `__grid_constant__` (the qualifier an
+    # argument block needs so the device handle inside it is not copied to
+    # local memory per thread); the keyword is nvcc's, the wrapper is this
+    # tree's one place to spell it.
+    "QCX_ERI_CUDA_GRID_CONSTANT",
 })
 
 # The eri_cuda.cu dual-inclusion seam (see the module docstring).
@@ -109,6 +114,8 @@ ALLOWED_TOKENS = frozenset({
     "parse_error",
     "BOYS_MAX_ORDER", "BOYS_SUCCESS", "BOYS_ERROR_INVALID_ARGUMENT",
     "BOYS_ERROR_UNSUPPORTED_MULTIPLIER",
+    # eri_cuda.cu's nvcc-keyword wrapper, defined and used in that one file.
+    "QCX_ERI_CUDA_GRID_CONSTANT",
     "ALL_PROCESSOR_GROUPS", "add_edge", "adjacency_list", "align_val_t",
     "all_of", "any_of",
     "bad_alloc", "bfloat16_t", "binary_search", "bit_cast",
