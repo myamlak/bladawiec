@@ -17,9 +17,11 @@
 // that reaches the vector lanes.
 //
 // The fp16/bf16 entries sit behind the submodule's BoysFp16 seam, which the
-// build mirrors onto QCX_INTEGRALS_FP16 (a PUBLIC target definition on
-// qcx-integrals), and the F16/Bf16 types plus the qcx::integrals::detail
-// alias come from the f16.hpp shim included below.
+// build mirrors onto QCX_INTEGRALS_FP16 as an INTERFACE definition on
+// qcx-boys-route - the target every translation unit that includes this header
+// links, because the library refuses a program whose units disagree about the
+// seam. The F16/Bf16 types plus the qcx::integrals::detail alias come from the
+// f16.hpp shim included below.
 //
 // The CUDA lane is not forwarded: CUDA consumers use the upstream namespace
 // directly.

@@ -88,26 +88,11 @@ int main() { return 0; }
         "True when the target architecture is x86-64 (probed from the compiler)")
 endif()
 
-# Floating-point contraction is pinned OFF on every target that is not x86-64.
-#
-# FMA is baseline on arm64, so the compiler is free to fuse `a * b + c` into an
-# FMA in every scalar translation unit. On x86-64 the baseline has no FMA, so
-# the same source cannot fuse, and the two architectures compute different
-# numbers from identical code. The per-file pins in the module CMakeLists
-# cover the SIMD translation units only, whose claim is bit-identity with
-# their scalar twin; the scalar units carry no flag because on x86-64 there is
-# nothing there to fuse. That reasoning is x86-specific and does not hold on
-# the targets this block covers, so here the guarantee is stated once for the
-# tree instead of per file.
-#
-# Scoped rather than unconditional: on x86-64 the flag would be inert for the
-# scalar units and would contradict the deliberate per-file pins on the SIMD
-# ones, hiding the regression those pins exist to catch.
-#
-# MSVC needs no counterpart: /fp:precise is the default and does not contract.
-if (NOT QCX_ARCH_X86_64 AND NOT MSVC)
-    add_compile_options(-ffp-contract=off)
-endif()
+# The program's instruction-set tier and its contraction pin are stated
+# together, once, at the first-party boundary near the end of this file - see
+# "THE PROGRAM'S INSTRUCTION-SET TIER". They cannot sit here: everything
+# between this point and that block is a vendored tree, which must not inherit
+# either.
 
 # MSVC's ASan runtime is a DLL that must sit next to test executables when
 # running outside a Developer prompt (plain ctest). Applies only when ASan
@@ -593,6 +578,57 @@ add_subdirectory(${EXCGRID_ROOT} external/excgrid)
 # own /W4 PRIVATE came back Level3). Ordering has nothing to cancel.
 if (MSVC)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/W4>)
+endif()
+
+# ===========================================================================
+# THE PROGRAM'S INSTRUCTION-SET TIER: AVX2 + FMA (owner ruling 2026-10-17)
+# ===========================================================================
+#
+# Every first-party translation unit is compiled at the AVX2 + FMA tier. That
+# is a deployment requirement of the program, not a hint: the Boys kernel is
+# header-defined, so every unit that includes the library's headers compiles
+# its own copy of the arithmetic, and the library refuses at start-up a program
+# whose units were compiled at different tiers (boys/isa_tiers.hpp). A tier
+# stated per file is therefore not available - the measured proof is
+# fock_contract_simd.cpp, a Fock-contraction unit that reaches the library's
+# headers through this tree's own eri_batch.hpp and used to announce the vector
+# tier by itself.
+#
+# The tier is stated on the directory, once, after the vendored trees and
+# before every first-party subdirectory, so every module, class object, test,
+# benchmark and the driver inherits it, and a target added later cannot miss
+# it.
+#
+# The contraction pin is not separable from the tier. On GCC and Clang -mfma
+# is also a licence to fuse a bare `a * b + c` into one rounding, which the
+# x86-64 baseline does not give them; the library's published bits are the
+# two-rounding arithmetic. So the pin goes program-wide with the tier, and the
+# SIMD units' bit-identity with their scalar twins (simd_micro_gemm_test.cpp's
+# memcmp) depends on it. MSVC never contracts under its default /fp:precise,
+# which this tree never overrides with /fp:fast.
+#
+# The CUDA host pass needs the same tier: nvcc hands -Xcompiler flags to the
+# host compiler, and a CUDA unit left at the scalar tier is the same mixed
+# program the tier guard refuses.
+if (QCX_ARCH_X86_64)
+    if (MSVC)
+        # /arch:AVX2 enables the AVX2, FMA and F16C instruction sets.
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>)
+        add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/arch:AVX2>)
+    else()
+        # GCC does not imply F16C via -mavx2.
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma>)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-mf16c> $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
+        add_compile_options(
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-mavx2,-mfma,-mf16c,-ffp-contract=off>)
+    endif()
+else()
+    # No AVX2 tier exists here. FMA is baseline on arm64, so the compiler is
+    # free to fuse a bare product-plus-add there; the pin keeps the same source
+    # computing the two-rounding arithmetic it computes on x86-64.
+    if (NOT MSVC)
+        add_compile_options(-ffp-contract=off)
+    endif()
 endif()
 
 add_subdirectory(core)

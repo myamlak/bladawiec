@@ -11,6 +11,12 @@ local-only, small changes — are in `CONTRIBUTING.md` and are not repeated here
 Requirements are CMake 3.27 or newer, a C++23 compiler, Git and the pinned submodules.
 Boost and HDF5 come from a vcpkg tree, which the `windows-msvc` preset points at.
 
+Every first-party translation unit is compiled at the AVX2 + FMA tier (`/arch:AVX2`, or
+`-mavx2 -mfma -mf16c -ffp-contract=off` with GCC and Clang), stated once in the root
+`CMakeLists.txt`. The tier and the fp16 seam are program-wide because the Boys library — whose
+kernel is header-defined — refuses at start-up a program whose translation units disagree about
+either.
+
 ```powershell
 git clone --recurse-submodules <repository-url>
 # or, in an existing clone:

@@ -53,13 +53,21 @@ set(QCX_INTEGRALS_BOYS_MULADD_SEPARATE OFF CACHE BOOL
 # monorepo never regenerates or edits them.
 set(_qcxBoysExt "${CMAKE_SOURCE_DIR}/external/boys")
 
-# The route's three definitions, on an interface target rather than on
-# qcx-integrals, because qcx-integrals is not the only target whose translation
-# units include <qcx/integrals/boys.hpp>: the per-class MD object libraries do
-# too, through their PCH, and link no further than qcx-core. An interface target
-# gives the pin one home, and the guard in the header turns a target that
-# includes the header without linking this into a build failure rather than a
-# translation unit compiled at another route.
+# The route's definitions, on an interface target rather than on qcx-integrals,
+# because qcx-integrals is not the only target whose translation units include
+# <qcx/integrals/boys.hpp>: the per-class MD object libraries do too, through
+# their PCH, and link no further than qcx-core. An interface target gives the
+# pin one home, and the guard in the header turns a target that includes the
+# header without linking this into a build failure rather than a translation
+# unit compiled at another route.
+#
+# BoysFp16 rides here for the same reason, and it is the library's own seam
+# rather than this tree's: the library refuses at start-up a program whose
+# translation units disagree about it (boys/isa_tiers.hpp). Defined on
+# qcx-integrals alone, every class TU reached the headers through its PCH with
+# the seam closed while the module announced it open - a refusal in the default
+# configuration. On this target, every TU that includes the library's headers
+# announces the same value.
 #
 # The submodule revision this build was configured against rides along, so the
 # record a maintainer reads names the revision its numbers came from. It is
@@ -82,7 +90,8 @@ endif()
 add_library(qcx-boys-route INTERFACE)
 target_compile_definitions(qcx-boys-route INTERFACE
     QcxBoysMulAddSeparate=$<BOOL:${QCX_INTEGRALS_BOYS_MULADD_SEPARATE}>
-    QcxBoysPin="${_qcxBoysPin}")
+    QcxBoysPin="${_qcxBoysPin}"
+    BoysFp16=$<BOOL:${QCX_INTEGRALS_FP16}>)
 # The submodule's own route name, spelled the way the submodule's CMake option
 # spells it. It is set only when the route is separate, because the library
 # reads it with #if defined().
@@ -93,21 +102,18 @@ else()
     message(STATUS "qcx-integrals: Boys multiply-add route = fused (one rounding); submodule ${_qcxBoysPin}")
 endif()
 
-# The kernel's seven translation units, not two. The option space is spread
-# across them - the C surface, the native half lane, the packed axis, the
-# transform, and the option probe that measures which option is fastest on the
-# machine it is called on - and a consumer can only link what this list
-# compiles. Leaving a unit out does not remove the option, it removes the
-# ability to reach it, and it arrives at the linker as an undefined symbol
-# rather than as an error here.
+# The kernel's five translation units, not two. The option space is spread
+# across them - the C surface, the packed axis, the vector lanes, and the
+# option probe that measures which option is fastest on the machine it is
+# called on - and a consumer can only link what this list compiles. Leaving a
+# unit out does not remove the option, it removes the ability to reach it, and
+# it arrives at the linker as an undefined symbol rather than as an error here.
 add_library(qcx-integrals
   ${_qcxBoysExt}/src/boys.cpp
   ${_qcxBoysExt}/src/boys_c.cpp
-  ${_qcxBoysExt}/src/boys_half_native.cpp
   ${_qcxBoysExt}/src/boys_orders_simd.cpp
   ${_qcxBoysExt}/src/boys_probe.cpp
   ${_qcxBoysExt}/src/boys_simd.cpp
-  ${_qcxBoysExt}/src/boys_transform.cpp
   src/boys_build_record.cpp
   src/one_electron.cpp
   src/two_electron.cpp
@@ -138,6 +144,13 @@ add_library(qcx-integrals
 target_include_directories(qcx-integrals PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${_qcxBoysExt}/include)
+# The option probe's one translation unit exceeds MSVC's object-file section
+# limit. The library's own CMake states /bigobj for the same source (under
+# BOYS_BUILD_PROBE); this tree compiles the source into its own target, so the
+# request has to be repeated here or the TU fails with C1128.
+if (MSVC)
+    set_source_files_properties(${_qcxBoysExt}/src/boys_probe.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 target_include_directories(qcx-integrals PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(qcx-integrals PUBLIC cxx_std_23)
@@ -152,14 +165,15 @@ target_link_libraries(qcx-integrals
   PRIVATE eigen qcx-linalg qcx-backend)
 # The engine caps consumed by the public limits.hpp and the internal
 # dispatch table (QcxIntegralsF32=0 is defined too so #if guards are
-# uniform). BoysFp16 mirrors QCX_INTEGRALS_FP16 onto the submodule's seam
-# (its headers gate the fp16/bf16 entries on BoysFp16); QcxIntegralsFp16
-# stays defined for the retained monorepo files gated on the old name.
+# uniform). QcxIntegralsFp16 stays defined for the retained monorepo files
+# gated on the old name; the library's own seam (BoysFp16) is stated once on
+# qcx-boys-route above, the target every translation unit that includes the
+# library's headers links, because the library refuses a program whose
+# translation units disagree about it.
 target_compile_definitions(qcx-integrals PUBLIC
     QcxIntegralsLMax=${QCX_INTEGRALS_LMAX}
     QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>
-    QcxIntegralsFp16=$<BOOL:${QCX_INTEGRALS_FP16}>
-    BoysFp16=$<BOOL:${QCX_INTEGRALS_FP16}>)
+    QcxIntegralsFp16=$<BOOL:${QCX_INTEGRALS_FP16}>)
 
 # The Boys-share probe's instrument, local-only and never in CI: it wraps the
 # engine's Boys seed call in the stamp counter and adds an elision switch, and
@@ -197,86 +211,53 @@ if (QCX_INTEGRALS_CHUNKED_VRR)
     target_compile_definitions(qcx-integrals PUBLIC QcxIntegralsChunkedVrr=1)
 endif()
 
-# AVX2 intrinsics only in the SIMD translation unit; the entry points are
-# precondition-checked at runtime via BoysAvx2Available(). The TU skips the
-# module PCH: clang rejects a PCH built without the target feature the TU
-# compiles with.
+# The SIMD translation units. The instruction-set tier they compile at is the
+# PROGRAM's, stated once in the root CMakeLists (AVX2 + FMA for every
+# first-party translation unit): the library's headers refuse at start-up a
+# program whose units disagree about the tier, and three of these units reach
+# them - the two boys SIMD sources by including the library directly, and
+# fock_contract_simd.cpp through this module's own eri_batch.hpp. The entry
+# points stay runtime-gated on BoysAvx2Available()/FockAvx2Available(); the
+# PCH skip remains because these units are compiled from the submodule's
+# sources and their own SIMD-heavy headers.
 if (QCX_ARCH_X86_64)
-    if (MSVC)
-        # /arch:AVX2 also enables the F16C intrinsics the fp16 lane uses.
-        set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-        set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-        set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-    else()
-        # -mf16c for the fp16 lane's F16C load/store (GCC does not imply it via
-        # -mavx2, unlike MSVC's /arch:AVX2).
-        set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
-        set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
-        # -ffp-contract=off is LOAD-BEARING here, not hygiene (2026-09-13). The
-        # TU's own BIT-IDENTITY section contracts this tier to the SCALAR kernels
-        # the class TUs instantiate (no /arch flag), and simd_micro_gemm_test.cpp
-        # enforces it with memcmp. MulAdd keeps the hand-written vectors
-        # contraction-neutral, but that only covers what the SOURCE can control:
-        # the scalar tails (SmallnScalarTailAdd and friends, plain `a * b + c`)
-        # are fused by the COMPILER under this TU's -mfma, and gcc re-fuses the
-        # _mm256_mul_pd + _mm256_add_pd pairs inside MulAdd itself. Measured, the
-        # scalar TUs unmoved at 0 both ways: clang 21 at the CI Debug geometry 7
-        # fused -> 0, g++ 15.2 -O3 54 (32 packed) -> 0.
-        set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-ffp-contract=off")
-    endif()
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
-    # Non-x86-64: no AVX2/FMA/F16C option exists to set, and neither TU defines
-    # the tier. md_bra_simd.cpp routes its entry points to the portable kernels.
-    # boys' SIMD TU is told its answer explicitly, because its own guard is
-    # written for a consumer that compiles that source into a target of its own
-    # and refuses to guess where the compiler is not x86-64. The PCH skip goes
-    # with the flag it exists for.
+    # Non-x86-64: no AVX2/FMA/F16C tier exists, and neither TU defines it.
+    # md_bra_simd.cpp routes its entry points to the portable kernels. boys'
+    # SIMD TU is told its answer explicitly, because its own guard is written
+    # for a consumer that compiles that source into a target of its own and
+    # refuses to guess where the compiler is not x86-64.
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_DEFINITIONS "BOYS_SIMD_X86=0")
     set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_DEFINITIONS "BOYS_SIMD_X86=0")
     message(STATUS "qcx-integrals: non-x86-64 target - the AVX2 micro-GEMM tier is excluded")
 endif()
 
-# The Fock-contraction kernel's AVX2 copy. The kernel body is
-# ONE template (internal/fock_contract_kernel.hpp); the scalar copy
-# instantiates inside fock_build.cpp (no /arch flag on that TU) and this TU
-# compiles the AVX2 copy, entered only after the runtime cpuid check
-# (FockAvx2Available - the boys_simd.cpp dispatch shape, auto-vectorization
-# only, no hand-written intrinsics here). Same PCH skip as the
-# other SIMD TUs.
+# The Fock-contraction kernel's AVX2 copy. The kernel body is ONE template
+# (internal/fock_contract_kernel.hpp); the scalar copy instantiates inside
+# fock_build.cpp and this unit compiles the AVX2 copy, entered only after the
+# runtime cpuid check (FockAvx2Available - the boys_simd.cpp dispatch shape,
+# auto-vectorization only, no hand-written intrinsics here). Same PCH skip as
+# the other SIMD units.
 #
-# -ffp-contract=off is LOAD-BEARING here, not hygiene (2026-09-13). The
-# header states "both copies must deliver bit-identical output"; the scalar
-# TUs carry no target flag, so there is no FMA instruction for them to
-# contract into, while this TU's -mfma does - and clang defaults to
-# -ffp-contract=on and gcc to -ffp-contract=fast. Measured at the CI Debug
-# geometry: 10 vfmadd213sd in this TU against 0 in lean_fock_build.cpp and
-# fock_build.cpp, which broke
-# LeanDirectFockBuilderTest.SerialPathPinsItsOwnBytesAcrossCallsAndBuilders
-# on the clang leg (5 of the 49 H2O/STO-3G elements, max 4.44e-16).
+# The header states "both copies must deliver bit-identical output". The
+# program-wide contraction pin in the root CMakeLists is what holds that: on
+# GCC and Clang -mfma is a licence to fuse a bare `a * b + c`, and measured at
+# the CI Debug geometry, 10 vfmadd213sd in this unit against 0 in
+# lean_fock_build.cpp and fock_build.cpp broke
+# LeanDirectFockBuilderTest.SerialPathPinsItsOwnBytesAcrossCallsAndBuilders on
+# the clang leg (5 of the 49 H2O/STO-3G elements, max 4.44e-16) before the pin
+# was added. MSVC never contracts under its default /fp:precise - measured 0
+# fused in this tree's own Avx2 objects, Debug and Release, with /fp:fast at
+# /O2 as the 2-fused positive control.
 if (QCX_ARCH_X86_64)
-    if (MSVC)
-        # No counterpart owed: /fp:precise (the default) does not contract -
-        # measured 0 fused in this tree's own Avx2 objects, Debug and Release,
-        # with /fp:fast at /O2 as the 2-fused positive control. A future
-        # /fp:contract would have to come back here.
-        set_source_files_properties(src/fock_contract_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-    else()
-        # The flag belongs on the SIMD TUs ONLY. On a scalar TU it is inert
-        # (measured 0 fused either way, there is no FMA to fuse) and it would
-        # hide the regression it exists to catch: a scalar TU silently gaining a
-        # target feature and contracting away from the copy it must match.
-        set_source_files_properties(src/fock_contract_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-ffp-contract=off")
-    endif()
     set_source_files_properties(src/fock_contract_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
-    # Same as the micro-GEMM block above: no target feature exists here to set,
-    # and this TU's copy is entered only after FockAvx2Available(), which reads
-    # the x86-64-only CPU feature probe and is false on this target. No flag
-    # means no contraction, which is exactly what the scalar copies carry, so
-    # the bit-identity the two are compared under still holds.
+    # Same as the micro-GEMM block above: no target feature exists here, and
+    # this unit's copy is entered only after FockAvx2Available(), which reads
+    # the x86-64-only CPU feature probe and is false on this target.
     message(STATUS "qcx-integrals: non-x86-64 target - the Fock contraction AVX2 copy is excluded")
 endif()
 
