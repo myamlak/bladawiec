@@ -154,14 +154,6 @@ struct MdClassBatch {
     float* outF32 = nullptr; ///< fp32 output base (the certified lane).
     double* errorBounds = nullptr; ///< Per-quartet certified bounds (fp32 lane only).
     std::size_t boundsBase = 0; ///< Global index of the first task's bound.
-    /// The Boys rung the fp64 kernel seeds its ladder at: the library's
-    /// run-time accuracy tier, which trades the kernel's own accuracy for
-    /// speed and is a property of the batch rather than of a call inside it.
-    /// The reference tier is the certified lane's, so a batch left at it runs
-    /// the fp64 code this engine has always run, bit for bit. Only the fp64
-    /// pipeline reads this - the certified fp32 lane has its own 1e-7
-    /// contract and no rung to select.
-    AccuracyTier boysTier = AccuracyTier::kReference;
 };
 
 /// The fp64 block element mass of one class batch: the sum over its tasks

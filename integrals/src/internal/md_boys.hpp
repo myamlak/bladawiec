@@ -137,26 +137,4 @@ inline void MdBoysBatch(int nmax, double x, T* out) noexcept {
 #endif
 }
 
-/// F_0(x)..F_nmax(x) into out, at a run-time-selected rung.
-///
-/// Double only: the relaxed rungs exist for the fp64 pipeline. The fp32
-/// pipeline keeps its own 1e-7 contract with no rung to select, so it has no
-/// entry here. The reference rung is the compile-time default that MdBoysBatch
-/// above reaches, so an engine that never selects a rung runs the code it
-/// runs today.
-///
-/// A rung is not a tolerance the caller may ignore: the library's released
-/// rungs multiply the lane's own Boys bound by m, so a rung selected here
-/// loosens the lane's published 5.5e-14 to m x 5.5e-14 for every value the
-/// seeded ladder feeds. The call sites that select one state what they do
-/// with that.
-/// \param tier the rung, a property of this call only
-template <typename T>
-inline void MdBoysBatchAtTier(AccuracyTier tier, int nmax, double x, T* out) noexcept {
-    static_assert(std::is_same_v<T, double>,
-                  "the relaxed tiers are instantiated for the fp64 pipeline only");
-
-    BoysAllOrdersAtTier(tier, nmax, x, out);
-}
-
 } // namespace qcx::integrals::internal

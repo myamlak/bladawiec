@@ -156,12 +156,11 @@ using boys::BoysAllNWorkspaceSize;
 /// spread across its admitted passes, and an idle machine's clock state differs
 /// from pass to pass.
 ///
-/// Several options the library exposes are not defaulted here. The relaxed
-/// accuracy rungs are the run-time selection below and trade accuracy for
-/// speed. The fit route, the evaluation scheme, the interval granularity, the
-/// engine budget and the packing axis are the library's compile-time option
-/// space: this tree compiles and links every unit that serves them, and
-/// expresses no default among them, so the calls above take the library's own.
+/// Several options the library exposes are not defaulted here. The fit route,
+/// the evaluation scheme, the interval granularity, the engine budget and the
+/// packing axis are the library's compile-time option space: this tree
+/// compiles and links every unit that serves them, and expresses no default
+/// among them, so the calls above take the library's own.
 /// Those defaults moved between the revision this tree pins and the revision it
 /// moves to, so a caller that names none of the five axes compiles a different
 /// kernel than it did before - the accuracy contract each entry publishes is
@@ -197,27 +196,12 @@ using boys::BoysSortedArgs;
 using boys::kBoysFullAccuracyMultiplier;
 using boys::kMaxBoysOrder;
 
-// The run-time accuracy rung, forwarded so a caller in this tree selects the
-// accuracy of one call without reaching into the submodule's namespace. The
-// rung is a property of the call and carries nothing between calls.
-//
-// `BoysAllOrdersAtTier` is the reference rung's own entry until a caller names
-// another one, so a caller that never selects a rung gets the certified lane -
-// the same code it reaches through `BoysAllOrders` above.
+// The library's accuracy vocabulary, for a caller that reads what a fit
+// serves: a region names where in x the fit applies, and a component names
+// the term that limits it. Neither selects a looser arithmetic; every entry
+// above is evaluated at the lane's one published bound.
 using boys::AccuracyComponent;
-using boys::AccuracyMultiplier;
 using boys::AccuracyRegion;
-using boys::AccuracyTier;
-using boys::BoysAllOrdersAtTier;
-using boys::BoysSingleAtTier;
-using boys::QueryTier;
-using boys::TierCoverage;
-
-// The float lane's rung entry arrives with the library's next major revision
-// and is forwarded with it. The fp32 pipeline carries its own 1e-7 contract
-// with no rung to select, so that surface exists for callers that need a looser
-// rung than that contract, not for the engine: the engine's fp32 path calls the
-// reference entry above.
 
 // The five structural axes. This tree names them so a caller can pin a
 // combination where the library's default would move under it; nothing in the

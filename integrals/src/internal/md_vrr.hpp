@@ -98,8 +98,7 @@ void RunVrrQuadruple(const MdPrimPair& braPrim,
                      int kHermBra,
                      int kHermKet,
                      T* pq,
-                     double* bound,
-                     AccuracyTier boysTier) {
+                     double* bound) {
     const double alpha = braPrim.p * ketPrim.p / (braPrim.p + ketPrim.p);
     const double dqx = braPrim.px - ketPrim.px;
     const double dqy = braPrim.py - ketPrim.py;
@@ -112,27 +111,10 @@ void RunVrrQuadruple(const MdPrimPair& braPrim,
 
     T seeds[L + 1];
 
-    // The seed's rung. The reference tier is the compile-time default of the
-    // adapter, so the branch below leaves the certified path calling exactly
-    // the entry it has always called; a relaxed rung reaches the library's
-    // run-time tier entry instead. The branch is a value selected once per
-    // batch and carried down, not a second arithmetic: the storage and every
-    // operation after the seed are the lane's own. The fp32 pipeline has no
-    // rung to select (its 1e-7 contract is the tier), so it never takes this
-    // branch.
-    if constexpr (std::is_same_v<T, double>)
-    {
-        if (boysTier == AccuracyTier::kReference)
-        {
-            MdBoysBatch<T>(L, x, seeds);
-        } else
-        {
-            MdBoysBatchAtTier<T>(boysTier, L, x, seeds);
-        }
-    } else
-    {
-        MdBoysBatch<T>(L, x, seeds);
-    }
+    // The seed. One arithmetic serves both pipelines: the fp64 entry's
+    // published bound, or the fp32 entry's, whichever the caller's value
+    // type selects.
+    MdBoysBatch<T>(L, x, seeds);
 
     double seedSum = 0.0;
 
@@ -541,8 +523,7 @@ qcx::Result<void> ComputeEriClassImpl(const MdClassBatch& batch) {
                                                               kHermBra,
                                                               kHermKet,
                                                               pq,
-                                                              kCertified ? &boundAcc : nullptr,
-                                                              batch.boysTier);
+                                                              kCertified ? &boundAcc : nullptr);
                 }
 
                 if constexpr (kCertified)
