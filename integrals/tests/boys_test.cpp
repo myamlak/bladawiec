@@ -318,7 +318,10 @@ TEST(BoysTest, SingleMatchesReferenceDouble) {
     }
 
     // The bound binds per cell; a region row is the worst fraction of a
-    // cell's own bound that the region used, so <= 1 is the contract.
+    // cell's own bound that the region used, so <= 1 is the contract. The
+    // measured worst is 3.1e-2 of the bound (a 32x margin). At the region-A
+    // worst cell, n = 0, x = 1e-12: F_0 = 0.999999999999667, the bound is
+    // 1e-13, and the delivered error is 3.109e-15 (14 ULP of 1.0).
     EXPECT_LE(regionFraction.a, 1.0) << "region A (x < kX0)";
     EXPECT_LE(regionFraction.b, 1.0) << "region B (kX0 <= x < kX1)";
     EXPECT_LE(regionFraction.c, 1.0) << "region C (x >= kX1)";
