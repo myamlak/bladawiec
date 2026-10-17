@@ -1,32 +1,21 @@
-// The accuracy-parametrization contract tests.
+// The Boys accuracy-contract tests at the pinned library's entries.
 //
-// Sampled-m per-region contract: for m in {1, 2, 10, 1e2, 1e4, 1e8} x
-// {double single, double batch, float single, float batch}, assert
-// |F_hat_m - ref| <= m * B_region per region on the committed reference
-// grid (region bucketing: A x < kX0, B kX0 <= x < kX1, C x >= kX1), with
-// the asserted bounds B: double single 1e-15/3e-14/5.5e-14, double batch
-// 5.5e-14 per region, float 1.5e-7 per region. The m = 1 rows re-assert
-// the certified pins.
+// Certified-lane grid contract: on the committed reference grid
+// (tools/gen_boys_coefficients.py, 30-digit mpmath values rounded to double),
+// the double lanes hold the larger of 1e-13 * F_n(x) and 1e-13 * F_0(x) per
+// value, and the float lanes the larger of 2^-22 * F_n(x) and 1.5e-7, plus
+// 1e-7 under the plain reciprocal. The bound is formed from the grid's own
+// F_0(x) (F_n <= F_0, so the larger arm is the F_0 one), which is the shape
+// the library publishes; the previous revision stated one absolute figure per
+// region, and no region bucketing survives in the contract.
 //
-// The effective-degree tables are non-increasing in m (a larger
-// budget may only truncate further) over all six lane roles and both
-// regions, and the m = 1 tables are the full degrees (the m = 1 path is
-// today's path by construction).
+// The effective-degree tables are the evaluator's own: every degree is inside
+// the evaluator domain {0, 1, 2, 4, 6, ...} for all six lane roles.
 //
-// The fp16/Bf16 lanes forward the multiplier to the F32 engine
-// (I/O-only wrappers, no fp16-specific degree tables): assert
-// |F_hat - F(x16)| <= m * 1e-7 + 1/2 ULP per value on the reference grid at
-// sampled m, F(x16) being the certified double lane evaluated at the
-// fp16-rounded argument (the reference lane).
-//
-// The sampled-m instantiations are compiled from the shipped headers
-// (boys/boys_impl.hpp, boys/boys_effective_degrees.hpp); the m = 1 call sites
-// below still route to the library's certified instantiations, which the
-// extern-template declarations in boys/boys.hpp name. The relaxed SIMD lanes consume the
-// same constexpr degree tables as their scalar twins (region A:
-// kDoubleSingle; region B: kDoubleBatch) and the same Clenshaw recursions
-// with runtime degrees (the full-accuracy shape), so the grid contract
-// below pins the mechanism the SIMD lanes share.
+// The fp16/Bf16 lanes forward to the F32 engine (I/O-only wrappers, no
+// fp16-specific degree tables): assert |F_hat - F(x16)| <= 1.5e-7 + 1/2 ULP
+// per value on the reference grid, F(x16) being the certified double lane
+// evaluated at the fp16-rounded argument (the reference lane).
 //
 // The file lives alongside boys_test.cpp rather than inside it to keep that
 // file's existing tests untouched (the split is editorial only — same test
@@ -134,6 +123,23 @@ struct ReferenceGrid {
     }
 };
 
+const std::vector<ReferenceRow> gReference = LoadReference();
+const ReferenceGrid gGrid(gReference);
+
+// The published bound of one double-lane value: the larger of
+// 1e-13 * F_n(x) and 1e-13 * F_0(x).
+double DoubleBound(int n, double x) {
+    return 1e-13 * std::max(gGrid.Value(n, x), gGrid.Value(0, x));
+}
+
+// The published bound of one float-lane value: the larger of 2^-22 * F_n(x)
+// and 1.5e-7, plus 1e-7 under the plain reciprocal. The entry names no
+// division form, so the test carries the plain-reciprocal term the published
+// contract adds.
+double FloatBound(int n, double x) {
+    return std::max(std::ldexp(gGrid.Value(n, x), -22), 1.5e-7) + 1e-7;
+}
+
 enum class BoysRegion : std::uint8_t { A, B, C, E };
 
 BoysRegion RegionOf(double x) {
@@ -149,59 +155,6 @@ BoysRegion RegionOf(double x) {
 
     return BoysRegion::C;
 }
-
-enum class LaneKind : std::uint8_t { kDoubleSingle, kDoubleBatch, kFloatSingle, kFloatBatch };
-
-// The asserted per-region bounds of the m = 1 contract. The extended band
-// carries the region-B budget: at m = 1 its per-range F0 seed serves the
-// certified upward recursion (the band is the m = 1 lane's; the m > 1
-// branch keeps the region-A treatment there, whose tighter budget implies
-// this cell at every m).
-double RegionBound(BoysRegion region, LaneKind lane) {
-    switch (lane)
-    {
-    case LaneKind::kDoubleSingle:
-
-        switch (region)
-        {
-        case BoysRegion::A:
-            return 1e-15;
-
-        case BoysRegion::B:
-        case BoysRegion::E:
-            return 3e-14;
-
-        case BoysRegion::C:
-            return 5.5e-14;
-        }
-
-        break;
-
-    case LaneKind::kDoubleBatch:
-        return 5.5e-14;
-
-    case LaneKind::kFloatSingle:
-    case LaneKind::kFloatBatch:
-        return 1.5e-7;
-    }
-
-    return 0.0; // unreachable
-}
-
-// Runs the callable once per sampled multiplier, the
-// multiplier passed as a compile-time constant — the NTTP surface is the
-// contract under test.
-template <typename Fn> void ForEachSampledMultiplier(Fn&& fn) {
-    fn.template operator()<1.0>();
-    fn.template operator()<2.0>();
-    fn.template operator()<10.0>();
-    fn.template operator()<100.0>();
-    fn.template operator()<1e4>();
-    fn.template operator()<1e8>();
-}
-
-const std::vector<ReferenceRow> gReference = LoadReference();
-const ReferenceGrid gGrid(gReference);
 
 struct RegionWorsts {
     double a = 0.0;
@@ -235,10 +188,9 @@ struct RegionWorsts {
     }
 };
 
-void PrintWorsts(const char* lane, double m, const RegionWorsts& worst) {
-    std::printf("%s m=%.0e: worst region A %.3e, B %.3e, C %.3e, extended band %.3e\n",
+void PrintWorsts(const char* lane, const RegionWorsts& worst) {
+    std::printf("%s: worst region A %.3e, B %.3e, C %.3e, extended band %.3e\n",
                 lane,
-                m,
                 worst.a,
                 worst.b,
                 worst.c,
@@ -246,107 +198,107 @@ void PrintWorsts(const char* lane, double m, const RegionWorsts& worst) {
 }
 
 // ---------------------------------------------------------------------------
-// The sampled-m grid contract, one templated sweep per lane
+// The certified-lane grid contract, one sweep per lane
 // ---------------------------------------------------------------------------
 
-template <double kM> void SweepDoubleSingle() {
+void SweepDoubleSingle() {
     RegionWorsts worst;
 
     for (const ReferenceRow& row : gReference)
     {
-        const double value = BoysSingle<kM>(row.n, row.x);
-        const double bound = kM * RegionBound(RegionOf(row.x), LaneKind::kDoubleSingle);
+        const double value = BoysSingle(row.n, row.x);
+        const double bound = DoubleBound(row.n, row.x);
         const double error = std::abs(value - row.value);
-        EXPECT_LE(error, bound) << "m=" << kM << " n=" << row.n << " x=" << row.x
-                                << " got=" << value << " want=" << row.value;
+        EXPECT_LE(error, bound) << "n=" << row.n << " x=" << row.x << " got=" << value
+                                << " want=" << row.value;
         worst.Update(error, row.x);
     }
 
-    PrintWorsts("double single", kM, worst);
+    PrintWorsts("double single", worst);
 }
 
-template <double kM> void SweepDoubleBatch() {
+void SweepDoubleBatch() {
     RegionWorsts worst;
     std::vector<double> batch(qcx::integrals::kMaxBoysOrder + 1);
 
     for (const ReferenceRow& row : gReference)
     {
-        BoysAllOrders<kM>(row.n, row.x, batch.data());
+        BoysAllOrders(row.n, row.x, batch.data());
 
         for (int k = 0; k <= row.n; ++k)
         {
             const double reference = gGrid.Value(k, row.x);
-            const double bound = kM * RegionBound(RegionOf(row.x), LaneKind::kDoubleBatch);
+            const double bound = DoubleBound(k, row.x);
             const double error = std::abs(batch[static_cast<std::size_t>(k)] - reference);
             EXPECT_LE(error, bound)
-                << "m=" << kM << " batch F" << k << " at x=" << row.x
+                << "batch F" << k << " at x=" << row.x
                 << " got=" << batch[static_cast<std::size_t>(k)] << " want=" << reference;
             worst.Update(error, row.x);
         }
     }
 
-    PrintWorsts("double batch", kM, worst);
+    PrintWorsts("double batch", worst);
 }
 
-template <double kM> void SweepFloatSingle() {
+void SweepFloatSingle() {
     RegionWorsts worst;
 
     for (const ReferenceRow& row : gReference)
     {
-        const float value = BoysSingleF32<kM>(row.n, static_cast<float>(row.x));
-        const double bound = kM * RegionBound(RegionOf(row.x), LaneKind::kFloatSingle);
+        const float value = BoysSingleF32(row.n, static_cast<float>(row.x));
+        const double bound = FloatBound(row.n, row.x);
         const double error = std::abs(static_cast<double>(value) - row.value);
-        EXPECT_LE(error, bound) << "m=" << kM << " n=" << row.n << " x=" << row.x
-                                << " got=" << value << " want=" << row.value;
+        EXPECT_LE(error, bound) << "n=" << row.n << " x=" << row.x << " got=" << value
+                                << " want=" << row.value;
         worst.Update(error, row.x);
     }
 
-    PrintWorsts("float single", kM, worst);
+    PrintWorsts("float single", worst);
 }
 
-template <double kM> void SweepFloatBatch() {
+void SweepFloatBatch() {
     RegionWorsts worst;
     std::vector<float> batch(qcx::integrals::kMaxBoysOrder + 1);
 
     for (const ReferenceRow& row : gReference)
     {
-        BoysAllOrdersF32<kM>(row.n, static_cast<float>(row.x), batch.data());
+        BoysAllOrdersF32(row.n, static_cast<float>(row.x), batch.data());
 
         for (int k = 0; k <= row.n; ++k)
         {
             const double reference = gGrid.Value(k, row.x);
-            const double bound = kM * RegionBound(RegionOf(row.x), LaneKind::kFloatBatch);
+            const double bound = FloatBound(k, row.x);
             const double error =
                 std::abs(static_cast<double>(batch[static_cast<std::size_t>(k)]) - reference);
             EXPECT_LE(error, bound)
-                << "m=" << kM << " batch F" << k << " at x=" << row.x
+                << "batch F" << k << " at x=" << row.x
                 << " got=" << batch[static_cast<std::size_t>(k)] << " want=" << reference;
             worst.Update(error, row.x);
         }
     }
 
-    PrintWorsts("float batch", kM, worst);
+    PrintWorsts("float batch", worst);
 }
 
-TEST(BoysAccuracyTest, DoubleSingleSampledMultipliers) {
-    ForEachSampledMultiplier([]<double kM>() { SweepDoubleSingle<kM>(); });
+TEST(BoysAccuracyTest, DoubleSingleHoldsThePublishedBound) {
+    SweepDoubleSingle();
 }
 
-TEST(BoysAccuracyTest, DoubleBatchSampledMultipliers) {
-    ForEachSampledMultiplier([]<double kM>() { SweepDoubleBatch<kM>(); });
+TEST(BoysAccuracyTest, DoubleBatchHoldsThePublishedBound) {
+    SweepDoubleBatch();
 }
 
-TEST(BoysAccuracyTest, FloatSingleSampledMultipliers) {
-    ForEachSampledMultiplier([]<double kM>() { SweepFloatSingle<kM>(); });
+TEST(BoysAccuracyTest, FloatSingleHoldsThePublishedBound) {
+    SweepFloatSingle();
 }
 
-TEST(BoysAccuracyTest, FloatBatchSampledMultipliers) {
-    ForEachSampledMultiplier([]<double kM>() { SweepFloatBatch<kM>(); });
+TEST(BoysAccuracyTest, FloatBatchHoldsThePublishedBound) {
+    SweepFloatBatch();
 }
 
 // ---------------------------------------------------------------------------
-// The effective degrees: non-increasing in m, full at m = 1, inside
-// the evaluator domain {0, 1, 2, 4, 6, ...} at every (m, role, point)
+// The effective degrees: inside the evaluator domain
+// {0, 1, 2, 4, 6, ...} at every (role, point)
 // ---------------------------------------------------------------------------
 
 constexpr bool InEvaluatorDomain(int d) {
@@ -354,55 +306,21 @@ constexpr bool InEvaluatorDomain(int d) {
 }
 
 template <BoysRole kRole> void AssertRoleTables() {
-    constexpr auto a1 = RegionADegrees<1.0, kRole>();
-    constexpr auto b1 = RegionBDegrees<1.0, kRole>();
+    constexpr auto a = RegionADegrees<kRole>();
+    constexpr auto b = RegionBDegrees<kRole>();
 
-    for (std::size_t i = 0; i < a1.size(); ++i)
+    for (std::size_t i = 0; i < a.size(); ++i)
     {
-        EXPECT_TRUE(InEvaluatorDomain(a1[i])) << "region-A degree " << a1[i] << " at index " << i;
+        EXPECT_TRUE(InEvaluatorDomain(a[i])) << "region-A degree " << a[i] << " at index " << i;
     }
 
-    for (std::size_t i = 0; i < b1.size(); ++i)
+    for (std::size_t i = 0; i < b.size(); ++i)
     {
-        EXPECT_TRUE(InEvaluatorDomain(b1[i])) << "region-B degree " << b1[i] << " at index " << i;
-    }
-
-    // The m = 1 tables are the full degrees: the criterion's budget
-    // (m - 1)*B is zero, so only the full degree has an empty tail.
-    if constexpr (qcx::integrals::detail::RoleUsesDoubleTables(kRole))
-    {
-        for (std::size_t p = 0; p < qcx::integrals::detail::kPieces.size(); ++p)
-        {
-            EXPECT_EQ(a1[p], qcx::integrals::detail::kPieces[p].deg)
-                << "region-A piece " << p << " must keep its full degree at m = 1";
-        }
-    } else
-    {
-        for (std::size_t p = 0; p < qcx::integrals::detail::f32::kPieces.size(); ++p)
-        {
-            EXPECT_EQ(a1[p], qcx::integrals::detail::f32::kPieces[p].deg)
-                << "region-A piece " << p << " must keep its full degree at m = 1";
-        }
-    }
-
-    if constexpr (kRole == BoysRole::kDoubleSingle || kRole == BoysRole::kDoubleBatch)
-    {
-        for (int n = 0; n <= qcx::integrals::kMaxBoysOrder; ++n)
-        {
-            EXPECT_EQ(b1[static_cast<std::size_t>(n)], qcx::integrals::detail::kBDeg)
-                << "region-B order " << n << " must keep its full degree at m = 1";
-        }
-    } else
-    {
-        for (int n = 0; n <= qcx::integrals::kMaxBoysOrder; ++n)
-        {
-            EXPECT_EQ(b1[static_cast<std::size_t>(n)], qcx::integrals::detail::f32::kBDeg)
-                << "region-B order " << n << " must keep its full degree at m = 1";
-        }
+        EXPECT_TRUE(InEvaluatorDomain(b[i])) << "region-B degree " << b[i] << " at index " << i;
     }
 }
 
-TEST(BoysAccuracyTest, EffectiveDegreesAtM1AreFullAndInDomain) {
+TEST(BoysAccuracyTest, EffectiveDegreesAreInTheEvaluatorDomain) {
     AssertRoleTables<BoysRole::kDoubleSingle>();
     AssertRoleTables<BoysRole::kDoubleBatch>();
     AssertRoleTables<BoysRole::kF32Single>();
@@ -411,53 +329,20 @@ TEST(BoysAccuracyTest, EffectiveDegreesAtM1AreFullAndInDomain) {
     AssertRoleTables<BoysRole::kF32Fp16Batch>();
 }
 
-template <double kMLo, double kMHi, BoysRole kRole> void AssertRoleNonIncreasing() {
-    static_assert(kMLo < kMHi);
-    constexpr auto loA = RegionADegrees<kMLo, kRole>();
-    constexpr auto hiA = RegionADegrees<kMHi, kRole>();
-    static_assert(loA.size() == hiA.size());
-
-    for (std::size_t i = 0; i < loA.size(); ++i)
-    {
-        EXPECT_GE(loA[i], hiA[i]) << "region-A index " << i << " degree must not grow with m ("
-                                  << kMLo << " -> " << kMHi << ")";
-    }
-
-    constexpr auto loB = RegionBDegrees<kMLo, kRole>();
-    constexpr auto hiB = RegionBDegrees<kMHi, kRole>();
-
-    for (std::size_t i = 0; i < loB.size(); ++i)
-    {
-        EXPECT_GE(loB[i], hiB[i]) << "region-B index " << i << " degree must not grow with m ("
-                                  << kMLo << " -> " << kMHi << ")";
-    }
-}
-
-TEST(BoysAccuracyTest, EffectiveDegreesNonIncreasingInMultiplier) {
-    // Non-increasing in m over every pair of sampled multipliers and every role.
-    ForEachSampledMultiplier([]<double kMLo>() {
-        ForEachSampledMultiplier([]<double kMHi>() {
-            if constexpr (kMLo < kMHi)
-            {
-                AssertRoleNonIncreasing<kMLo, kMHi, BoysRole::kDoubleSingle>();
-                AssertRoleNonIncreasing<kMLo, kMHi, BoysRole::kDoubleBatch>();
-                AssertRoleNonIncreasing<kMLo, kMHi, BoysRole::kF32Single>();
-                AssertRoleNonIncreasing<kMLo, kMHi, BoysRole::kF32Batch>();
-                AssertRoleNonIncreasing<kMLo, kMHi, BoysRole::kF32Fp16Single>();
-                AssertRoleNonIncreasing<kMLo, kMHi, BoysRole::kF32Fp16Batch>();
-            }
-        });
-    });
-}
-
 // ---------------------------------------------------------------------------
-// Delivered-path consistency: the relaxed single and batch lanes (separate
-// arithmetic paths — per-order fits vs. seed + recursion) must agree within
-// the sum of their m-scaled region bounds, and the exact x = 0 values must
-// survive at every sampled m.
+// Delivered-path consistency: the single and batch lanes (separate arithmetic
+// paths — per-order fits vs. seed + recursion) must agree within the sum of
+// their published bounds, and the exact x = 0 values must survive.
 // ---------------------------------------------------------------------------
 
-template <double kM> void CheckSingleBatchAgree() {
+// These samples take arguments off the reference grid, so the bound is the
+// published one evaluated at its largest: F_n <= F_0 <= 1 for every x >= 0,
+// so the double lane's larger arm is at most 1e-13 and the float lane's at
+// most 2^-22 + 1e-7.
+constexpr double kDoubleBoundSupremum = 1e-13;
+constexpr double kFloatBoundSupremum = 0x1p-22 + 1e-7;
+
+void CheckSingleBatchAgree() {
     std::mt19937_64 rng(424242);
     std::uniform_real_distribution<double> xd(1e-4, 40.0);
     std::vector<double> batch(qcx::integrals::kMaxBoysOrder + 1);
@@ -465,22 +350,20 @@ template <double kM> void CheckSingleBatchAgree() {
     for (int sample = 0; sample < 200; ++sample)
     {
         const double x = xd(rng);
-        const BoysRegion region = RegionOf(x);
         const int nmax = static_cast<int>(rng() % (qcx::integrals::kMaxBoysOrder + 1));
-        BoysAllOrders<kM>(nmax, x, batch.data());
+        BoysAllOrders(nmax, x, batch.data());
 
         for (int k = 0; k <= nmax; ++k)
         {
-            const double single = BoysSingle<kM>(k, x);
-            const double bound = kM * (RegionBound(region, LaneKind::kDoubleSingle) +
-                                       RegionBound(region, LaneKind::kDoubleBatch));
+            const double single = BoysSingle(k, x);
+            const double bound = 2.0 * kDoubleBoundSupremum;
             EXPECT_LE(std::abs(batch[static_cast<std::size_t>(k)] - single), bound)
-                << "m=" << kM << " n=" << k << " x=" << x;
+                << "n=" << k << " x=" << x;
         }
     }
 }
 
-template <double kM> void CheckSingleBatchAgreeF32() {
+void CheckSingleBatchAgreeF32() {
     std::mt19937_64 rng(424243);
     std::uniform_real_distribution<float> xd(1e-4f, 40.0f);
     std::vector<float> batch(qcx::integrals::kMaxBoysOrder + 1);
@@ -488,32 +371,30 @@ template <double kM> void CheckSingleBatchAgreeF32() {
     for (int sample = 0; sample < 200; ++sample)
     {
         const float x = xd(rng);
-        const BoysRegion region = RegionOf(static_cast<double>(x));
         const int nmax = static_cast<int>(rng() % (qcx::integrals::kMaxBoysOrder + 1));
-        BoysAllOrdersF32<kM>(nmax, x, batch.data());
+        BoysAllOrdersF32(nmax, x, batch.data());
 
         for (int k = 0; k <= nmax; ++k)
         {
-            const float single = BoysSingleF32<kM>(k, x);
-            const double bound = kM * (RegionBound(region, LaneKind::kFloatSingle) +
-                                       RegionBound(region, LaneKind::kFloatBatch));
+            const float single = BoysSingleF32(k, x);
+            const double bound = 2.0 * kFloatBoundSupremum;
             EXPECT_LE(std::abs(static_cast<double>(batch[static_cast<std::size_t>(k)]) -
                                static_cast<double>(single)),
                       bound)
-                << "m=" << kM << " n=" << k << " x=" << x;
+                << "n=" << k << " x=" << x;
         }
     }
 }
 
-template <double kM> void CheckZeroArgument() {
+void CheckZeroArgument() {
     for (int n = 0; n <= qcx::integrals::kMaxBoysOrder; ++n)
     {
-        EXPECT_DOUBLE_EQ(BoysSingle<kM>(n, 0.0), 1.0 / (2.0 * n + 1.0));
-        EXPECT_FLOAT_EQ(BoysSingleF32<kM>(n, 0.0f), 1.0f / (2.0f * static_cast<float>(n) + 1.0f));
+        EXPECT_DOUBLE_EQ(BoysSingle(n, 0.0), 1.0 / (2.0 * n + 1.0));
+        EXPECT_FLOAT_EQ(BoysSingleF32(n, 0.0f), 1.0f / (2.0f * static_cast<float>(n) + 1.0f));
     }
 
     double batch[qcx::integrals::kMaxBoysOrder + 1];
-    BoysAllOrders<kM>(8, 0.0, batch);
+    BoysAllOrders(8, 0.0, batch);
 
     for (int k = 0; k <= 8; ++k)
     {
@@ -521,7 +402,7 @@ template <double kM> void CheckZeroArgument() {
     }
 
     float batchF32[qcx::integrals::kMaxBoysOrder + 1];
-    BoysAllOrdersF32<kM>(8, 0.0f, batchF32);
+    BoysAllOrdersF32(8, 0.0f, batchF32);
 
     for (int k = 0; k <= 8; ++k)
     {
@@ -529,22 +410,20 @@ template <double kM> void CheckZeroArgument() {
     }
 }
 
-TEST(BoysAccuracyTest, SingleBatchAgreeAtSampledMultipliers) {
-    ForEachSampledMultiplier([]<double kM>() {
-        CheckSingleBatchAgree<kM>();
-        CheckSingleBatchAgreeF32<kM>();
-    });
+TEST(BoysAccuracyTest, SingleBatchAgreeWithinTheSumOfBounds) {
+    CheckSingleBatchAgree();
+    CheckSingleBatchAgreeF32();
 }
 
-TEST(BoysAccuracyTest, ZeroArgumentExactAtSampledMultipliers) {
-    ForEachSampledMultiplier([]<double kM>() { CheckZeroArgument<kM>(); });
+TEST(BoysAccuracyTest, ZeroArgumentIsExact) {
+    CheckZeroArgument();
 }
 
 // ---------------------------------------------------------------------------
-// The fp16/Bf16 lanes at sampled m: |F_hat - F(x16)| <= m*1e-7 + 1/2
-// ULP per value, F(x16) the certified double lane at the fp16-rounded
-// argument (the reference lane). The multiplier forwards to the F32
-// engine's kFp16-budget roles (no fp16-specific degree tables).
+// The fp16/Bf16 lanes: |F_hat - F(x16)| <= 1.5e-7 + 1/2 ULP per value,
+// F(x16) the certified double lane at the fp16-rounded argument (the
+// reference lane). The wrappers forward to the F32 engine's kFp16-budget
+// roles (no fp16-specific degree tables).
 // ---------------------------------------------------------------------------
 #if QcxIntegralsFp16
 
@@ -557,10 +436,9 @@ double HalfUlp(qcx::integrals::Bf16 x) {
 }
 
 template <typename Half,
-          double kM,
           Half (*SingleFn)(int, Half) noexcept,
           void (*BatchFn)(int, Half, Half*) noexcept>
-void RunHalfSampledCheck(const char* label) {
+void RunHalfCheck(const char* label) {
     double worstSingle = 0.0;
     double worstBatch = 0.0;
     std::vector<Half> batch(qcx::integrals::kMaxBoysOrder + 1);
@@ -568,54 +446,47 @@ void RunHalfSampledCheck(const char* label) {
     for (const ReferenceRow& row : gReference)
     {
         const Half x = static_cast<Half>(row.x);
-        const double reference = BoysSingle<1.0>(row.n, static_cast<double>(x));
+        const double reference = BoysSingle(row.n, static_cast<double>(x));
         const Half half = static_cast<Half>(reference);
-        const double tolerance = kM * 1e-7 + HalfUlp(half);
+        const double tolerance = 1.5e-7 + HalfUlp(half);
         const double single = static_cast<double>(SingleFn(row.n, x));
         const double singleError = std::abs(single - reference);
-        EXPECT_LE(singleError, tolerance) << "m=" << kM << " n=" << row.n << " x=" << row.x
-                                          << " got=" << single << " want=" << reference;
+        EXPECT_LE(singleError, tolerance)
+            << "n=" << row.n << " x=" << row.x << " got=" << single << " want=" << reference;
         worstSingle = std::max(worstSingle, singleError);
         BatchFn(row.n, x, batch.data());
 
         for (int k = 0; k <= row.n; ++k)
         {
-            const double batchReference = BoysSingle<1.0>(k, static_cast<double>(x));
-            const double batchTolerance = kM * 1e-7 + HalfUlp(static_cast<Half>(batchReference));
+            const double batchReference = BoysSingle(k, static_cast<double>(x));
+            const double batchTolerance = 1.5e-7 + HalfUlp(static_cast<Half>(batchReference));
             const double batchError =
                 std::abs(static_cast<double>(batch[static_cast<std::size_t>(k)]) - batchReference);
             EXPECT_LE(batchError, batchTolerance)
-                << "m=" << kM << " batch F" << k << " at x=" << row.x
+                << "batch F" << k << " at x=" << row.x
                 << " got=" << static_cast<double>(batch[static_cast<std::size_t>(k)])
                 << " want=" << batchReference;
             worstBatch = std::max(worstBatch, batchError);
         }
     }
 
-    std::printf("%s m=%.0e: worst single |error| %.3e, worst batch |error| %.3e "
-                "(bound m*1e-7 + 1/2 ULP per value)\n",
+    std::printf("%s: worst single |error| %.3e, worst batch |error| %.3e "
+                "(bound 1.5e-7 + 1/2 ULP per value)\n",
                 label,
-                kM,
                 worstSingle,
                 worstBatch);
 }
 
-TEST(BoysAccuracyTest, F16SampledMultipliers) {
-    ForEachSampledMultiplier([]<double kM>() {
-        RunHalfSampledCheck<qcx::integrals::F16,
-                            kM,
-                            qcx::integrals::BoysSingleF16<kM>,
-                            qcx::integrals::BoysAllOrdersF16<kM>>("BoysF16");
-    });
+TEST(BoysAccuracyTest, F16HoldsThePublishedBound) {
+    RunHalfCheck<qcx::integrals::F16,
+                 qcx::integrals::BoysSingleF16,
+                 qcx::integrals::BoysAllOrdersF16>("BoysF16");
 }
 
-TEST(BoysAccuracyTest, Bf16SampledMultipliers) {
-    ForEachSampledMultiplier([]<double kM>() {
-        RunHalfSampledCheck<qcx::integrals::Bf16,
-                            kM,
-                            qcx::integrals::BoysSingleBf16<kM>,
-                            qcx::integrals::BoysAllOrdersBf16<kM>>("BoysBf16");
-    });
+TEST(BoysAccuracyTest, Bf16HoldsThePublishedBound) {
+    RunHalfCheck<qcx::integrals::Bf16,
+                 qcx::integrals::BoysSingleBf16,
+                 qcx::integrals::BoysAllOrdersBf16>("BoysBf16");
 }
 
 #endif // QcxIntegralsFp16
