@@ -3,10 +3,11 @@
 /// \defgroup qcx-integrals Integrals module
 ///
 /// One- and two-electron molecular integrals over Gaussian-type orbitals.
-/// Everything here is measured against the provisional accuracy targets:
-/// absolute error 5e-14 in double precision and 1e-7 in single
-/// precision for the Boys kernel, which is the accuracy bottleneck of all
-/// subsequent integral recursions.
+/// Everything here is measured against the Boys kernel's published bound -
+/// the larger of `1e-13 * F_n(x)` and `1e-13 * F_0(x)` per value in double
+/// precision, and the larger of `2^-22 * F_n(x)` and `1.5e-7` in single
+/// precision, plus `1e-7` under the plain reciprocal - which is the accuracy
+/// bottleneck of all subsequent integral recursions.
 
 // The Boys kernel is built from the boys submodule's sources into
 // qcx-integrals; this header forwards the submodule's public API into
@@ -163,10 +164,13 @@ using boys::BoysAllNWorkspaceSize;
 /// packing axis are the library's compile-time option space: this tree
 /// compiles and links every unit that serves them, and expresses no default
 /// among them, so the calls above take the library's own.
-/// Those defaults moved between the revision this tree pins and the revision it
-/// moves to, so a caller that names none of the five axes compiles a different
-/// kernel than it did before - the accuracy contract each entry publishes is
-/// unchanged, and the arithmetic behind it is not. That is the exposure this
+/// The defaults moved with the revision this tree pins, and so did the
+/// accuracy contract: each lane now states its bound as a fraction of the
+/// value rather than as one absolute figure - the larger of `1e-13 * F_n(x)`
+/// and `1e-13 * F_0(x)` for the double lane, and the larger of
+/// `2^-22 * F_n(x)` and `1.5e-7` (plus `1e-7` under the plain reciprocal) for
+/// the float lane. A caller that names none of the five axes therefore
+/// compiles a different kernel than it did before. That is the exposure this
 /// tree accepts in exchange for not maintaining a seam of its own, and
 /// BoysBuildRecord is where the combination in force is written down, so the
 /// next such move is read rather than discovered.

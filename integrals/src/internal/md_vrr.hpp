@@ -41,8 +41,9 @@
 // a-priori error bound
 //   bound = eps * C_class * (1 + G_class) * EabSum * EcdSum
 //           * sum_(abgd) f * sum_m (|seed_m| + eps)
-// with eps = 1e-7 (the fp32 lane's fit placement target - its published bound
-// is 1.5e-7, above - and the fp32 roundoff
+// with eps = 1e-7 (the fp32 lane's fit placement target; its published bound
+// is the larger of 2^-22 * F_n(x) and 1.5e-7, plus 1e-7 under the plain
+// reciprocal - above the target - and the fp32 roundoff
 // bound of the GEMM/representation terms), C_class/G_class the
 // generator-derived class constants (md_tables_gen.hpp: kappa_m =
 // sup sqrt(x) F_{m+1}/F_m bounds each recurrence step, the path sums bound
@@ -74,10 +75,10 @@ namespace qcx::integrals::internal {
 
 /// The fp32 lane's fit placement target: the library places its regions
 /// against 1e-7, and its prose says the target is not what a caller
-/// receives. The pinned library's published bound for the float lane is the
-/// contract table's <= m x 1.5e-7 per value (m = the accuracy multiplier),
-/// so this constant carries the target while that bound carries the
-/// headroom over it; the bound is restated when the fp32 seeds move.
+/// receives. The library's published bound for the float lane is the larger
+/// of 2^-22 * F_n(x) and 1.5e-7 per value, plus 1e-7 under the plain
+/// reciprocal, so this constant carries the target while that bound carries
+/// the headroom over it; the bound is restated when the fp32 seeds move.
 inline constexpr double kCertifiedEpsilon = 1e-7;
 
 namespace detail {

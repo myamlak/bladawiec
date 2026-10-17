@@ -7,11 +7,6 @@
 // choice is a per-call precision policy, never a per-quartet branch inside
 // the kernel: the caller's gate decides which pipeline each quartet goes
 // through.
-//
-// The accuracy rung below is the other axis and it is the weaker one: it
-// selects a looser fit of the same arithmetic rather than a different
-// arithmetic, so it is a value a batch carries and not a dispatch dimension
-// the engine branches on.
 
 #include "qcx/integrals/boys.hpp"
 
@@ -81,8 +76,10 @@ namespace qcx::integrals::internal {
 /// first - see the seed-entry note in qcx/integrals/boys.hpp for the
 /// measurement behind the choice and for what a batched shape was measured to
 /// be worth on this engine's own argument stream.
-/// \tparam T double (the pinned library's published bound is m x 5.5e-14
-/// absolute per value) or float (its float lane's is m x 1.5e-7 per value).
+/// \tparam T double (the library's published bound is the larger of
+/// 1e-13 * F_n(x) and 1e-13 * F_0(x) per value) or float (its float lane's is
+/// the larger of 2^-22 * F_n(x) and 1.5e-7 per value, plus 1e-7 under the
+/// plain reciprocal).
 /// \tparam kFp64Seeds false, the default, leaves the float arm on the fp32
 /// entry's own seeds; true forms the ladder in double and rounds each value
 /// once, so that route's seed error is the fp64 bound plus one float rounding
