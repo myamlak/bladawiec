@@ -81,8 +81,15 @@ namespace qcx::integrals::internal {
 /// first - see the seed-entry note in qcx/integrals/boys.hpp for the
 /// measurement behind the choice and for what a batched shape was measured to
 /// be worth on this engine's own argument stream.
-/// \tparam T double (5e-14 per value) or float (1e-7 per value).
-template <typename T> inline void MdBoysBatch(int nmax, double x, T* out) noexcept {
+/// \tparam T double (the pinned library's published bound is m x 5.5e-14
+/// absolute per value) or float (its float lane's is m x 1.5e-7 per value).
+/// \tparam kFp64Seeds false, the default, leaves the float arm on the fp32
+/// entry's own seeds; true forms the ladder in double and rounds each value
+/// once, so that route's seed error is the fp64 bound plus one float rounding
+/// per value. Which of the two the engine's argument stream favours is a
+/// measurement question, not an assumption.
+template <typename T, bool kFp64Seeds = false>
+inline void MdBoysBatch(int nmax, double x, T* out) noexcept {
     static_assert(std::is_same_v<T, double> || std::is_same_v<T, float>);
 
 #if defined(QCX_BOYS_SHARE_INSTRUMENT)
@@ -101,6 +108,18 @@ template <typename T> inline void MdBoysBatch(int nmax, double x, T* out) noexce
     if constexpr (std::is_same_v<T, double>)
     {
         BoysAllOrders(nmax, x, out);
+    } else if constexpr (kFp64Seeds)
+    {
+        // The fp64 entry writes double, so its ladder lands in a stack buffer
+        // and is rounded once per value on the way into the caller's array -
+        // the whole of what this arm adds over the one below.
+        double ladder[kMaxBoysOrder + 1];
+        BoysAllOrders(nmax, x, ladder);
+
+        for (int l = 0; l <= nmax; ++l)
+        {
+            out[l] = static_cast<float>(ladder[l]);
+        }
     } else
     {
         // The ladder is written straight into the caller's array: the fp32
@@ -128,8 +147,9 @@ template <typename T> inline void MdBoysBatch(int nmax, double x, T* out) noexce
 ///
 /// A rung is not a tolerance the caller may ignore: the library's released
 /// rungs multiply the lane's own Boys bound by m, so a rung selected here
-/// loosens 5e-14 to m x 5.5e-14 for every value the seeded ladder feeds. The
-/// call sites that select one state what they do with that.
+/// loosens the lane's published 5.5e-14 to m x 5.5e-14 for every value the
+/// seeded ladder feeds. The call sites that select one state what they do
+/// with that.
 /// \param tier the rung, a property of this call only
 template <typename T>
 inline void MdBoysBatchAtTier(AccuracyTier tier, int nmax, double x, T* out) noexcept {

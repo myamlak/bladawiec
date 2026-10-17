@@ -225,6 +225,10 @@ inline void BuildNuclearPair(const MdPairData& pair,
             const double dcz = prim.pz - centers[c].z();
             const double x = prim.p * (dcx * dcx + dcy * dcy + dcz * dcz);
             double tmp[1 + kMaxBoysOrder];
+            // Seeds the nuclear-attraction block's ladder for this primitive
+            // pair at this nucleus. The pinned library's published bound for
+            // the double batch ladder is <= m x 5.5e-14 absolute per value in
+            // every region (m = the accuracy multiplier; 1.0 here).
             BoysAllOrders(l1, x, tmp);
 
             for (int m = 0; m <= l1; ++m)

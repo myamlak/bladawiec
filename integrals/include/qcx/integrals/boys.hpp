@@ -177,14 +177,14 @@ using boys::BoysAllNWorkspaceSize;
 /// the route the library reports the values were computed at beside the route
 /// this build asked for.
 ///
-/// The CUDA engine does not call the library's CUDA lane. It evaluates Boys in
-/// its own device kernels, from tables this tree builds out of the library's
-/// generated coefficient header at device creation, and the library's launched
-/// and device-callable entries are reached by the CUDA tests and benchmarks
-/// only. That duplicate is about 405 lines and a device table struct whose
-/// declared arrays sum to 43 KiB, and replacing it is the one change to this
-/// surface whose cost is unmeasured on the machine it would run on: nothing in
-/// this tree times the fused kernel's Boys evaluation on either side.
+/// The CUDA engine evaluates Boys through the library's device lane: its
+/// kernels call `BoysDeviceAllNF64` / `BoysDeviceAllNF32` from the handle
+/// `BoysCuda::DeviceTables` fills at Create, and Create refuses an engine the
+/// lane cannot serve. The engine's own former port of the arithmetic is kept
+/// as the second arm of the swap probe, one process on one fixture and behind
+/// `QCX_BOYS_SWAP_INSTRUMENT` (benchmarks/boys_cuda_swap_probe.cpp, default
+/// OFF), so a production build carries the library's lane only, and the two
+/// are compared without a second build.
 ///
 /// \ingroup qcx-integrals
 using boys::BoysAllOrders;
