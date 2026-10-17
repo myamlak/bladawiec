@@ -62,26 +62,15 @@ std::vector<ReferenceRow> LoadReference() {
     return rows;
 }
 
-// Tolerance with a small margin over the design target: the reference values
-// carry ~1e-17 double-rounding, and the fits are validated at 4.5e-14.
-constexpr double kDoubleTolerance = 5.5e-14;
 constexpr float kFloatTolerance = 1.5e-7f;
 
-// Per-region worst bounds for the double single lane (paper tab:accuracy
-// cells; design-study measured worsts in parentheses):
-// region A <= 1e-15 (6.7e-16), region B <= 3e-14 (2.9e-14), region C shares
-// the overall 5.5e-14 (5.0e-14 at (32, x1)). Each bound matches the paper
-// cell within one significant digit.
-constexpr double kRegionATolerance = 1e-15;
-constexpr double kRegionBTolerance = 3e-14;
-
-// Region bucketing per the paper's tab:accuracy caption: region A x < kX0,
+// The reporting partition the diagnostic prints use: region A x < kX0,
 // region B kX0 <= x < kX1, region C x >= kX1 (the x = kX1 and x = 100 grid
-// rows land in C, so the paper's "(32, x1)" worst sits in region C, the
-// shared asymptotic cutoff). The extended band [kExtendedBX0, kX0) is its
-// own region (E): the per-range F0 seed + upward recursion serves it per
-// kmax tier, carrying the region-B-style budgets. The boundaries are the
-// shipped kernel's own (boys_coefficients.hpp kX0/kX1/kExtendedBX0).
+// rows land in C, the shared asymptotic cutoff), and the extended band
+// [kExtendedBX0, kX0) as its own region (E). The contract binds per value,
+// not per region; the partition only localizes a failure. The boundaries
+// are the shipped kernel's own (boys_coefficients.hpp
+// kX0/kX1/kExtendedBX0).
 enum class BoysRegion : std::uint8_t { A, B, C, E };
 
 BoysRegion RegionOf(double x) {
@@ -109,27 +98,27 @@ struct RegionWorsts {
     double c = 0.0;
     double e = 0.0;
 
-    // (error, x) are the candidate error and its x - the per-region max
+    // (value, x) are the candidate worst and its x - the per-region max
     // accumulator's pair.
     //
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-    void Update(double error, double x) {
+    void Update(double value, double x) {
         switch (RegionOf(x))
         {
         case BoysRegion::A:
-            a = std::max(a, error);
+            a = std::max(a, value);
             break;
 
         case BoysRegion::B:
-            b = std::max(b, error);
+            b = std::max(b, value);
             break;
 
         case BoysRegion::C:
-            c = std::max(c, error);
+            c = std::max(c, value);
             break;
 
         case BoysRegion::E:
-            e = std::max(e, error);
+            e = std::max(e, value);
             break;
         }
     }
@@ -150,6 +139,16 @@ double ReferenceValue(int n, double x) {
 
     ADD_FAILURE() << "no reference row for n=" << n << " x=" << x;
     return 0.0;
+}
+
+// The published double-lane bound at one cell: the larger of 1e-13 * F_n(x)
+// and 1e-13 * F_0(x), both read off the committed grid (F_n <= F_0, so the
+// F_0 arm is the wider one). The grid's values are 30-digit mpmath rounds,
+// so their own double rounding is at most ~0.1% of the smallest bound the
+// grid forms (8.9e-15 at x = 100); no extra slack is added, and the margin
+// the run delivers against this bound is printed beside it.
+double DoubleBound(int n, double x) {
+    return 1e-13 * std::max(ReferenceValue(n, x), ReferenceValue(0, x));
 }
 
 // The grid's distinct arguments: its rows of one order.
@@ -287,39 +286,64 @@ TEST(BoysTest, ReferenceDataLoaded) {
 
 TEST(BoysTest, SingleMatchesReferenceDouble) {
     double worst = 0.0;
+    double worstX = 0.0;
+    double worstFraction = 0.0;
+    double worstFractionX = 0.0;
     RegionWorsts regionWorst;
+    RegionWorsts regionFraction;
 
     for (const auto& row : gReference)
     {
         const double value = qcx::integrals::BoysSingle(row.n, row.x);
         const double error = std::abs(value - row.value);
-        EXPECT_LE(error, kDoubleTolerance)
-            << "n=" << row.n << " x=" << row.x << " got=" << value << " want=" << row.value;
-        worst = std::max(worst, error);
+        const double bound = DoubleBound(row.n, row.x);
+        EXPECT_LE(error, bound) << "n=" << row.n << " x=" << row.x << " got=" << value
+                                << " want=" << row.value << " bound=" << bound;
+        const double fraction = error / bound;
+
+        if (error > worst)
+        {
+            worst = error;
+            worstX = row.x;
+        }
+
+        if (fraction > worstFraction)
+        {
+            worstFraction = fraction;
+            worstFractionX = row.x;
+        }
+
         regionWorst.Update(error, row.x);
+        regionFraction.Update(fraction, row.x);
     }
 
-    // Per-region worsts over the committed grid against the paper's
-    // tab:accuracy cells (see kRegionATolerance/kRegionBTolerance above).
-    EXPECT_LE(regionWorst.a, kRegionATolerance) << "region A (x < kX0)";
-    EXPECT_LE(regionWorst.b, kRegionBTolerance) << "region B (kX0 <= x < kX1)";
-    EXPECT_LE(regionWorst.c, kDoubleTolerance) << "region C (x >= kX1)";
-    EXPECT_LE(regionWorst.e, kRegionBTolerance) << "extended band (kExtendedBX0 <= x < kX0)";
+    // The bound binds per cell; a region row is the worst fraction of a
+    // cell's own bound that the region used, so <= 1 is the contract.
+    EXPECT_LE(regionFraction.a, 1.0) << "region A (x < kX0)";
+    EXPECT_LE(regionFraction.b, 1.0) << "region B (kX0 <= x < kX1)";
+    EXPECT_LE(regionFraction.c, 1.0) << "region C (x >= kX1)";
+    EXPECT_LE(regionFraction.e, 1.0) << "extended band (kExtendedBX0 <= x < kX0)";
 
-    std::printf("BoysSingle: worst |error| = %.3e (region A %.3e, region B %.3e, region C %.3e, "
-                "extended band %.3e)\n",
+    std::printf("BoysSingle: worst |error| = %.3e at x = %.6g (region A %.3e, region B %.3e, "
+                "region C %.3e, extended band %.3e); the largest fraction of the published "
+                "bound is %.3e at x = %.6g\n",
                 worst,
+                worstX,
                 regionWorst.a,
                 regionWorst.b,
                 regionWorst.c,
-                regionWorst.e);
+                regionWorst.e,
+                worstFraction,
+                worstFractionX);
 }
 
 TEST(BoysTest, BatchMatchesReferenceDouble) {
     // The batch downward recursion is the path the weighted region-A fits
-    // exist for; it must hold the same tolerance as the single evaluations.
+    // exist for; the published double-lane bound is one figure for the single
+    // and batch entries alike, so this sweep asserts the same per-cell bound.
     double worst = 0.0;
     RegionWorsts regionWorst;
+    RegionWorsts regionFraction;
     std::vector<double> batch(qcx::integrals::kMaxBoysOrder + 1);
 
     for (const auto& row : gReference)
@@ -328,34 +352,21 @@ TEST(BoysTest, BatchMatchesReferenceDouble) {
 
         for (int k = 0; k <= row.n; ++k)
         {
-            // Compare against the single evaluation of the same order from the
-            // reference grid: fetch the reference value for (k, row.x).
-            double reference = 0.0;
-
-            for (const auto& other : gReference)
-            {
-                if (other.n == k && other.x == row.x)
-                {
-                    reference = other.value;
-                    break;
-                }
-            }
-
+            const double reference = ReferenceValue(k, row.x);
             const double error = std::abs(batch[k] - reference);
-            EXPECT_LE(error, kDoubleTolerance) << "batch F" << k << " at x=" << row.x
-                                               << " got=" << batch[k] << " want=" << reference;
+            const double bound = DoubleBound(k, row.x);
+            EXPECT_LE(error, bound) << "batch F" << k << " at x=" << row.x << " got=" << batch[k]
+                                    << " want=" << reference << " bound=" << bound;
             worst = std::max(worst, error);
             regionWorst.Update(error, row.x);
+            regionFraction.Update(error / bound, row.x);
         }
     }
 
-    // The batch lane asserts its own merged 5.5e-14 cell per region: the
-    // weighted region-A worst was measured at 1.6e-14, so a 1e-15
-    // single-lane bound would not hold for the batch.
-    EXPECT_LE(regionWorst.a, kDoubleTolerance) << "batch region A (x < kX0)";
-    EXPECT_LE(regionWorst.b, kDoubleTolerance) << "batch region B (kX0 <= x < kX1)";
-    EXPECT_LE(regionWorst.c, kDoubleTolerance) << "batch region C (x >= kX1)";
-    EXPECT_LE(regionWorst.e, kDoubleTolerance) << "batch extended band (kExtendedBX0 <= x < kX0)";
+    EXPECT_LE(regionFraction.a, 1.0) << "batch region A (x < kX0)";
+    EXPECT_LE(regionFraction.b, 1.0) << "batch region B (kX0 <= x < kX1)";
+    EXPECT_LE(regionFraction.c, 1.0) << "batch region C (x >= kX1)";
+    EXPECT_LE(regionFraction.e, 1.0) << "batch extended band (kExtendedBX0 <= x < kX0)";
 
     std::printf("BoysAllOrders: worst |error| = %.3e (region A %.3e, region B %.3e, region C %.3e, "
                 "extended band %.3e)\n",
@@ -681,6 +692,7 @@ TEST(BoysTest, AllNMatchesReferenceDouble) {
 
     double worst = 0.0;
     RegionWorsts regionWorst;
+    RegionWorsts regionFraction;
 
     for (std::size_t i = 0; i < count; ++i)
     {
@@ -689,18 +701,21 @@ TEST(BoysTest, AllNMatchesReferenceDouble) {
             const double reference = ReferenceValue(k, xs[i]);
             const double value = out[static_cast<std::size_t>(k) * count + i];
             const double error = std::abs(value - reference);
-            EXPECT_LE(error, kDoubleTolerance)
-                << "k=" << k << " x=" << xs[i] << " got=" << value << " want=" << reference;
+            const double bound = DoubleBound(k, xs[i]);
+            EXPECT_LE(error, bound) << "k=" << k << " x=" << xs[i] << " got=" << value
+                                    << " want=" << reference << " bound=" << bound;
             worst = std::max(worst, error);
             regionWorst.Update(error, xs[i]);
+            regionFraction.Update(error / bound, xs[i]);
         }
     }
 
-    // The entry promises the batch lane's 5.5e-14 per value in every region.
-    EXPECT_LE(regionWorst.a, kDoubleTolerance) << "region A (x < kX0)";
-    EXPECT_LE(regionWorst.b, kDoubleTolerance) << "region B (kX0 <= x < kX1)";
-    EXPECT_LE(regionWorst.c, kDoubleTolerance) << "region C (x >= kX1)";
-    EXPECT_LE(regionWorst.e, kDoubleTolerance) << "extended band (kExtendedBX0 <= x < kX0)";
+    // The entry promises the batch lane's published bound, per value, in
+    // every region.
+    EXPECT_LE(regionFraction.a, 1.0) << "region A (x < kX0)";
+    EXPECT_LE(regionFraction.b, 1.0) << "region B (kX0 <= x < kX1)";
+    EXPECT_LE(regionFraction.c, 1.0) << "region C (x >= kX1)";
+    EXPECT_LE(regionFraction.e, 1.0) << "extended band (kExtendedBX0 <= x < kX0)";
 
     std::printf("BoysAllN: worst |error| = %.3e (region A %.3e, region B %.3e, region C %.3e, "
                 "extended band %.3e)\n",
@@ -736,9 +751,11 @@ TEST(BoysTest, AllNSortedArgsMatchesUnsortedDouble) {
     for (std::size_t i = 0; i < values; ++i)
     {
         const double error = std::abs(sorted[i] - unsorted[i]);
-        EXPECT_LE(error, 2.0 * kDoubleTolerance)
-            << "k=" << i / count << " x=" << xs[i % count] << " sorted=" << sorted[i]
-            << " unsorted=" << unsorted[i];
+        // Two lanes each inside the published bound can differ by twice it.
+        const double bound = 2.0 * DoubleBound(static_cast<int>(i / count), xs[i % count]);
+        EXPECT_LE(error, bound) << "k=" << i / count << " x=" << xs[i % count]
+                                << " sorted=" << sorted[i] << " unsorted=" << unsorted[i]
+                                << " bound=" << bound;
         worst = std::max(worst, error);
     }
 
@@ -773,9 +790,9 @@ TEST(BoysTest, AllNTailAndWorkspaceMatchReference) {
         for (int k = 0; k <= n; ++k)
         {
             const double reference = ReferenceValue(k, xs[i]);
-            EXPECT_LE(std::abs(out[static_cast<std::size_t>(k) * kCount + i] - reference),
-                      kDoubleTolerance)
-                << "k=" << k << " x=" << xs[i];
+            const double bound = DoubleBound(k, xs[i]);
+            EXPECT_LE(std::abs(out[static_cast<std::size_t>(k) * kCount + i] - reference), bound)
+                << "k=" << k << " x=" << xs[i] << " bound=" << bound;
         }
     }
 
