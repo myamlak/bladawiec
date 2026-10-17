@@ -47,15 +47,54 @@ std::string_view FitRouteLabel(boys::FitRoute route) {
     return "unknown";
 }
 
-// The two enumerations the library publishes no name accessor for. Their values
-// are read from the library; only the enumerator's spelling is written here,
-// and the record says so on the note line it closes with.
+// The two labels the library publishes no name accessor for. Their values are
+// read from the library; only the enumerator's spelling is written here, and the
+// record says so on the note line it closes with.
 std::string_view BudgetLabel(boys::BoysBudget budget) {
     return budget == boys::BoysBudget::kFp16 ? "kFp16" : "kFloat";
 }
 
-std::string_view RegionBExpLabel(boys::RegionBExp exp) {
-    return exp == boys::RegionBExp::kFast ? "kFast" : "kAccurate";
+std::string_view RowBasisLabel(boys::RowBasis basis) {
+    return basis == boys::RowBasis::kMeasured ? "measured" : "chosen";
+}
+
+// The seven axes one class's unnamed call compiles, read from the library's own
+// default-policy table through DefaultPolicyFor. This is the answer an entry's
+// policy parameter defaults to - not EvalPolicy<>, which composes the seam's
+// names and is printed below as the fallback it is.
+template <boys::Precision kPrecision, boys::Shape kShape, boys::Device kDevice>
+std::string ClassRowFacts(std::string_view row) {
+    using PolicyRow = boys::DefaultPolicyFor<kPrecision, kShape, kDevice>;
+    using Policy = typename PolicyRow::Type;
+    const std::string source(row);
+
+    std::ostringstream text;
+    text << Fact("fit route", FitRouteLabel(Policy::kRoute), source + "::Type::kRoute") << "\n";
+    text << Fact("evaluation scheme",
+                 boys::EvalSchemeName(Policy::kScheme),
+                 source + "::Type::kScheme")
+         << "\n";
+    text << Fact("interval granularity",
+                 boys::GranularityName(Policy::kGranularity),
+                 source + "::Type::kGranularity")
+         << "\n";
+    text << Fact("packing axis", boys::PackAxisName(Policy::kPack), source + "::Type::kPack")
+         << "\n";
+    text << Fact("engine budget", BudgetLabel(Policy::kBudget), source + "::Type::kBudget") << "\n";
+    text << Fact("division form",
+                 boys::DivisionFormName(Policy::kDivision),
+                 source + "::Type::kDivision")
+         << "\n";
+    text << Fact("region-B exponential",
+                 boys::RegionBExpName(Policy::kRegionBExp),
+                 source + "::Type::kRegionBExp")
+         << "\n";
+    text << Fact("row basis", RowBasisLabel(PolicyRow::kBasis), source + "::kBasis") << "\n";
+    text << Fact("row record",
+                 PolicyRow::kRecord[0] == '\0' ? "(none: a stated choice)" : PolicyRow::kRecord,
+                 source + "::kRecord")
+         << "\n";
+    return text.str();
 }
 
 // A fit route's certified slot of the argument line, as the report's own row
@@ -110,7 +149,46 @@ std::string BoysBuildRecord() {
                << "\n";
     }
 
-    record << "\nthe five axes this tree does not name (the entries take the library's own)\n";
+    // An entry's policy parameter defaults to its class's row (boys/kernels.hpp,
+    // DefaultPolicy<Precision, Shape>), so these are what the engine runs. The
+    // seam's seven names below are not: they are the fallback a build with no
+    // row list composes every class from, and the row replaces them.
+    record << "\nthe class rows an unnamed call runs (boys/boys_build_defaults.hpp)\n";
+    record << "  One row per class a call site in this tree reaches, read through\n"
+              "  boys::DefaultPolicyFor. A row is what that class's unnamed call compiles;\n"
+              "  the seam's seven names below are a different combination.\n\n";
+    record << "host, double, all orders - BoysAllOrders: the VRR seed, the derivative seed,\n"
+              "the one-electron seed and the gradient gateway\n";
+    record << ClassRowFacts<boys::Precision::kFp64, boys::Shape::kAllOrders, boys::Device::kHost>(
+        "boys::DefaultPolicyFor<kFp64, kAllOrders>");
+    record << "\nhost, float, all orders - BoysAllOrdersF32: the certified fp32 lane\n";
+    record << ClassRowFacts<boys::Precision::kFp32, boys::Shape::kAllOrders, boys::Device::kHost>(
+        "boys::DefaultPolicyFor<kFp32, kAllOrders>");
+    record << "\nhost, double, single order - BoysSingle: the dense s-only path\n";
+    record << ClassRowFacts<boys::Precision::kFp64, boys::Shape::kSingle, boys::Device::kHost>(
+        "boys::DefaultPolicyFor<kFp64, kSingle>");
+    record << "\ndevice, double and float, all orders - BoysDeviceAllNF64 / BoysDeviceAllNF32\n"
+              "  The raw device entries take the build's two device names directly and resolve\n"
+              "  no class row; these are the two cells its template defaults read.\n";
+    record << Fact("division form",
+                   boys::DivisionFormName(boys::kDefaultDeviceDivisionForm),
+                   "boys::kDefaultDeviceDivisionForm")
+           << "\n";
+    record << Fact("region-B exponential",
+                   boys::RegionBExpName(boys::kDefaultRegionBExp),
+                   "boys::kDefaultRegionBExp")
+           << "\n";
+    record << "  A device call that names a policy (boys/boys_cuda_policy.hpp, WithPolicy<>)\n"
+              "  resolves through DefaultPolicyFor's device rows instead; that layer is not what\n"
+              "  this tree's two device calls compile.\n\n";
+
+    record << "the seam's seven names (the fallback a class row replaces)\n";
+    record << "  boys::DefaultPolicyFp64 is boys::EvalPolicy<>: the seven names below composed\n"
+              "  with their own defaults. boys_build_defaults.hpp states them as the fallback a\n"
+              "  build that carries no row list compiles every class from. Every class this\n"
+              "  tree's calls reach carries a row, so no entry this build compiles runs this\n"
+              "  combination; it is printed because it is the seam's own identity, and because\n"
+              "  these are the axes a reader would otherwise take for the entries' answer.\n\n";
     record << Fact("fit route",
                    FitRouteLabel(boys::DefaultPolicyFp64::kRoute),
                    "boys::DefaultPolicyFp64::kRoute")
@@ -131,15 +209,20 @@ std::string BoysBuildRecord() {
                    BudgetLabel(boys::DefaultPolicyFp64::kBudget),
                    "boys::DefaultPolicyFp64::kBudget")
            << "\n";
+    record << Fact("division form",
+                   boys::DivisionFormName(boys::DefaultPolicyFp64::kDivision),
+                   "boys::DefaultPolicyFp64::kDivision")
+           << "\n";
+    record << Fact("region-B exponential",
+                   boys::RegionBExpName(boys::DefaultPolicyFp64::kRegionBExp),
+                   "boys::DefaultPolicyFp64::kRegionBExp")
+           << "\n";
     record << Fact("half-lane budget",
                    BudgetLabel(boys::DefaultPolicyFp16::kBudget),
                    "boys::DefaultPolicyFp16::kBudget")
            << "\n";
-    record
-        << "  These are the policy the default entries instantiate, so a revision that moves one\n"
-           "  of them moves this text. This tree names none of them on purpose: the library's own\n"
-           "  measured defaults are the ones its bounds are certified for, and a seam this tree\n"
-           "  maintained would be a second place for them to be wrong.\n\n";
+    record << "  The half-lane budget above is the one cell EvalPolicy<> carries at the half\n"
+              "  lane; the fp16 and bf16 class rows are the table's own and are not this name.\n\n";
 
     record << "certified fit routes this build carries (boys::BoysFitRoutes)\n";
 
@@ -153,21 +236,14 @@ std::string BoysBuildRecord() {
     }
 
     record
-        << "\nregion-B exponential: the device lane's option, and not one of the five axes above\n";
-    record << Fact("library default",
-                   RegionBExpLabel(boys::kDefaultRegionBExp),
-                   "boys::kDefaultRegionBExp")
-           << "\n";
-    record
-        << "  The library's per-precision default table has no row for this axis, and no\n"
-           "  default entry of this surface carries it. This tree names no value for it, so the\n"
-           "  constant above is the library's and a revision that moves it moves what this line\n"
-           "  prints - the same exposure the five axes above have, stated here because the axis\n"
-           "  is not one of them.\n\n";
+        << "\nthe region-B exponential is one of the seven cells every class row above carries;\n"
+           "the device entries' own default is the two-name block above. This tree names no\n"
+           "value for it on either surface, and a revision that moves either name moves what\n"
+           "the row or the block prints.\n\n";
 
     record << "Two labels above are spelled by this file rather than read, because the library\n"
-              "publishes no name accessor for those enumerations: the engine budget and the\n"
-              "region-B exponential. Every value beside them is the library's.\n";
+              "publishes no name accessor for them: the engine budget and the row basis. Every\n"
+              "value beside them is the library's.\n";
 
     return record.str();
 }

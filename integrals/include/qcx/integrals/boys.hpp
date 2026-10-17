@@ -244,18 +244,23 @@ inline constexpr MulAddRoute kBoysMulAddRouteAskedFor = MulAddRoute::kFused;
 
 /// What this build's Boys kernel actually is: the library revision, the
 /// multiply-add route this build asked for beside the route the library reports
-/// the values were computed at, the arithmetic backends this build carries, and
-/// the defaults the library's own entries take for the five axes this tree
-/// deliberately does not name.
+/// the values were computed at, the arithmetic backends this build carries, the
+/// class rows the library's own entries resolve to (seven axes per class, read
+/// through `boys::DefaultPolicyFor`), and the seam's seven fallback names beside
+/// them, named as the fallback the class rows replace.
 ///
 /// Every fact in it is read from the library's own accessors at the moment of
 /// the call - `boys::VersionString`, `boys::backend::BoysBackends`,
-/// `BoysFitRoutes` and the default policy - so a library revision that moves a
-/// default moves this text, which is the point: an inherited default that moves
-/// between revisions is otherwise visible only to a reader diffing two
-/// coefficient tables. The one fact that does not come from the library is the
-/// submodule revision, which is a property of this tree's build and is captured
-/// from it (QcxBoysPin, configure time).
+/// `BoysFitRoutes`, `boys::DefaultPolicyFor` and the policy names - so a
+/// library revision that moves a default moves this text, which is the point: an
+/// inherited default that moves between revisions is otherwise visible only to a
+/// reader diffing two coefficient tables. The record prints the class row an
+/// unnamed call runs, not `boys::EvalPolicy<>`, because the two are different
+/// combinations: the entries default to `DefaultPolicy<Precision, Shape>`, which
+/// the table's row resolves, and `EvalPolicy<>` is what a build that carries no
+/// row list composes every class from. The one fact that does not come from the
+/// library is the submodule revision, which is a property of this tree's build
+/// and is captured from it (QcxBoysPin, configure time).
 ///
 /// The record is a report and not a gate: it states what is, and the suite's
 /// `boys_build_record_test` is where a route that is not the one this build
