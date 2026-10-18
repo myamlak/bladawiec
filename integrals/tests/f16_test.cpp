@@ -75,7 +75,11 @@ TEST(F16ConversionTest, FloatToBf16RoundsToNearestEven) {
         {std::bit_cast<float>(0x3F7FFFFFu), 0x3F80u, "the value just below 1.0 rounds up"},
         {std::bit_cast<float>(0x7F7FFFFFu), 0x7F80u, "the float maximum rounds up to Inf"},
         {std::bit_cast<float>(0x7F800000u), 0x7F80u, "+Inf"},
-        {std::bit_cast<float>(0x7F800001u), 0x7F80u, "NaN"},
+        {std::bit_cast<float>(0x7F800001u),
+         0x7FC0u,
+         "a signaling NaN is quieted, not rounded to Inf"},
+        {std::numeric_limits<float>::quiet_NaN(), 0x7FC0u, "a quiet NaN keeps its payload"},
+        {std::bit_cast<float>(0xFFFFFFFFu), 0xFFFFu, "a negative NaN keeps its sign and payload"},
     };
 
     for (const Case& c : cases)
