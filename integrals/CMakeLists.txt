@@ -271,42 +271,49 @@ endif()
 target_precompile_headers(qcx-integrals PRIVATE
     <qcx/integrals/boys.hpp>)
 
-# The per-class instantiation matrix: one OBJECT library per {L_bra, L_ket}
-# class - the 2e triangle (LBra <= LKet <= 2*QCX_INTEGRALS_LMAX) UNION the
-# RI rectangle (LKet <= QCX_INTEGRALS_LMAX, LBra <= 2*QCX_INTEGRALS_LMAX);
-# 154 classes at Lmax=6, 24 at Lmax=2 (the counts match the CUDA matrix
-# below). Parallel compilation (MSBuild multi-project), incremental builds
-# recompile only touched classes, and the hot template surface stays out of
-# the public headers - dispatch runs through the generated function-pointer
-# table (md_dispatch_gen.hpp).
-function(qcx_add_md_class_object lBra lKet)
-    set(_genDir ${CMAKE_CURRENT_BINARY_DIR}/md_instantiate)
-    set(_tu ${_genDir}/md_instantiate_${lBra}_${lKet}.cpp)
-    configure_file(src/md_instantiate.cpp.in ${_tu} @ONLY)
-    add_library(qcx-md-class-${lBra}-${lKet} OBJECT ${_tu})
-    target_include_directories(qcx-md-class-${lBra}-${lKet} PRIVATE
+# The per-class instantiation matrix: the 2e triangle (LBra <= LKet <=
+# 2*QCX_INTEGRALS_LMAX) UNION the RI rectangle (LKet <= QCX_INTEGRALS_LMAX,
+# LBra <= 2*QCX_INTEGRALS_LMAX) - 154 classes at Lmax=6, 24 at Lmax=2 (the
+# counts match the CUDA matrix below). The classes are one OBJECT library, not
+# one per class: a precompiled header of <internal/md_vrr.hpp> measured about
+# 1 GiB, so one per class wrote 152 GiB and filled the Windows runners' disks
+# (C1085/C1088). One PCH for the matrix bounds the disk; parallelism is the
+# build tool's (Ninja compiles sources in parallel, and the vcpkg toolchain's
+# /MP does it inside the one MSBuild project). The split below stays a knob:
+# more shards trade disk for projects.
+set(_qcxMdShards 1)
+function(qcx_add_md_class_shard shard)
+    set(_target qcx-md-class-shard-${shard})
+    add_library(${_target} OBJECT ${ARGN})
+    target_include_directories(${_target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${_qcxBoysExt}/include)
-    target_compile_features(qcx-md-class-${lBra}-${lKet} PRIVATE cxx_std_23)
-    target_compile_definitions(qcx-md-class-${lBra}-${lKet} PRIVATE
+    target_compile_features(${_target} PRIVATE cxx_std_23)
+    target_compile_definitions(${_target} PRIVATE
         QcxIntegralsLMax=${QCX_INTEGRALS_LMAX}
         QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>)
     if (QCX_INTEGRALS_CHUNKED_VRR)
-        target_compile_definitions(qcx-md-class-${lBra}-${lKet} PRIVATE
+        target_compile_definitions(${_target} PRIVATE
             QcxIntegralsChunkedVrr=1)
     endif()
     # Usage requirements of the linked targets reach the object TU's compile
     # (include dirs, definitions); nothing links from the object lib itself.
     # qcx-boys-route is the multiply-add pin these TUs' PCH needs: they include
     # <qcx/integrals/boys.hpp> and would otherwise be refused by its guard.
-    target_link_libraries(qcx-md-class-${lBra}-${lKet} PRIVATE
+    target_link_libraries(${_target} PRIVATE
         qcx-core qcx-molecule qcx-basisset qcx-memory qcx-linalg eigen qcx-boys-route)
-    target_precompile_headers(qcx-md-class-${lBra}-${lKet} PRIVATE
+    target_precompile_headers(${_target} PRIVATE
         <internal/md_vrr.hpp>)
+    # The toolchain turns /MP on with no ceiling; one project now holds every class TU, so an
+    # unbounded /MP would run 154 heavy compiles at once. Four is what these TUs' memory fits.
+    if (MSVC)
+        target_compile_options(${_target} PRIVATE /MP4)
+    endif()
 endfunction()
 
 math(EXPR _qcxLmax2 "2 * ${QCX_INTEGRALS_LMAX}")
+set(_qcxMdIndex 0)
 foreach(_lket RANGE 0 ${_qcxLmax2})
     # The 2e triangle (lBra <= lKet) UNION the RI rectangle
     # (lKet <= Lmax, lBra <= 2*Lmax): the 3c kernels use the orbital pair
@@ -317,9 +324,25 @@ foreach(_lket RANGE 0 ${_qcxLmax2})
         set(_lbraMax ${_lket})
     endif()
     foreach(_lbra RANGE 0 ${_lbraMax})
-        qcx_add_md_class_object(${_lbra} ${_lket})
-        list(APPEND _qcxMdClassObjects $<TARGET_OBJECTS:qcx-md-class-${_lbra}-${_lket}>)
+        set(_genDir ${CMAKE_CURRENT_BINARY_DIR}/md_instantiate)
+        set(_tu ${_genDir}/md_instantiate_${_lbra}_${_lket}.cpp)
+        # The template's placeholders are @lBra@/@lKet@, substituted from these names.
+        set(lBra ${_lbra})
+        set(lKet ${_lket})
+        configure_file(src/md_instantiate.cpp.in ${_tu} @ONLY)
+        math(EXPR _shard "${_qcxMdIndex} % ${_qcxMdShards}")
+        set(_shardVar qcxMdShard_${_shard}_tus)
+        list(APPEND ${_shardVar} ${_tu})
+        math(EXPR _qcxMdIndex "${_qcxMdIndex} + 1")
     endforeach()
+endforeach()
+set(_qcxMdClassObjects "")
+foreach(_shard RANGE 0 7)
+    set(_shardVar qcxMdShard_${_shard}_tus)
+    if (${_shardVar})
+        qcx_add_md_class_shard(${_shard} ${${_shardVar}})
+        list(APPEND _qcxMdClassObjects $<TARGET_OBJECTS:qcx-md-class-shard-${_shard}>)
+    endif()
 endforeach()
 target_sources(qcx-integrals PRIVATE ${_qcxMdClassObjects})
 
