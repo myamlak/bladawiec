@@ -607,15 +607,16 @@ __device__ __forceinline__ bool DevBoysLadder(const boys::BoysDeviceTables& libr
                                               T* out) {
     if constexpr (std::is_same_v<T, double>)
     {
-        return boys::BoysDeviceAllNF64<kTopOrder>(libraryTables, x, out) ==
-               boys::BoysDeviceStatus::kSuccess;
+        // boys 5.0.0 puts the defaulted division form first, so the top order is named after it.
+        return boys::BoysDeviceAllNF64<boys::kDefaultDeviceDivisionForm, kTopOrder>(
+                   libraryTables, x, out) == boys::BoysDeviceStatus::kSuccess;
     } else
     {
         // The library's fp32 entry takes and returns float; its region-A seed
         // is computed in double inside the entry, so the amplification-
         // sensitive seeds keep the precision the certified lane needs.
-        return boys::BoysDeviceAllNF32<kTopOrder>(libraryTables, static_cast<float>(x), out) ==
-               boys::BoysDeviceStatus::kSuccess;
+        return boys::BoysDeviceAllNF32<boys::kDefaultDeviceDivisionForm, kTopOrder>(
+                   libraryTables, static_cast<float>(x), out) == boys::BoysDeviceStatus::kSuccess;
     }
 }
 

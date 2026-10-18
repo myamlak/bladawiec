@@ -213,11 +213,11 @@ using boys::AccuracyRegion;
 // combination where the library's default would move under it; nothing in the
 // engine does, and the entries above take the library's own.
 using boys::BoysBudget;
-using boys::EvalPolicy;
 using boys::EvalScheme;
 using boys::FitGranularity;
 using boys::FitRoute;
 using boys::PackAxis;
+using boys::SeamPolicy;
 
 // The multiply-add route, read back rather than assumed.
 //
@@ -255,9 +255,9 @@ inline constexpr MulAddRoute kBoysMulAddRouteAskedFor = MulAddRoute::kFused;
 /// library revision that moves a default moves this text, which is the point: an
 /// inherited default that moves between revisions is otherwise visible only to a
 /// reader diffing two coefficient tables. The record prints the class row an
-/// unnamed call runs, not `boys::EvalPolicy<>`, because the two are different
+/// unnamed call runs, not `boys::SeamPolicy<>`, because the two are different
 /// combinations: the entries default to `DefaultPolicy<Precision, Shape>`, which
-/// the table's row resolves, and `EvalPolicy<>` is what a build that carries no
+/// the table's row resolves, and `SeamPolicy<>` is what a build that carries no
 /// row list composes every class from. The one fact that does not come from the
 /// library is the submodule revision, which is a property of this tree's build
 /// and is captured from it (QcxBoysPin, configure time).

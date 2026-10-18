@@ -24,6 +24,10 @@
 #include "qcx/integrals/eri_cuda.hpp"
 
 #include "boys/boys_coefficients.hpp"
+// The split's group headers: the double and float coarse Chebyshev arrays this unit packs for
+// the device are defined there, and a group header precedes the front-door headers below.
+#include "boys/boys_coefficients_d_coarse_cheb.hpp"
+#include "boys/boys_coefficients_f32_coarse_cheb.hpp"
 #include "boys/boys_cuda.hpp"
 #include "internal/device_footprint.hpp"
 #include "internal/eri_cuda_fock.hpp"

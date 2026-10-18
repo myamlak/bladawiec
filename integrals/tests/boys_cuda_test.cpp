@@ -3,38 +3,36 @@
 #include "boys/boys_impl.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <limits>
 #include <random>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 #if BoysFp16
 #include "boys/f16.hpp"
 #endif
 
-// The lane's residency comparison (src/boys_cuda.cu), reached here to assert its
-// rows directly: the arguments are the device in hand and the multiplier asked
-// for, then the record of what was last uploaded and where. Both arrive as
-// arguments, so the assertion needs no second card and no CUDA call.
-extern "C" int BoysCudaEffTablesResidentOn(int device,
-                                           double m,
-                                           int recordedDevice,
-                                           double recordedM);
-
 namespace {
 
 constexpr std::size_t kCount = 1u << 16;
-constexpr double kDoubleTolerance = 5.5e-14;
-// Cross-lane budget: the CPU lane is validated <= 1.5e-7 against the
-// reference grid, and the default CUDA lane holds the same 1.5e-7, so
-// GPU-vs-CPU agreement on the default path holds within ~3e-7; the budget is
-// stated at 3.5e-7. It is a budget on the default path only: the single
-// entry's fast region-B exponential (RegionBExp::kFast) carries a larger
-// bound of its own, which no cross-lane figure covers.
+// Cross-lane agreement bar for the double lanes: each of the two is within the lane's published
+// figure of the truth - the larger of 1e-13 * F_n(x) and 1e-13 * F_0(x) (README.md, "What the bound
+// is, and what it is not") - so a difference between them is within twice the wider arm, and that
+// is at most 2e-13 over the whole domain. Flat, because each sweep below asserts its own worst.
+constexpr double kDoubleTolerance = 2e-13;
+// Cross-lane budget: the CPU lane is validated <= 1.5e-7 against the reference grid, and
+// the default CUDA lane holds the same 1.5e-7, so GPU-vs-CPU agreement on the default path
+// holds within ~3e-7, stated at 3.5e-7. It covers the default path only, not the single
+// entry's fast region-B exponential (RegionBExp::kFast), which carries a larger bound.
 constexpr float kFloatTolerance = 3.5e-7f;
 
 struct DeviceSetup {
@@ -81,10 +79,9 @@ struct DeviceSetup {
 };
 
 #if BoysFp16
-// The fp16 lane compares against the CPU fp16 lane (both compute in float
-// and round to fp16): the cross-lane float budget is the F32 one above, and
-// one ULP of quantization covers the fp16 rounding (HalfUlp here is the
-// full grid step, NextUp(x) - x, not half of it).
+// The fp16 lane compares against the CPU fp16 lane: both compute in float and
+// round to fp16, so the cross-lane budget is the F32 one above plus one ULP of
+// quantization (HalfUlp is the full grid step NextUp(x) - x, not half of it).
 double HalfUlp(boys::F16 x) {
     return static_cast<double>(boys::NextUp(x)) - static_cast<double>(x);
 }
@@ -200,12 +197,10 @@ TEST(BoysCudaTest, SingleF32ExpOptionIsCertifiedAtTheRegionBBoundary) {
 
     ASSERT_EQ(boys::BoysCuda::InitializeTables(), boys::BoysStatus::kSuccess);
 
-    // The first float of region B, where the two options separate and where the
-    // recurrence's condition number is at its largest (7.6e4 at this order): the
-    // value F_32(x) is itself at the level of a seed error there, and the ladder
-    // amplifies it by that factor. The double lane is the reference; its own
-    // error at this argument is below 5.5e-14, six orders under the figures
-    // this test is about.
+    // The first float of region B, where the two options separate and the recurrence's condition
+    // number peaks (7.6e4 at this order): F_32(x) is itself at the level of a seed error there and
+    // the ladder amplifies it by that factor. The double lane is the reference, its own error
+    // within the lane's published figure, six orders under.
     const int n = boys::kMaxBoysOrder;
     const double x = static_cast<double>(static_cast<float>(boys::detail::kX0));
     std::vector<double> reference(static_cast<std::size_t>(n) + 1);
@@ -225,7 +220,7 @@ TEST(BoysCudaTest, SingleF32ExpOptionIsCertifiedAtTheRegionBBoundary) {
 
         const auto status =
             option == boys::RegionBExp::kFast
-                ? boys::BoysCuda::SingleF32<1.0, boys::RegionBExp::kFast>(
+                ? boys::BoysCuda::SingleF32<boys::RegionBExp::kFast>(
                       deviceN, deviceX, deviceOut, 1, nullptr)
                 : boys::BoysCuda::SingleF32(deviceN, deviceX, deviceOut, 1, nullptr);
         EXPECT_EQ(status, boys::BoysStatus::kSuccess);
@@ -242,21 +237,16 @@ TEST(BoysCudaTest, SingleF32ExpOptionIsCertifiedAtTheRegionBBoundary) {
     const double accurate = evaluate(boys::RegionBExp::kAccurate);
     const double fast = evaluate(boys::RegionBExp::kFast);
 
-    // Both options run, and they are two arithmetics rather than one with a
-    // name for the other.
+    // Both options run, and they are two arithmetics, not one under two names.
     EXPECT_NE(accurate, fast);
 
-    // Both hold their documented bounds here: the lane's 1.5e-7 for the
-    // default, and the lane's plus the corrected seed's own contribution
-    // (8e-8) for the fast one.
+    // Both hold their documented bounds: the lane's 1.5e-7 for the default, and the
+    // lane's plus the corrected seed's own 8e-8 for the fast one.
     EXPECT_LE(std::abs(accurate - want), 1.5e-7);
     EXPECT_LE(std::abs(fast - want), 1.5e-7 + 8e-8);
 
-    // This is the cell the bare approximation returned the wrong sign at, and
-    // the reason the fast option carries a correction: with it, the return has
-    // the value's sign, and the option's own contribution here is a fraction of
-    // the value rather than larger than it. Pinned so that a regression to the
-    // uncorrected seed is a failure and not a footnote.
+    // This is the cell the bare approximation returned the wrong sign at, and why
+    // the fast option carries a correction: with it the return has the value's sign.
     EXPECT_GT(fast * want, 0.0);
     EXPECT_LT(std::abs(fast - accurate), std::abs(want));
 
@@ -266,12 +256,9 @@ TEST(BoysCudaTest, SingleF32ExpOptionIsCertifiedAtTheRegionBBoundary) {
                 want);
 }
 
-// The default option is the batch entries' arithmetic, and the contract says
-// so: outside region A the single entry's seed and ladder are the all-orders
-// body's, so a consumer that reads one and the other of the same (n, x) is
-// reading one arithmetic. Region A is excluded because the two seeds differ
-// there by design - the batch seeds its downward recursion from the double
-// piece table, the single entry from the float one.
+// Outside region A the single entry's seed and ladder are the all-orders body's.
+// Region A is excluded because the seeds differ there by design: the batch seeds
+// its downward recursion from the double piece table, the single entry from float.
 TEST(BoysCudaTest, SingleF32DefaultIsTheBatchArithmeticOutsideRegionA) {
     int deviceCount = 0;
     cudaGetDeviceCount(&deviceCount);
@@ -285,9 +272,8 @@ TEST(BoysCudaTest, SingleF32DefaultIsTheBatchArithmeticOutsideRegionA) {
 
     const int nmax = boys::kMaxBoysOrder;
     const std::size_t count = 512;
-    // Arguments that are exactly floats at or above the first float of region
-    // B, so both entries evaluate the same argument and classify it the same
-    // way, and region B and region C are both covered.
+    // Arguments that are exactly floats at or above the first float of region B, so
+    // both entries evaluate the same argument; regions B and C are both covered.
     const float firstB = static_cast<float>(boys::detail::kX0);
     std::vector<double> hostX(count);
 
@@ -509,9 +495,8 @@ TEST(BoysCudaTest, AllNF64MatchesCpuAllN) {
     cudaMemcpy(
         hostOut.data(), setup.outF64, hostOut.size() * sizeof(double), cudaMemcpyDeviceToHost);
 
-    // The CPU twin over the same arguments, compared in the shipped layout:
-    // every plane of every argument, so a plane the device left unwritten is a
-    // failure too.
+    // The CPU twin over the same arguments, compared in the shipped layout: every
+    // plane of every argument, so an unwritten plane fails too.
     std::vector<double> cpuOut(hostOut.size());
     boys::BoysAllN(boys::kMaxBoysOrder, hostX.data(), cpuOut.data(), count, boys::BoysSortedArgs{});
     double worst = 0.0;
@@ -531,58 +516,6 @@ TEST(BoysCudaTest, AllNF64MatchesCpuAllN) {
     EXPECT_LE(worst, kDoubleTolerance)
         << "i=" << worstAt % count << " k=" << worstAt / count << " x=" << hostX[worstAt % count];
     std::printf("AllNF64 GPU vs CPU BoysAllN: worst |diff| = %.3e\n", worst);
-}
-
-TEST(BoysCudaTest, AllNF64RelaxedTierKeepsTheBound) {
-    // The multiplier is named at the call rather than passed to it, so the tier
-    // is an instantiation: m = 10 relaxes the budget to m * 5.5e-14 and uploads
-    // its own degree tables on first use. The reference is the full-accuracy CPU
-    // path, whose own error is a tenth of this budget.
-    int deviceCount = 0;
-    cudaGetDeviceCount(&deviceCount);
-
-    if (deviceCount == 0)
-    {
-        GTEST_SKIP() << "no CUDA device";
-    }
-
-    constexpr double kRelaxed = 10.0;
-    const std::vector<double> hostX = SortedArguments();
-    const std::size_t count = hostX.size();
-    AllNDeviceSetup setup(hostX);
-    ASSERT_EQ(boys::BoysCuda::InitializeTables(), boys::BoysStatus::kSuccess);
-
-    ASSERT_EQ(boys::BoysCuda::AllNF64<kRelaxed>(
-                  boys::kMaxBoysOrder, setup.x, setup.outF64, count, nullptr),
-              boys::BoysStatus::kSuccess);
-    cudaDeviceSynchronize();
-
-    std::vector<double> hostOut(count * (boys::kMaxBoysOrder + 1));
-    cudaMemcpy(
-        hostOut.data(), setup.outF64, hostOut.size() * sizeof(double), cudaMemcpyDeviceToHost);
-
-    std::vector<double> reference(hostOut.size());
-    boys::BoysAllN(
-        boys::kMaxBoysOrder, hostX.data(), reference.data(), count, boys::BoysSortedArgs{});
-    double worst = 0.0;
-    std::size_t worstAt = 0;
-
-    for (std::size_t j = 0; j < hostOut.size(); ++j)
-    {
-        const double error = std::abs(hostOut[j] - reference[j]);
-
-        if (error > worst)
-        {
-            worst = error;
-            worstAt = j;
-        }
-    }
-
-    EXPECT_LE(worst, kRelaxed * kDoubleTolerance)
-        << "i=" << worstAt % count << " k=" << worstAt / count << " x=" << hostX[worstAt % count];
-    std::printf("AllNF64 m=10 vs CPU full accuracy: worst |diff| = %.3e (budget %.3e)\n",
-                worst,
-                kRelaxed * kDoubleTolerance);
 }
 
 TEST(BoysCudaTest, AllNF32MatchesCpuAllOrders) {
@@ -636,9 +569,8 @@ TEST(BoysCudaTest, AllNF32IgnoresTheArgumentOrder) {
         GTEST_SKIP() << "no CUDA device";
     }
 
-    // The entry's non-decreasing precondition is a performance one (one
-    // classification path per warp), not a correctness one: the same batch in
-    // arbitrary order must return the same planes.
+    // The non-decreasing precondition is a performance one (one classification path
+    // per warp), not a correctness one: shuffled order must return the same planes.
     std::vector<double> hostX = SortedArguments();
     std::mt19937_64 rng(20260923);
     std::shuffle(hostX.begin(), hostX.end(), rng);
@@ -911,10 +843,9 @@ TEST(BoysCudaTest, AllNF16MatchesCpuAllOrders) {
 }
 
 TEST(BoysCudaTest, CountZeroIsANoOpInEveryEntry) {
-    // One behaviour for every family: count == 0 queues no kernel, writes
-    // nothing, and returns kSuccess. The output buffers are poisoned first, so
-    // the second half of that sentence is measured, not assumed — a zero-block
-    // launch is a CUDA error, which is why the host side has to short-circuit.
+    // One behaviour for every family: count == 0 queues no kernel, writes nothing,
+    // and returns kSuccess. Buffers are poisoned first so a write would be seen; a
+    // zero-block launch is a CUDA error, which is why the host side short-circuits.
     int deviceCount = 0;
     cudaGetDeviceCount(&deviceCount);
 
@@ -951,14 +882,6 @@ TEST(BoysCudaTest, CountZeroIsANoOpInEveryEntry) {
     EXPECT_EQ(boys::BoysCuda::SingleF16(&n, &y, out16, 0, nullptr), boys::BoysStatus::kSuccess);
     EXPECT_EQ(boys::BoysCuda::AllOrdersF16(&n, &y, out16, 0, nullptr), boys::BoysStatus::kSuccess);
     EXPECT_EQ(boys::BoysCuda::AllNF16(1, &y, out16, 0, nullptr), boys::BoysStatus::kSuccess);
-
-    // The relaxed multipliers reach the no-op through their own instantiation
-    // and their own launch symbol, so each family is pinned there too.
-    EXPECT_EQ(boys::BoysCuda::SingleF64<10.0>(&n, &x, out64, 0, nullptr),
-              boys::BoysStatus::kSuccess);
-    EXPECT_EQ(boys::BoysCuda::AllOrdersF32<10.0>(&n, &x, out32, 0, nullptr),
-              boys::BoysStatus::kSuccess);
-    EXPECT_EQ(boys::BoysCuda::AllNF16<10.0>(1, &y, out16, 0, nullptr), boys::BoysStatus::kSuccess);
 
     for (int family = 0; family < 3; ++family)
     {
@@ -1014,17 +937,525 @@ TEST(BoysCudaTest, AllNChecksTheOrder) {
 }
 #endif // BoysFp16
 
-TEST(BoysCudaTest, EffTableResidencyNamesTheDevice) {
-    // The effective-degree tables are per-device copies of __constant__
-    // symbols, so a record compared on the multiplier alone would answer for a
-    // device that has never held them, and a device no upload has reached reads
-    // zero-initialized tables. The row that decides it is the second: the same
-    // multiplier on another device, which must not be answered as resident.
-    EXPECT_EQ(BoysCudaEffTablesResidentOn(0, 2.0, 0, 2.0), 1);
-    EXPECT_EQ(BoysCudaEffTablesResidentOn(1, 2.0, 0, 2.0), 0);
-    EXPECT_EQ(BoysCudaEffTablesResidentOn(0, 2.0, 1, 2.0), 0);
-    EXPECT_EQ(BoysCudaEffTablesResidentOn(0, 10.0, 0, 2.0), 0);
+// The axis states that every entry of the space runs every form. accuracy.hpp says the refined form
+// is bit-identical to exact division and the plain one rounds twice where the exact form rounds
+// once - a difference no published bound can see - so the check crosses entries with the three
+// forms and counts the bits that disagree. The negative control (BOYS_CUDA_TEST_DROP_DIVISION_FORM)
+// hands every launch kExactDivision.
 
-    // Before any upload the record names no device and no multiplier.
-    EXPECT_EQ(BoysCudaEffTablesResidentOn(0, 2.0, -1, -1.0), 0);
+namespace {
+
+// The forms, in the axis's own order, read off the library's enumeration rather
+// than listed from memory.
+constexpr std::array<boys::DivisionForm, 3> kDivisionForms = {
+    boys::DivisionForm::kExactDivision,
+    boys::DivisionForm::kPlainReciprocal,
+    boys::DivisionForm::kRefinedReciprocal,
+};
+
+/// The form a launch actually runs. The negative control named above makes this
+/// answer kExactDivision for every form asked for: the axis is still crossed,
+/// every call still succeeds and every count below is still taken, and only the
+/// arithmetic the kernel runs is the same three times.
+boys::DivisionForm LaunchedForm(boys::DivisionForm asked) noexcept {
+#if defined(BOYS_CUDA_TEST_DROP_DIVISION_FORM)
+    static_cast<void>(asked);
+    return boys::DivisionForm::kExactDivision;
+#else
+    return asked;
+#endif
+}
+
+/// A value's bits - the comparison this check makes. A float's four bytes are read
+/// into the low half of the word.
+template <typename T> std::uint64_t BitsOf(T value) noexcept {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(T));
+    return bits;
+}
+
+/// The distance between two values counted in representable steps: 0 when they are
+/// the same value, 1 when they are adjacent. An IEEE value's bit pattern read as a
+/// sign-magnitude integer is monotone in the value, and the map below turns it into
+/// a plain ordinal, so the distance is a subtraction. It is what turns "the plain
+/// form differs" into "the plain form differs by at most this much".
+template <typename T> std::uint64_t UlpDistance(T a, T b) noexcept {
+    if constexpr (std::is_same_v<T, float>)
+    {
+        std::uint32_t ua = 0;
+        std::uint32_t ub = 0;
+        std::memcpy(&ua, &a, sizeof(float));
+        std::memcpy(&ub, &b, sizeof(float));
+        const auto ordinal = [](std::uint32_t u) -> std::uint32_t {
+            return (u & 0x80000000u) != 0u ? ~u : (u | 0x80000000u);
+        };
+        const std::uint32_t first = ordinal(ua);
+        const std::uint32_t second = ordinal(ub);
+        return first > second ? first - second : second - first;
+    } else
+    {
+        std::uint64_t ua = 0;
+        std::uint64_t ub = 0;
+        std::memcpy(&ua, &a, sizeof(double));
+        std::memcpy(&ub, &b, sizeof(double));
+        const auto ordinal = [](std::uint64_t u) -> std::uint64_t {
+            return (u & 0x8000000000000000ull) != 0ull ? ~u : (u | 0x8000000000000000ull);
+        };
+        const std::uint64_t first = ordinal(ua);
+        const std::uint64_t second = ordinal(ub);
+        return first > second ? first - second : second - first;
+    }
+}
+
+/// How many values two forms' outputs disagree on, how far apart the widest of them
+/// is, and the first few of them, so a disagreement is reportable and not only
+/// countable.
+struct FormPair {
+    std::size_t values = 0;
+    std::size_t differ = 0;
+    std::uint64_t widest = 0;
+    std::string widestWhere;
+    /// The values the two forms place more than a thousandth of the value apart:
+    /// the ulp distance alone is dynamic-range sensitive, since two values near zero
+    /// are far apart in representable steps while agreeing to the last bit of their
+    /// magnitude, and this count is what separates "an ulp here and there" from a
+    /// value one of the two forms got wrong outright.
+    std::size_t apartByAThousandth = 0;
+    double widestRelative = 0.0;
+    std::string widestRelativeWhere;
+    /// The largest absolute gap between the two forms, and where. The ulp count above
+    /// is a distance in representable steps and the relative figure beside it is
+    /// undefined where the value crosses zero, so the error itself is stated here:
+    /// it is the quantity a per-form bound is written in.
+    double widestAbsolute = 0.0;
+    std::string widestAbsoluteWhere;
+    std::vector<std::string> examples;
+};
+
+constexpr std::size_t kFormExamples = 4;
+
+/// One disagreement, with the argument and the order that produced it and both
+/// values as a decimal and as their bits. A finding, if there is one, has to name
+/// the x at which it happened.
+template <typename T>
+std::string FormatDifference(std::size_t element, int order, double arg, T first, T second) {
+    char values[192];
+
+    if constexpr (std::is_same_v<T, float>)
+    {
+        std::snprintf(values,
+                      sizeof(values),
+                      "a=%.9g [%08x]  b=%.9g [%08x]",
+                      static_cast<double>(first),
+                      static_cast<unsigned>(BitsOf(first)),
+                      static_cast<double>(second),
+                      static_cast<unsigned>(BitsOf(second)));
+    } else
+    {
+        std::snprintf(values,
+                      sizeof(values),
+                      "a=%.17g [%016llx]  b=%.17g [%016llx]",
+                      static_cast<double>(first),
+                      static_cast<unsigned long long>(BitsOf(first)),
+                      static_cast<double>(second),
+                      static_cast<unsigned long long>(BitsOf(second)));
+    }
+
+    char line[288];
+    std::snprintf(
+        line, sizeof(line), "    i=%zu order=%d x=%.17g  %s", element, order, arg, values);
+    return std::string(line);
+}
+
+/// The counts for one pair, over the whole output. The order-major entries write
+/// `out[order * count + i]`; the per-argument ones write `out[i]` and their order
+/// is the one the caller asked for at `i`.
+template <typename T>
+FormPair CompareBits(const std::vector<T>& a,
+                     const std::vector<T>& b,
+                     const std::vector<int>& n,
+                     const std::vector<double>& x,
+                     std::size_t count,
+                     bool planes) {
+    FormPair pair;
+    pair.values = a.size();
+
+    for (std::size_t i = 0; i < a.size(); ++i)
+    {
+        if (BitsOf(a[i]) == BitsOf(b[i]))
+        {
+            continue;
+        }
+
+        ++pair.differ;
+
+        const std::size_t element = planes ? i % count : i;
+        const int order = planes ? static_cast<int>(i / count) : n[element];
+
+        if (const std::uint64_t distance = UlpDistance(a[i], b[i]); distance > pair.widest)
+        {
+            pair.widest = distance;
+            pair.widestWhere = FormatDifference(element, order, x[element], a[i], b[i]);
+        }
+
+        const double magnitude =
+            std::max(std::abs(static_cast<double>(a[i])), std::abs(static_cast<double>(b[i])));
+        const double relative =
+            magnitude > 0.0
+                ? std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i])) / magnitude
+                : 0.0;
+
+        if (const double gap = std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i]));
+            gap > pair.widestAbsolute)
+        {
+            pair.widestAbsolute = gap;
+            pair.widestAbsoluteWhere = FormatDifference(element, order, x[element], a[i], b[i]);
+        }
+
+        if (relative > 1e-3)
+        {
+            ++pair.apartByAThousandth;
+
+            if (relative > pair.widestRelative)
+            {
+                pair.widestRelative = relative;
+                pair.widestRelativeWhere = FormatDifference(element, order, x[element], a[i], b[i]);
+            }
+        }
+
+        if (pair.examples.size() < kFormExamples)
+        {
+            pair.examples.push_back(FormatDifference(element, order, x[element], a[i], b[i]));
+        }
+    }
+
+    return pair;
+}
+
+/// Runs one entry at one form over the batch and returns what it wrote. Every
+/// launch goes through LaunchedForm, so the negative control reaches the entries
+/// below without any of them knowing it.
+template <typename T, typename Launch>
+std::vector<T> RunEntryAtForm(const char* entry,
+                              Launch launch,
+                              const int* deviceN,
+                              const double* deviceX,
+                              T* deviceOut,
+                              std::size_t values,
+                              std::size_t count,
+                              boys::DivisionForm form) {
+    const boys::BoysStatus status =
+        launch(deviceN, deviceX, deviceOut, count, nullptr, LaunchedForm(form));
+    EXPECT_EQ(status, boys::BoysStatus::kSuccess)
+        << entry << " at " << boys::DivisionFormName(form);
+    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess) << entry;
+
+    std::vector<T> host(values);
+    EXPECT_EQ(cudaMemcpy(host.data(), deviceOut, values * sizeof(T), cudaMemcpyDeviceToHost),
+              cudaSuccess)
+        << entry;
+    return host;
+}
+
+/// The counts over every entry crossed, plus the examples of the first pair.
+struct FormTally {
+    std::size_t entries = 0;
+    std::size_t values = 0;
+    std::size_t refinedVsExact = 0;
+    std::size_t plainVsExact = 0;
+    std::size_t plainVsRefined = 0;
+    std::uint64_t widestRefinedVsExact = 0;
+    std::uint64_t widestPlainVsExact = 0;
+    std::uint64_t widestPlainVsRefined = 0;
+    std::size_t plainVsExactApart = 0;
+    double plainVsExactWidestRelative = 0.0;
+    double plainVsExactWidestAbsolute = 0.0;
+    std::string widestPlainVsExactWhere;
+    std::string widestRelativePlainVsExactWhere;
+    std::string widestAbsolutePlainVsExactWhere;
+    std::vector<std::string> examples;
+};
+
+/// The whole check for one entry: three launches, three pairwise counts, one line
+/// of the report. The totals are asserted on by the test.
+template <typename T, typename Launch>
+void CrossEntryWithForms(FormTally& tally,
+                         const char* entry,
+                         Launch launch,
+                         const int* deviceN,
+                         const double* deviceX,
+                         T* deviceOut,
+                         const std::vector<int>& n,
+                         const std::vector<double>& x,
+                         std::size_t count,
+                         bool planes) {
+    const std::size_t values = planes ? count * (boys::kMaxBoysOrder + 1) : count;
+    std::array<std::vector<T>, 3> output;
+
+    for (std::size_t f = 0; f < kDivisionForms.size(); ++f)
+    {
+        output[f] = RunEntryAtForm(
+            entry, launch, deviceN, deviceX, deviceOut, values, count, kDivisionForms[f]);
+    }
+
+    const FormPair refinedVsExact = CompareBits(output[0], output[2], n, x, count, planes);
+    const FormPair plainVsExact = CompareBits(output[0], output[1], n, x, count, planes);
+    const FormPair plainVsRefined = CompareBits(output[1], output[2], n, x, count, planes);
+
+    ++tally.entries;
+    tally.values += values;
+    tally.refinedVsExact += refinedVsExact.differ;
+    tally.plainVsExact += plainVsExact.differ;
+    tally.plainVsRefined += plainVsRefined.differ;
+    tally.widestRefinedVsExact = std::max(tally.widestRefinedVsExact, refinedVsExact.widest);
+    tally.widestPlainVsRefined = std::max(tally.widestPlainVsRefined, plainVsRefined.widest);
+
+    if (plainVsExact.widest > tally.widestPlainVsExact)
+    {
+        tally.widestPlainVsExact = plainVsExact.widest;
+        tally.widestPlainVsExactWhere = std::string(entry) + ":\n" + plainVsExact.widestWhere;
+    }
+
+    tally.plainVsExactApart += plainVsExact.apartByAThousandth;
+
+    if (plainVsExact.widestRelative > tally.plainVsExactWidestRelative)
+    {
+        tally.plainVsExactWidestRelative = plainVsExact.widestRelative;
+        tally.widestRelativePlainVsExactWhere =
+            std::string(entry) + ":\n" + plainVsExact.widestRelativeWhere;
+    }
+
+    if (plainVsExact.widestAbsolute > tally.plainVsExactWidestAbsolute)
+    {
+        tally.plainVsExactWidestAbsolute = plainVsExact.widestAbsolute;
+        tally.widestAbsolutePlainVsExactWhere =
+            std::string(entry) + ":\n" + plainVsExact.widestAbsoluteWhere;
+    }
+
+    for (const std::string& line : refinedVsExact.examples)
+    {
+        tally.examples.push_back(std::string(entry) + " exact vs refined:\n" + line);
+    }
+
+    std::printf("  %-16s %9zu values   exact/refined %8zu (max %llu ulp)   exact/plain %8zu (max "
+                "%llu ulp)   plain/refined %8zu (max %llu ulp)\n",
+                entry,
+                values,
+                refinedVsExact.differ,
+                static_cast<unsigned long long>(refinedVsExact.widest),
+                plainVsExact.differ,
+                static_cast<unsigned long long>(plainVsExact.widest),
+                plainVsRefined.differ,
+                static_cast<unsigned long long>(plainVsRefined.widest));
+}
+
+/// The uniform-order entries take their order as a host scalar - that is what
+/// makes them uniform, and what the launched surface exposes as `AllNF*` rather
+/// than as an order array - so the two adapters below supply it and every other
+/// entry is passed through as it stands.
+struct UniformOrderF64 {
+    int nmax;
+
+    boys::BoysStatus operator()(const int*,
+                                const double* x,
+                                double* out,
+                                std::size_t count,
+                                void* stream,
+                                boys::DivisionForm form) const {
+        return boys::BoysCuda::AllNF64(nmax, x, out, count, stream, form);
+    }
+};
+
+struct UniformOrderF32 {
+    int nmax;
+
+    boys::BoysStatus operator()(const int*,
+                                const double* x,
+                                float* out,
+                                std::size_t count,
+                                void* stream,
+                                boys::DivisionForm form) const {
+        return boys::BoysCuda::AllNF32(nmax, x, out, count, stream, form);
+    }
+};
+
+} // namespace
+
+TEST(BoysCudaTest, DivisionFormsDifferByBits) {
+    int deviceCount = 0;
+    cudaGetDeviceCount(&deviceCount);
+
+    if (deviceCount == 0)
+    {
+        GTEST_SKIP() << "no CUDA device";
+    }
+
+    DeviceSetup setup;
+    ASSERT_EQ(boys::BoysCuda::InitializeTables(), boys::BoysStatus::kSuccess);
+
+    std::vector<int> hostN(kCount);
+    std::vector<double> hostX(kCount);
+    ASSERT_EQ(cudaMemcpy(hostN.data(), setup.n, kCount * sizeof(int), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(hostX.data(), setup.x, kCount * sizeof(double), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+
+    const int nmax = boys::kMaxBoysOrder;
+    FormTally tally;
+
+    std::printf("division forms: %zu forms, entry by entry\n", kDivisionForms.size());
+    CrossEntryWithForms(tally,
+                        "SingleF64",
+                        &boys::BoysCuda::SingleF64,
+                        setup.n,
+                        setup.x,
+                        setup.outF64,
+                        hostN,
+                        hostX,
+                        kCount,
+                        false);
+    CrossEntryWithForms(tally,
+                        "AllOrdersF64",
+                        &boys::BoysCuda::AllOrdersF64,
+                        setup.n,
+                        setup.x,
+                        setup.outF64,
+                        hostN,
+                        hostX,
+                        kCount,
+                        true);
+    CrossEntryWithForms(tally,
+                        "AllNF64",
+                        UniformOrderF64{nmax},
+                        setup.n,
+                        setup.x,
+                        setup.outF64,
+                        hostN,
+                        hostX,
+                        kCount,
+                        true);
+    CrossEntryWithForms(tally,
+                        "SingleF32",
+                        &boys::BoysCuda::SingleF32<>,
+                        setup.n,
+                        setup.x,
+                        setup.outF32,
+                        hostN,
+                        hostX,
+                        kCount,
+                        false);
+    CrossEntryWithForms(tally,
+                        "AllOrdersF32",
+                        &boys::BoysCuda::AllOrdersF32,
+                        setup.n,
+                        setup.x,
+                        setup.outF32,
+                        hostN,
+                        hostX,
+                        kCount,
+                        true);
+    CrossEntryWithForms(tally,
+                        "AllNF32",
+                        UniformOrderF32{nmax},
+                        setup.n,
+                        setup.x,
+                        setup.outF32,
+                        hostN,
+                        hostX,
+                        kCount,
+                        true);
+
+    std::printf("division forms: %zu entries, %zu values per form\n", tally.entries, tally.values);
+    std::printf("division form check: exact vs refined %zu of %zu (max %llu ulp); exact vs plain "
+                "%zu of %zu (max %llu ulp); plain vs refined %zu of %zu (max %llu ulp)\n",
+                tally.refinedVsExact,
+                tally.values,
+                static_cast<unsigned long long>(tally.widestRefinedVsExact),
+                tally.plainVsExact,
+                tally.values,
+                static_cast<unsigned long long>(tally.widestPlainVsExact),
+                tally.plainVsRefined,
+                tally.values,
+                static_cast<unsigned long long>(tally.widestPlainVsRefined));
+
+    std::printf("exact vs plain: %zu values of %zu are more than a thousandth of the value apart; "
+                "the widest of those is %.3e of the value\n",
+                tally.plainVsExactApart,
+                tally.values,
+                tally.plainVsExactWidestRelative);
+
+    if (!tally.widestPlainVsExactWhere.empty())
+    {
+        std::printf("the widest exact-vs-plain difference, %llu representable steps apart:\n%s\n",
+                    static_cast<unsigned long long>(tally.widestPlainVsExact),
+                    tally.widestPlainVsExactWhere.c_str());
+    }
+
+    if (!tally.widestRelativePlainVsExactWhere.empty())
+    {
+        std::printf("the widest exact-vs-plain RELATIVE difference:\n%s\n",
+                    tally.widestRelativePlainVsExactWhere.c_str());
+    }
+
+    // The gap in the units a bound is written in. A per-form device figure is not published at this
+    // revision (BoysLaneContracts(), the fp32-device row), so this is a measurement and not a
+    // comparison against a bar; it is printed so that the figure the lane owes is a number a reader
+    // can see rather than one to be measured again to find out.
+    std::printf("exact vs plain: the widest ABSOLUTE gap between the two forms, over the values "
+                "compared, is %.6g\n",
+                tally.plainVsExactWidestAbsolute);
+
+    if (!tally.widestAbsolutePlainVsExactWhere.empty())
+    {
+        std::printf("the widest exact-vs-plain absolute gap:\n%s\n",
+                    tally.widestAbsolutePlainVsExactWhere.c_str());
+    }
+
+    for (const std::string& line : tally.examples)
+    {
+        std::printf("%s\n", line.c_str());
+    }
+
+    // The claim the refined form is carried for, in accuracy.hpp's own words ("this form is
+    // bit-identical to exact division"), stated over every value of every entry crossed here, so
+    // one differing bit violates it: not a tolerance to widen, since a value the two forms place in
+    // different bins is a defect in the refinement or in what "exact" compiles to, and both are
+    // findings.
+    EXPECT_EQ(tally.refinedVsExact, 0u)
+        << "the refined form is not bit-identical to exact division over the values compared; "
+           "the differing values and their x are printed above";
+
+    // What makes the first assertion mean something: if the plain form agreed with
+    // exact division on every value too, then no form would be reaching any kernel
+    // and the first count would be zero for the same reason. The negative control
+    // build makes this line fail.
+    EXPECT_GT(tally.plainVsExact, 0u)
+        << "the plain reciprocal agrees with exact division on every value compared, so the forms "
+           "reaching the kernels are not the forms the calls named";
+}
+
+TEST(BoysCudaTest, AnUnknownDivisionFormIsRefused) {
+    int deviceCount = 0;
+    cudaGetDeviceCount(&deviceCount);
+
+    if (deviceCount == 0)
+    {
+        GTEST_SKIP() << "no CUDA device";
+    }
+
+    DeviceSetup setup;
+    ASSERT_EQ(boys::BoysCuda::InitializeTables(), boys::BoysStatus::kSuccess);
+
+    // Refused and not substituted: a form the library does not carry is an
+    // argument error. A call that quietly ran the default instead would be exactly
+    // the substitution the axis exists to make visible, and the refinement's
+    // bit-identity would hide it.
+    const auto unknown = static_cast<boys::DivisionForm>(200);
+    EXPECT_EQ(boys::BoysCuda::SingleF64(setup.n, setup.x, setup.outF64, 1, nullptr, unknown),
+              boys::BoysStatus::kInvalidArgument);
+    EXPECT_EQ(boys::BoysCuda::AllOrdersF32(setup.n, setup.x, setup.outF32, 1, nullptr, unknown),
+              boys::BoysStatus::kInvalidArgument);
+    EXPECT_EQ(
+        boys::BoysCuda::AllNF64(boys::kMaxBoysOrder, setup.x, setup.outF64, 1, nullptr, unknown),
+        boys::BoysStatus::kInvalidArgument);
 }

@@ -475,15 +475,8 @@ if (QCX_ENABLE_CUDA AND TARGET qcx-integrals-cuda-md)
         QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
     target_link_libraries(qcx-bench-boys-swap PRIVATE
         qcx-integrals-cuda-md qcx-integrals qcx-test-fixtures)
-    # /FORCE:MULTIPLE is a workaround for the Boys pin (7e005f0), not a design
-    # choice: boys_cuda_device.hpp defines its entries as non-inline __device__
-    # functions, so each of the lane's 156 translation units emits a host
-    # definition of every entry and the linker reports LNK2005. The copies are
-    # byte-identical (one header, one set of flags), so resolving them by
-    # taking the first is correct - and it is a blunt flag that would also hide
-    # a real duplicate elsewhere. It comes off with the next pin bump, whose
-    # entries are templates and carry weak linkage.
-    target_link_options(qcx-bench-boys-swap PRIVATE /FORCE:MULTIPLE)
+    # The /FORCE:MULTIPLE workaround for the Boys pin (7e005f0) is gone: the 5.0.0 entries are
+    # templates and carry weak linkage, so this target links without it.
     target_precompile_headers(qcx-bench-boys-swap PRIVATE
         <qcx/integrals/eri_cuda.hpp>)
     qcx_apply_blas_runtime(qcx-bench-boys-swap)

@@ -1,4 +1,4 @@
-# Third-party notices
+#Third - party notices
 
 Repository license: BSD-3-Clause (`LICENSE`, `Copyright (c) 2026 Marcin
 Makowski`). This file lists the license and the attribution obligations for
@@ -20,7 +20,7 @@ or of a binary.
 | HighFive | 2.10.1 (pinned submodule) | HDF5 C++ wrapper (storage) | BSL-1.0 | `third_party/highfive/LICENSE` |
 | HDF5 | system or vcpkg package | checkpoint/restart file format (storage) | BSD-3-Clause (HDF Group / NCSA) | ships with the HDF5 package |
 | Boost.Graph | system or vcpkg package | molecular connectivity graphs (molecule) | BSL-1.0 | ships with the Boost package |
-| boys | 3.0.0 (pinned submodule; first-party) | Boys-function kernel, compiled into the integrals library | BSD-3-Clause | `external/boys/LICENSE` |
+| boys | 5.0.0 (pinned submodule; first-party) | Boys-function kernel, compiled into the integrals library | BSD-3-Clause | `external/boys/LICENSE` |
 | excgrid | pinned submodule (first-party) | molecular block grids and exchange-correlation kernels (grid) | BSD-3-Clause | `external/excgrid/LICENSE` |
 
 `boys` and `excgrid` are this project's own libraries, distributed under the
@@ -106,11 +106,14 @@ is part of a default build.
 
 Basis sets under `data/basis/` are downloaded from the Basis Set Exchange
 (https://www.basissetexchange.org) by `tools/fetch_basis_data.py` and
-committed as data, one file per element per family, with per-file SHA-256
-sums in `data/basis/manifest.json`. The Basis Set Exchange project licenses
-its data under BSD-3-Clause — the basis-set tables ship inside its
-`basis_set_exchange` package repository, whose `LICENSE` is BSD-3-Clause and
-whose README states the project is released under that license; the web
+committed as data, one file per element per family,
+    with per - file SHA -
+        256 sums in `data / basis /
+            manifest.json`.The Basis Set Exchange project licenses its data under BSD -
+        3 - Clause — the basis - set tables ship inside its
+`basis_set_exchange` package repository,
+    whose `LICENSE` is BSD - 3 -
+        Clause and whose README states the project is released under that license; the web
 service itself states a copyright line and a citation request rather than a
 license. The individual families carry their own original references (Pople,
 Dunning, Weigend/Ahlrichs, Jensen and others), which the BSE database records
@@ -121,27 +124,35 @@ the families it covers and the pinned fetch version are documented in
 
 Element and isotope data ships as well. `tools/periodic/elements_data.json` is
 the frozen output of `tools/periodic/fetch_periodic_data.py`, which reads the
-pinned `periodictable` (BSD-3-Clause) and `mendeleev` (MIT) packages; the C++
-element table the tree compiles is generated from that JSON. It carries element
-symbols, names and standard atomic weights, AME2020 isotope masses and
-abundances, Cordero 2008 covalent radii and Alvarez 2013 van der Waals radii
-(the published entries behind those numbers are in `CITATION.bib`). Both
-packages are installed from PyPI and are not redistributed; they are pinned in
-`tools/requirements-periodic.txt`.
+pinned `periodictable` (BSD-3-Clause) and `mendeleev` (MIT) packages;
+the C++ element table the tree compiles is generated from that JSON.It carries element symbols,
+    names and standard atomic weights, AME2020 isotope masses and abundances,
+    Cordero 2008 covalent radii and Alvarez 2013 van der Waals
+    radii(the published entries behind those numbers are in `CITATION.bib`)
+        .Both packages are installed from PyPI and are not redistributed;
+they are pinned in
+`tools / requirements -
+    periodic.txt`.
 
-No other third-party data ships in the repository.
+    No other third -
+    party data ships in the repository.
 
-## Build-time-only tooling
+    ##Build -
+    time -
+    only tooling
 
-The following are used to build, test, document or regenerate this project
-and are not redistributed with it. Their licenses apply only if the tooling
-itself is shipped:
+        The following are used to build,
+    test,
+    document or regenerate this project and are not redistributed with it.Their licenses apply
+                    only if the tooling itself is shipped :
 
-- **CMake, Ninja, Visual Studio / MSVC, GCC, Clang, clang-format,
-  clang-tidy, Doxygen, vcpkg** — development tools, licensed by their
-  respective publishers.
-- **Python packages** pinned in `tools/requirements-*.txt` — the basis-set
-  pipeline (`basis-set-exchange`), the periodic-table generation
-  (`periodictable`, `mendeleev`), and the verification oracles (`pyscf`,
-  `numpy`, `scipy`). Installed from PyPI into the build or verification
-  environment and never redistributed; each package's own license applies.
+    -**CMake,
+    Ninja, Visual Studio / MSVC, GCC, Clang, clang - format, clang - tidy, Doxygen,
+    vcpkg ** — development tools,
+    licensed by their respective publishers.- **Python packages **pinned in `tools / requirements -
+        *.txt` — the basis - set pipeline(`basis - set - exchange`),
+    the periodic - table generation(`periodictable`, `mendeleev`),
+    and the verification oracles(`pyscf`,
+  `numpy`, `scipy`).Installed from PyPI into the build
+        or verification environment and never redistributed;
+each package's own license applies.

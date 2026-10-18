@@ -60,7 +60,7 @@ std::string_view RowBasisLabel(boys::RowBasis basis) {
 
 // The seven axes one class's unnamed call compiles, read from the library's own
 // default-policy table through DefaultPolicyFor. This is the answer an entry's
-// policy parameter defaults to - not EvalPolicy<>, which composes the seam's
+// policy parameter defaults to - not SeamPolicy<>, which composes the seam's
 // names and is printed below as the fallback it is.
 template <boys::Precision kPrecision, boys::Shape kShape, boys::Device kDevice>
 std::string ClassRowFacts(std::string_view row) {
@@ -183,7 +183,7 @@ std::string BoysBuildRecord() {
               "  this tree's two device calls compile.\n\n";
 
     record << "the seam's seven names (the fallback a class row replaces)\n";
-    record << "  boys::DefaultPolicyFp64 is boys::EvalPolicy<>: the seven names below composed\n"
+    record << "  boys::DefaultPolicyFp64 is boys::SeamPolicy<>: the seven names below composed\n"
               "  with their own defaults. boys_build_defaults.hpp states them as the fallback a\n"
               "  build that carries no row list compiles every class from. Every class this\n"
               "  tree's calls reach carries a row, so no entry this build compiles runs this\n"
@@ -221,7 +221,7 @@ std::string BoysBuildRecord() {
                    BudgetLabel(boys::DefaultPolicyFp16::kBudget),
                    "boys::DefaultPolicyFp16::kBudget")
            << "\n";
-    record << "  The half-lane budget above is the one cell EvalPolicy<> carries at the half\n"
+    record << "  The half-lane budget above is the one cell SeamPolicy<> carries at the half\n"
               "  lane; the fp16 and bf16 class rows are the table's own and are not this name.\n\n";
 
     record << "certified fit routes this build carries (boys::BoysFitRoutes)\n";

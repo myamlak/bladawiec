@@ -1,4 +1,8 @@
 #include "boys/boys_coefficients.hpp"
+// The split's group headers: the double and float coarse Chebyshev arrays this file sizes are
+// defined there, and a group header precedes the front-door headers below.
+#include "boys/boys_coefficients_d_coarse_cheb.hpp"
+#include "boys/boys_coefficients_f32_coarse_cheb.hpp"
 #include "qcx/integrals/boys.hpp"
 
 #include <algorithm>
