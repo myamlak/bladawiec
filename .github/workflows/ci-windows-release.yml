@@ -113,6 +113,24 @@ jobs:
         with:
           submodules: true
 
+      # The class-matrix build writes one precompiled header per instantiation class (154 at
+      # Lmax 6), and two runs died writing them with C1085/C1088. This removes the image's
+      # unused toolchains and prints the space it returned, so the run states its own headroom.
+      - name: Free runner disk space
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive $env:SystemDrive.TrimEnd(':')).Free
+          @('C:\Program Files\Android', 'C:\Program Files\dotnet',
+            'C:\Program Files\Microsoft SDKs\Azure',
+            'C:\hostedtoolcache\windows\CodeQL', 'C:\hostedtoolcache\windows\Java_*',
+            'C:\hostedtoolcache\windows\Ruby', 'C:\hostedtoolcache\windows\go',
+            'C:\hostedtoolcache\windows\node', 'C:\ProgramData\Package Cache') |
+            ForEach-Object { Get-Item $_ -ErrorAction SilentlyContinue } |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+          $after = (Get-PSDrive $env:SystemDrive.TrimEnd(':')).Free
+          'Freed {0:N1} GB; {1:N1} GB free on {2}' -f (($after - $before) / 1GB), ($after / 1GB), $env:SystemDrive
+
       # One toolchain step per system rather than one step with a conditional
       # command: the two package managers have nothing in common, and a step
       # named for its system is the one that shows up red when it breaks.
