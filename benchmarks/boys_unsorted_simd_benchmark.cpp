@@ -23,6 +23,7 @@
 // The split's group header: kCoeffs is defined there, and a group header precedes the front
 // door below.
 #include "boys/boys_coefficients_d_coarse_cheb.hpp"
+
 #include "qcx/integrals/boys.hpp"
 
 #include <algorithm>

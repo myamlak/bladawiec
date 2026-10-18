@@ -45,6 +45,10 @@ SpacesBeforeTrailingComments: 1
 SortIncludes: true
 IncludeBlocks: Regroup
 IncludeCategories:
+  # boys 5.0.0's split requires a group header to precede the front door (boys/boys.hpp) in the
+  # unit that names it, so the group headers sort ahead of every other quoted include.
+  - Regex: '^"boys/boys_coefficients_[a-z0-9_]+\.hpp"'
+    Priority: 0
   - Regex: '^"'
     Priority: 1
   - Regex: '^<'

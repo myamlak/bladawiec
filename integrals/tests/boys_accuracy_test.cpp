@@ -23,9 +23,10 @@
 
 // The split's group headers: the coarse bases this file's degree tables read are defined there,
 // and a group header precedes the front door below.
-#include "boys/boys.hpp"
 #include "boys/boys_coefficients_d_coarse_cheb.hpp"
 #include "boys/boys_coefficients_f32_coarse_cheb.hpp"
+
+#include "boys/boys.hpp"
 #include "boys/boys_effective_degrees.hpp"
 #include "boys/boys_impl.hpp"
 #include "qcx/integrals/boys.hpp"
