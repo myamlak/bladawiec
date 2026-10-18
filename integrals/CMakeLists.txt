@@ -235,6 +235,12 @@ else()
     message(STATUS "qcx-integrals: non-x86-64 target - the AVX2 micro-GEMM tier is excluded")
 endif()
 
+# The split (boys 5.0.0) makes a group header precede the front door in the unit that names it,
+# and this target's PCH parses the front door first: these two submodule units open a group of
+# their own and are therefore compiled without it.
+set_source_files_properties(${_qcxBoysExt}/src/boys.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(${_qcxBoysExt}/src/boys_probe.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
 # The Fock-contraction kernel's AVX2 copy. The kernel body is ONE template
 # (internal/fock_contract_kernel.hpp); the scalar copy instantiates inside
 # fock_build.cpp and this unit compiles the AVX2 copy, entered only after the
@@ -397,6 +403,10 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     target_precompile_headers(qcx-integrals-tests PRIVATE
         <gtest/gtest.h>
         <qcx/integrals/boys.hpp>)
+    # The split's rule: these two tests open a group header before the front door, and the PCH
+    # parses the front door first.
+    set_source_files_properties(tests/boys_test.cpp tests/boys_accuracy_test.cpp
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
     include(GoogleTest)
     qcx_blas_is_mkl(_qcxMkl)
