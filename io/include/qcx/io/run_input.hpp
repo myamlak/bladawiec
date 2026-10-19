@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "qcx/dispersion/options.hpp"
 #include "qcx/integrals/accuracy.hpp"
 
 #include <optional>
@@ -1102,6 +1103,18 @@ struct RunInput {
     /// `[method] fock_builder` key or from the size ladder. Appended last so the
     /// aggregate's earlier fields keep their positions.
     RunBuilderInput builder;
+    /// The `[dispersion]` block: the geometry-only London dispersion
+    /// correction the run adds to its total energy. Absent when the file
+    /// wrote no block (or wrote an empty one), in which case no correction is
+    /// evaluated and the record carries no `dispersion` block. Within a
+    /// present block `form` is required by the validator, and the parameter
+    /// source is exactly one of a preset, the selected form's complete
+    /// numeric set, or the run method's own family. Dispersion is
+    /// method-independent (both forms carry an "hf" preset), so unlike the
+    /// Kohn-Sham key family it is NOT refused on the Hartree-Fock lanes.
+    /// Appended after builder so the aggregate's earlier fields keep their
+    /// positions.
+    std::optional<qcx::dispersion::DispersionOptions> dispersion;
 };
 
 /// \}

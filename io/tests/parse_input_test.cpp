@@ -2256,6 +2256,168 @@ TEST(RunInputParseTest, RejectsOutOfContractGridValuesByName) {
         << "message: " << angular.error().message;
 }
 
+TEST(RunInputParseTest, ParsesTheDispersionBlockKeys) {
+    // The [dispersion] block preserves each written key in the module's own
+    // request type: the form and the preset are strings, and every parameter
+    // is a per-key optional so the validator can name a missing or cross-form
+    // key. The shared keys (s6, s8) land in the SELECTED form's request; with
+    // no form written they land in both, so the validator's missing-form
+    // refusal is the first statement the file hears.
+    const auto d3 = ParseRunInput(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.74, 0.0, 0.0]]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+accuracy = "kNormal"
+
+[dispersion]
+form = "d3"
+preset = "b3lyp"
+)");
+    ASSERT_TRUE(d3.has_value()) << d3.error().message;
+    ASSERT_TRUE(d3->dispersion.has_value());
+    ASSERT_TRUE(d3->dispersion->form.has_value());
+    EXPECT_EQ(*d3->dispersion->form, qcx::dispersion::DispersionForm::kD3);
+    ASSERT_TRUE(d3->dispersion->preset.has_value());
+    EXPECT_EQ(*d3->dispersion->preset, "b3lyp");
+    EXPECT_FALSE(d3->dispersion->d3.Any());
+    EXPECT_FALSE(d3->dispersion->d4.Any());
+
+    const auto d4 = ParseRunInput(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.74, 0.0, 0.0]]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rks"
+functional = "pbe"
+accuracy = "kNormal"
+
+[dispersion]
+form = "d4"
+s6 = 1.0
+s8 = 0.5
+a1 = 0.4
+a2 = 4.0
+)");
+    ASSERT_TRUE(d4.has_value()) << d4.error().message;
+    ASSERT_TRUE(d4->dispersion.has_value());
+    ASSERT_TRUE(d4->dispersion->form.has_value());
+    EXPECT_EQ(*d4->dispersion->form, qcx::dispersion::DispersionForm::kD4);
+    EXPECT_FALSE(d4->dispersion->d3.Any());
+    ASSERT_TRUE(d4->dispersion->d4.s6.has_value());
+    EXPECT_EQ(*d4->dispersion->d4.s6, 1.0);
+    ASSERT_TRUE(d4->dispersion->d4.s8.has_value());
+    EXPECT_EQ(*d4->dispersion->d4.s8, 0.5);
+    ASSERT_TRUE(d4->dispersion->d4.a1.has_value());
+    EXPECT_EQ(*d4->dispersion->d4.a1, 0.4);
+    ASSERT_TRUE(d4->dispersion->d4.a2.has_value());
+    EXPECT_EQ(*d4->dispersion->d4.a2, 4.0);
+
+    // A cross-form key is STORED, not dropped: the validator names it, and a
+    // parser that discarded it here would leave that refusal nothing to say.
+    const auto crossForm = ParseRunInput(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0]]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+accuracy = "kNormal"
+
+[dispersion]
+form = "d3"
+a1 = 0.4
+)");
+    ASSERT_TRUE(crossForm.has_value()) << crossForm.error().message;
+    ASSERT_TRUE(crossForm->dispersion.has_value());
+    EXPECT_FALSE(crossForm->dispersion->d3.Any());
+    ASSERT_TRUE(crossForm->dispersion->d4.a1.has_value());
+    EXPECT_EQ(*crossForm->dispersion->d4.a1, 0.4);
+}
+
+TEST(RunInputParseTest, AnAbsentOrEmptyDispersionBlockLeavesTheMemberUnset) {
+    // No block and an empty block are the same request: no correction. The
+    // member's absence is what the serializer reads as "carry no dispersion
+    // block", so an empty table must not materialize a defaulted one.
+    const auto absent = ParseRunInput(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0]]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+accuracy = "kNormal"
+)");
+    ASSERT_TRUE(absent.has_value()) << absent.error().message;
+    EXPECT_FALSE(absent->dispersion.has_value());
+
+    const auto empty = ParseRunInput(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0]]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+accuracy = "kNormal"
+
+[dispersion]
+)");
+    ASSERT_TRUE(empty.has_value()) << empty.error().message;
+    EXPECT_FALSE(empty->dispersion.has_value());
+}
+
+TEST(RunInputParseTest, RejectsOutOfContractDispersionValuesByName) {
+    // Every [dispersion] refusal names the key it refused. s9 and alp are
+    // refused BY NAME rather than ignored: the shipped D4 energy is the
+    // Becke-Johnson two-body term and consumes neither, and a silently
+    // dropped parameter would claim a contribution the number lacks.
+    struct Case {
+        const char* block;
+        const char* messageFragment;
+    };
+
+    const Case cases[] = {
+        // A form outside the vocabulary is refused with the list, never
+        // guessed at - the contract's whole point is that the form is named.
+        {"[dispersion]\nform = \"d5\"\n", "unknown dispersion.form \"d5\" (d3 | d4)"},
+        {"[dispersion]\nform = 3\n", "\"dispersion.form\" must be a string"},
+        {"[dispersion]\npreset = 3\n", "\"dispersion.preset\" must be a string"},
+        {"[dispersion]\ns6 = \"1.0\"\n", "\"dispersion.s6\" must be a number"},
+        // A non-finite parameter would poison the total silently.
+        {"[dispersion]\ns6 = nan\n", "\"dispersion.s6\" must be a finite number"},
+        {"[dispersion]\nform = \"d4\"\na2 = inf\n", "\"dispersion.a2\" must be a finite number"},
+        {"[dispersion]\ns9 = 0.0\n", "dispersion.s9 is not taken"},
+        {"[dispersion]\nalp = 0.5\n", "dispersion.alp is not taken"},
+    };
+
+    for (const auto& test : cases)
+    {
+        const std::string text = std::string("[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n"
+                                             "[basis]\norbital = \"sto-3g\"\n"
+                                             "[method]\ntype = \"rhf\"\naccuracy = \"kNormal\"\n") +
+                                 test.block;
+
+        const auto input = ParseRunInput(text);
+        ASSERT_FALSE(input.has_value()) << "case: " << test.block;
+        EXPECT_EQ(input.error().code, qcx::ErrorCode::kInvalidArgument);
+        EXPECT_NE(input.error().message.find(test.messageFragment), std::string::npos)
+            << "message: " << input.error().message;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // THE ORTHOGONAL BUILDER AXES (schema 35).
 //

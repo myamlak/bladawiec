@@ -3,6 +3,7 @@
 
 #include "qcx/io/parse_input.hpp"
 
+#include "qcx/dispersion/options.hpp"
 #include "qcx/grid/angular_grid.hpp"
 #include "qcx/molecule/molecule.hpp"
 
@@ -136,6 +137,25 @@ qcx::Result<MethodType> ParseMethod(std::string_view name) {
     return std::unexpected(
         Err(qcx::ErrorCode::kInvalidArgument,
             "unknown method.type \"" + std::string(name) + "\" (rhf | uhf | rks | uks)"));
+}
+
+// Maps one [dispersion] form word to the module enum; kInvalidArgument with
+// the accepted list on an unknown name. The word names the FORM explicitly,
+// which is the contract's point: one key selects one form, and a name outside
+// the vocabulary is refused rather than guessed at.
+qcx::Result<qcx::dispersion::DispersionForm> ParseDispersionForm(std::string_view name) {
+    if (name == "d3")
+    {
+        return qcx::dispersion::DispersionForm::kD3;
+    }
+
+    if (name == "d4")
+    {
+        return qcx::dispersion::DispersionForm::kD4;
+    }
+
+    return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                               "unknown dispersion.form \"" + std::string(name) + "\" (d3 | d4)"));
 }
 
 // Maps one method.fock_builder word to the io enum; kInvalidArgument
@@ -388,6 +408,28 @@ qcx::Result<std::optional<double>> ReadDouble(const toml::node_view<toml::node>&
     }
 
     return node->value<double>();
+}
+
+// ReadDouble plus a finiteness gate. A dispersion parameter enters the
+// energy kernel directly, so an inf or NaN would either poison the total
+// energy or silently delete the correction; it is refused HERE, by the key
+// name the file wrote.
+qcx::Result<std::optional<double>> ReadFiniteDouble(const toml::node_view<toml::node>& table,
+                                                    std::string_view key) {
+    auto value = ReadDouble(table, key);
+
+    if (!value.has_value())
+    {
+        return value;
+    }
+
+    if (value->has_value() && !std::isfinite(**value))
+    {
+        return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                                   "\"" + std::string(key) + "\" must be a finite number"));
+    }
+
+    return value;
 }
 
 // ReadString with the required-key semantics: a missing or empty key is
@@ -2059,6 +2101,204 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
         }
 
         input.grid = gridSettings;
+    }
+
+    // The [dispersion] block: the London dispersion correction the run adds to
+    // its total energy. The parser preserves each written key and leaves the
+    // parameter source undecided: ResolveDispersion (the module's, called by
+    // the driver) turns a preset name or the method family into numbers, and
+    // the validator holds the cross-key rules. Three key-level facts are
+    // settled here:
+    //   - s9 and alp are refused BY NAME. The shipped D4 energy is its
+    //     Becke-Johnson two-body term and consumes neither; a silently ignored
+    //     parameter would claim a contribution the number does not carry.
+    //   - s6 and s8 are shared by both forms, so they are stored in the
+    //     selected form's request (in both when no form is written yet, which
+    //     leaves the validator's missing-form refusal as the first one heard).
+    //   - an absent or empty table writes nothing: the field stays unset and
+    //     no correction is evaluated.
+    const auto dispersion = table["dispersion"];
+
+    if (dispersion.is_table())
+    {
+        if (dispersion["s9"].node() != nullptr)
+        {
+            return std::unexpected(
+                Err(qcx::ErrorCode::kInvalidArgument,
+                    "dispersion.s9 is not taken: the shipped D4 energy is the "
+                    "Becke-Johnson two-body term (s6, s8, a1, a2); remove the key, a "
+                    "three-body term is not implemented"));
+        }
+
+        if (dispersion["alp"].node() != nullptr)
+        {
+            return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                                       "dispersion.alp is not taken: the shipped D4 energy is the "
+                                       "Becke-Johnson two-body term (s6, s8, a1, a2), which has no "
+                                       "element-dependent exponent; remove the key"));
+        }
+
+        qcx::dispersion::DispersionOptions options;
+
+        auto formName = ReadString(dispersion, "dispersion.form");
+
+        if (!formName.has_value())
+        {
+            return std::unexpected(formName.error());
+        }
+
+        if (formName->has_value())
+        {
+            auto parsedForm = ParseDispersionForm(**formName);
+
+            if (!parsedForm.has_value())
+            {
+                return std::unexpected(parsedForm.error());
+            }
+
+            options.form = *parsedForm;
+        }
+
+        auto preset = ReadString(dispersion, "dispersion.preset");
+
+        if (!preset.has_value())
+        {
+            return std::unexpected(preset.error());
+        }
+
+        if (preset->has_value())
+        {
+            options.preset = **preset;
+        }
+
+        auto s6 = ReadFiniteDouble(dispersion, "dispersion.s6");
+
+        if (!s6.has_value())
+        {
+            return std::unexpected(s6.error());
+        }
+
+        auto s8 = ReadFiniteDouble(dispersion, "dispersion.s8");
+
+        if (!s8.has_value())
+        {
+            return std::unexpected(s8.error());
+        }
+
+        auto rs6 = ReadFiniteDouble(dispersion, "dispersion.rs6");
+
+        if (!rs6.has_value())
+        {
+            return std::unexpected(rs6.error());
+        }
+
+        auto alpha6 = ReadFiniteDouble(dispersion, "dispersion.alpha6");
+
+        if (!alpha6.has_value())
+        {
+            return std::unexpected(alpha6.error());
+        }
+
+        auto rs8 = ReadFiniteDouble(dispersion, "dispersion.rs8");
+
+        if (!rs8.has_value())
+        {
+            return std::unexpected(rs8.error());
+        }
+
+        auto alpha8 = ReadFiniteDouble(dispersion, "dispersion.alpha8");
+
+        if (!alpha8.has_value())
+        {
+            return std::unexpected(alpha8.error());
+        }
+
+        auto a1 = ReadFiniteDouble(dispersion, "dispersion.a1");
+
+        if (!a1.has_value())
+        {
+            return std::unexpected(a1.error());
+        }
+
+        auto a2 = ReadFiniteDouble(dispersion, "dispersion.a2");
+
+        if (!a2.has_value())
+        {
+            return std::unexpected(a2.error());
+        }
+
+        bool written = options.form.has_value() || options.preset.has_value();
+
+        if (s6->has_value())
+        {
+            written = true;
+
+            if (options.form != qcx::dispersion::DispersionForm::kD4)
+            {
+                options.d3.s6 = **s6;
+            }
+
+            if (options.form != qcx::dispersion::DispersionForm::kD3)
+            {
+                options.d4.s6 = **s6;
+            }
+        }
+
+        if (s8->has_value())
+        {
+            written = true;
+
+            if (options.form != qcx::dispersion::DispersionForm::kD4)
+            {
+                options.d3.s8 = **s8;
+            }
+
+            if (options.form != qcx::dispersion::DispersionForm::kD3)
+            {
+                options.d4.s8 = **s8;
+            }
+        }
+
+        if (rs6->has_value())
+        {
+            written = true;
+            options.d3.rs6 = **rs6;
+        }
+
+        if (alpha6->has_value())
+        {
+            written = true;
+            options.d3.alpha6 = **alpha6;
+        }
+
+        if (rs8->has_value())
+        {
+            written = true;
+            options.d3.rs8 = **rs8;
+        }
+
+        if (alpha8->has_value())
+        {
+            written = true;
+            options.d3.alpha8 = **alpha8;
+        }
+
+        if (a1->has_value())
+        {
+            written = true;
+            options.d4.a1 = **a1;
+        }
+
+        if (a2->has_value())
+        {
+            written = true;
+            options.d4.a2 = **a2;
+        }
+
+        if (written)
+        {
+            input.dispersion = std::move(options);
+        }
     }
 
     const auto guess = table["guess"];

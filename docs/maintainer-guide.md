@@ -64,7 +64,7 @@ The options that matter when configuring:
 
 **Run the subset the change reaches, not the whole suite.** The module DAG makes that a
 derivation rather than a guess: `core → backend → memory → linalg → molecule → symmetry →
-basisset → grid → integrals → scf → storage → io → properties → driver`. A change in
+basisset → grid → dispersion → integrals → scf → storage → io → properties → driver`. A change in
 module X can move X and every module to its right, and nothing to its left — so the test
 binaries from X onward are the only ones that can tell you something.
 

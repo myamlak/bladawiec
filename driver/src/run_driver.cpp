@@ -67,6 +67,7 @@
 
 // The Kohn-Sham composition (driver-internal, the
 // internal/footprint.hpp precedent in integrals/src).
+#include "internal/dispersion.hpp"
 #include "internal/ks_composition.hpp"
 // The Kohn-Sham grid: the engine, its derivative provider's geometry and
 // parameters, and the thresholds both walks read.
@@ -564,7 +565,13 @@ void FillScfResult(qcx::io::RunResult& result,
     result.iterations = iterations;
     result.energyDeltaHartree = achievedEnergyDelta;
     result.rmsDensityDelta = achievedRmsDensityChange;
-    result.totalEnergyHartree = totalEnergy;
+    // The dispersion correction (schema 41) is added to the TOTAL here, once,
+    // and never enters the SCF loop: the electronic energy and the
+    // convergence residuals above describe the SCF energy, and the correction
+    // is geometry-only and method-independent. An absent block is no
+    // correction, not a correction measured at zero.
+    result.totalEnergyHartree =
+        totalEnergy + (result.dispersion.has_value() ? result.dispersion->energyHartree : 0.0);
     result.electronicEnergyHartree = electronicEnergy;
     result.timingsMs.scfLoopMs = scfLoopMs;
     result.numRemovedOverlapDirections = numRemovedOverlapDirections;
@@ -9617,6 +9624,20 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         return refuse(molecule.error());
     }
 
+    // The dispersion correction (schema 41): resolved and evaluated once,
+    // right after the molecule exists and before any basis or SCF work. It
+    // reads nothing but the geometry and the input's own request, so a
+    // request that cannot be honoured (an unknown preset, a partial set, an
+    // element the form does not cover) is refused here rather than after a
+    // full SCF. The SCF itself stays dispersion-free; the correction is added
+    // to the total in FillScfResult.
+    auto dispersionBlock = qcx::driver::internal::EvaluateRunDispersion(input, *molecule);
+
+    if (!dispersionBlock.has_value())
+    {
+        return refuse(dispersionBlock.error());
+    }
+
     const std::filesystem::path root(QcxBasisDataDir);
     // The filtered parse: keep only the molecule's
     // elements, so the parsed set and the engine's molecule-scoped counts
@@ -10133,6 +10154,11 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         input.builder.device.has_value()
             ? std::optional<std::string>(qcx::io::DeviceSelectorText(*input.builder.device))
             : std::nullopt};
+
+    // The correction evaluated right after the molecule was built (schema
+    // 41): present exactly when the input wrote a [dispersion] block, and its
+    // energy is what FillScfResult adds to the total once the SCF converges.
+    result.dispersion = std::move(*dispersionBlock);
 
     // The auxiliary-basis weak-region notice: the disclosure
     // half of the demotion the aux rule performs. The rule ALWAYS resolves a

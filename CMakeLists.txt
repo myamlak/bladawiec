@@ -640,6 +640,7 @@ add_subdirectory(symmetry)
 add_subdirectory(basisset)
 
 add_subdirectory(grid)
+add_subdirectory(dispersion)
 add_subdirectory(integrals)
 add_subdirectory(scf)
 add_subdirectory(response)

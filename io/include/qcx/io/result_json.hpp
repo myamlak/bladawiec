@@ -15,6 +15,7 @@
 #include "qcx/io/run_input.hpp"
 
 #include <array>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -1501,6 +1502,36 @@ struct RunBuilderAxes {
     std::optional<std::string> device;
 };
 
+/// The dispersion correction a run applied (schema 41), serialized as
+/// "dispersion": the form, where its parameters came from, the values they
+/// resolved to, and the energy the correction contributed to
+/// `total_energy_hartree`.
+///
+/// The block records the RESOLVED set rather than the input's words, because
+/// the parameter source may be the method family or a preset the run looked
+/// up: a reader must be able to reproduce the number from the document alone,
+/// without the input file and without the preset table. That is why
+/// `parameters` carries the numbers the kernel consumed under the form's own
+/// key names, not a path to them.
+/// \ingroup qcx-io
+struct RunDispersion {
+    /// "d3" | "d4" - the input's own form vocabulary.
+    std::string form;
+    /// "method" | "preset" | "explicit" - where `parameters` came from.
+    std::string parameterSource;
+    /// The table name the values came from: the `dispersion.preset` name for
+    /// "preset", the run method's family for "method"; absent for "explicit",
+    /// where the input stated every value itself.
+    std::optional<std::string> parameterSet;
+    /// The values the correction consumed, under the form's published key
+    /// names: d3 gives s6, s8, rs6, alpha6, rs8 and alpha8; d4 gives s6, s8,
+    /// a1 and a2.
+    std::map<std::string, double> parameters;
+    /// The correction's own contribution to `total_energy_hartree`, in
+    /// Hartree; negative for attraction.
+    double energyHartree = 0.0;
+};
+
 /// The machine-readable result of one run.
 /// \ingroup qcx-io
 struct RunResult {
@@ -1604,7 +1635,22 @@ struct RunResult {
     /// unless the run asked for it (the `xc_grid` presence rule beside it), and
     /// it is present on the Kohn-Sham lanes only - a request on rhf/uhf is
     /// refused before serialization rather than recorded as absent.
-    static constexpr int kSchemaVersion = 40;
+    ///
+    /// Schema 41 ADDS the top-level `dispersion` block (RunDispersion): the
+    /// London dispersion correction a run applied - its form ("d3" | "d4"),
+    /// the parameter source ("method" | "preset" | "explicit"), the preset
+    /// name when one was used, the values the kernel consumed under the
+    /// form's own key names, and the energy the correction contributed. Keys
+    /// added, so the number moved with them. Presence rule: absent unless the
+    /// input wrote a `[dispersion]` block, and then always present - a
+    /// request that cannot be honoured is refused before serialization,
+    /// never recorded as absent. The block is a change a consumer must notice
+    /// beyond its presence: `total_energy_hartree` includes this term on runs
+    /// that carry it, so a comparison across this boundary compares a total
+    /// with a dispersion contribution against one that could not have carried
+    /// any. `electronic_energy_hartree` and the convergence residuals are
+    /// unaffected: the SCF loop itself remains dispersion-free.
+    static constexpr int kSchemaVersion = 41;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.
@@ -1649,7 +1695,12 @@ struct RunResult {
     /// nullopt means "no SCF loop filled it" - never a fabricated zero.
     std::optional<std::size_t> numRemovedOverlapDirections;
 
-    double totalEnergyHartree = 0.0; ///< Electronic plus nuclear repulsion.
+    /// Electronic plus nuclear repulsion, plus the `[dispersion]` block's
+    /// energy when the run applied one (schema 41). The SCF loop is
+    /// dispersion-free: `electronicEnergyHartree` and the convergence
+    /// residuals describe the SCF energy, and the correction is added to the
+    /// total once, after convergence.
+    double totalEnergyHartree = 0.0;
     double electronicEnergyHartree = 0.0; ///< 1/2 Tr[D (H + F)].
     std::optional<double> spinSquared; ///< UHF spin-contamination diagnostic;
                                        ///< nullopt on RHF (not applicable).
@@ -1835,6 +1886,14 @@ struct RunResult {
     /// to fill it. Appended last so the aggregate's earlier fields keep their
     /// positions.
     RunBuilderAxes builderAxes;
+
+    /// The dispersion correction this run applied (schema 41,
+    /// RunDispersion), serialized as "dispersion". Present exactly when the
+    /// input wrote a `[dispersion]` block; absent otherwise (the
+    /// null-honesty rule: a run that asked for no correction carries no
+    /// block, never a zero-filled one). Appended last so the aggregate's
+    /// earlier fields keep their positions.
+    std::optional<RunDispersion> dispersion;
 };
 
 /// Serializes a run result to the JSON schema (see the header note).

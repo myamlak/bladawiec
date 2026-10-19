@@ -12,6 +12,9 @@
 // requested the blocking. Schema 34's payload is the run's own physics: the
 // always-present `method` word, and the Kohn-Sham-only `functional` and
 // `xc_grid` pair, whose ABSENCE on a Hartree-Fock record is the statement.
+// Schema 41's top-level `dispersion` block is pinned the same way: the
+// resolved values are recorded when a correction ran, and a run that wrote
+// no [dispersion] block carries no block at all.
 #include "qcx/io/result_json.hpp"
 
 #include <gtest/gtest.h>
@@ -35,7 +38,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsForty) {
+TEST(ResultJsonTest, SchemaVersionIsFortyOne) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -107,7 +110,18 @@ TEST(ResultJsonTest, SchemaVersionIsForty) {
     // DERIVATIVE of an energy the same document carries, which is why the
     // block's own name states the fixed-density limitation rather than leaving
     // a reader to read the vector as a total nuclear gradient.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 40);
+    //
+    // v40 -> v41: the top-level `dispersion` block (RunDispersion) is added:
+    // the form ("d3" | "d4"), the parameter source ("method" | "preset" |
+    // "explicit"), the preset name when one was used, the values the kernel
+    // consumed under the form's own key names, and the energy the correction
+    // contributed. Keys added, so the number moves with them - and the block
+    // moves `total_energy_hartree`'s meaning on the runs that carry it: the
+    // total now includes the correction, while `electronic_energy_hartree`
+    // and the SCF residuals do not. Absent unless the input wrote a
+    // `[dispersion]` block; a request that cannot be honoured is refused
+    // before serialization, never recorded as absent.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 41);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -182,6 +196,57 @@ TEST(ResultJsonTest, FunctionalAndXcGridAreTheKohnShamOnlyPayloads) {
     // record that built no grid.
     EXPECT_EQ(CountOccurrences(rksJson, "\"radial_points\""), 1);
     EXPECT_EQ(CountOccurrences(rksJson, "\"xc_grid\""), 1);
+}
+
+TEST(ResultJsonTest, DispersionBlockIsEmittedWhenRequested) {
+    // Schema 41: the correction a run applied is recorded with the RESOLVED
+    // values, so the number is reproducible from the document alone - the
+    // source word points at the table and `parameters` carries what the
+    // lookup (or the input) produced.
+    qcx::io::RunResult result;
+    result.method = qcx::io::MethodType::kRks;
+    result.totalEnergyHartree = -100.0123;
+    result.dispersion = qcx::io::RunDispersion{"d3",
+                                               "preset",
+                                               std::string("pbe0"),
+                                               {{"s6", 1.0},
+                                                {"s8", 0.928},
+                                                {"rs6", 1.287},
+                                                {"alpha6", 14.0},
+                                                {"rs8", 1.5},
+                                                {"alpha8", 16.0}},
+                                               -0.0123};
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 1);
+    EXPECT_NE(json.find("\"form\": \"d3\""), std::string::npos);
+    EXPECT_NE(json.find("\"parameter_source\": \"preset\""), std::string::npos);
+    EXPECT_NE(json.find("\"parameter_set\": \"pbe0\""), std::string::npos);
+    EXPECT_NE(json.find("\"s6\": 1.0"), std::string::npos);
+    EXPECT_NE(json.find("\"energy_hartree\": -0.0123"), std::string::npos);
+
+    // An explicit set names no preset: the member is absent, never a null
+    // standing in for a name that does not exist.
+    qcx::io::RunResult explicitRun;
+    explicitRun.dispersion =
+        qcx::io::RunDispersion{"d4",
+                               "explicit",
+                               std::nullopt,
+                               {{"s6", 1.0}, {"s8", 0.0}, {"a1", 0.4}, {"a2", 4.0}},
+                               -0.001};
+
+    const std::string explicitJson = qcx::io::SerializeRunResultJson(explicitRun);
+    EXPECT_EQ(explicitJson.find("\"parameter_set\""), std::string::npos);
+}
+
+TEST(ResultJsonTest, DispersionBlockIsAbsentWhenNotRequested) {
+    // Null honesty: a run that wrote no [dispersion] block carries no block,
+    // never a zero-filled one that would read as a correction measured at
+    // zero.
+    qcx::io::RunResult result;
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(json.find("\"dispersion\""), std::string::npos);
 }
 
 TEST(ResultJsonTest, MoleculeUnitsDisclosesTheInterpretedUnit) {

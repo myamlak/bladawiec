@@ -346,6 +346,58 @@ An unreadable or corrupt file keeps storage's own error code
 (`kIOError`), with the schema key named: `guess.restart_path:
 <storage message>`.
 
+### 2.4 The `[dispersion]` block (schema 41)
+
+An optional block that adds a London dispersion correction to the total
+energy. It is geometry-only and method-independent, so it is legal on every
+method word — unlike the Kohn-Sham key family, an `rhf` or `uhf` run may carry
+it, because both forms ship an `hf` parameter set. A run that writes no block
+(or writes an empty one) evaluates no correction, and its record carries no
+`dispersion` block.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `form` | string | `"d3"` (zero damping) or `"d4"` (the two-body Becke-Johnson energy); required when the block is written |
+| `preset` | string | a published parameter set of the selected form |
+| `s6`, `s8` | number | scale factors, shared by both forms |
+| `rs6`, `alpha6`, `rs8`, `alpha8` | number | D3 damping parameters |
+| `a1`, `a2` | number | D4 Becke-Johnson damping parameters |
+
+The parameter source is exactly one of three:
+
+- `preset` names a published set. The D3 table carries `b3lyp`, `pbe`, `pbe0`,
+  `bp86`, `blyp`, `revpbe`, `pbesol`, `b97d`, `tpss`, `bpbe`, `bhandhlyp`,
+  `b3pw91` and `hf`; the D4 table carries its own family names. The two name
+  spaces are separate — a D3 name is not automatically a D4 name, and a name
+  the selected form's table does not carry is refused by name.
+- the selected form's **complete** numeric set: `d3` takes all six of `s6,
+  s8, rs6, alpha6, rs8, alpha8`; `d4` takes all four of `s6, s8, a1, a2`. A
+  partial set is refused naming every missing key.
+- neither, in which case the set defaults to the run method's own family: the
+  `[method] functional` name on an `rks`/`uks` run, `"hf"` on `rhf`/`uhf`.
+
+Refused by name, before any run starts:
+
+- a preset and numeric keys together — two parameter sources for one form;
+- a key of the other form (`a1`/`a2` with `form = "d3"`, or `rs6`/`alpha6`/
+  `rs8`/`alpha8` with `form = "d4"`);
+- `s9` and `alp`, which are not parameters of the shipped D4 energy (the
+  two-body term consumes `s6, s8, a1, a2` only) and are refused rather than
+  silently ignored;
+- a non-finite parameter;
+- `form = "d4"` on a charged molecule: the shipped energy evaluates its EEQ
+  charges at total charge 0, so the request is refused rather than answered
+  at the wrong charge (`form = "d3"` is charge-independent).
+
+The resolved set the run consumed is recorded in §3.4's `dispersion` block,
+and its energy is added to `total_energy_hartree`.
+
+```toml
+[dispersion]
+form = "d3"
+preset = "b3lyp"
+```
+
 ## 3. Output schema (JSON)
 
 One JSON document per run, pretty-printed with two-space indent (nlohmann's
@@ -357,14 +409,14 @@ bumped whenever a consumer must notice a change (§7).
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | The schema version; currently 40 (`RunResult::kSchemaVersion`) |
+| `schema_version` | int | The schema version; currently 41 (`RunResult::kSchemaVersion`) |
 | `molecule_units` | string | Schema 28. The unit the run's geometry was **read under** — the RESOLVED `[molecule] units` value, `"angstrom"` or `"bohr"`, never a request left for a consumer to apply. **Always present**, and `"angstrom"` is the value an absent key resolves to (the parser's default is a judgement, and the disclosure rule makes a judgement stateable). It exists so a record is self-describing on the one convention that has produced a wasted hunt twice in this project (2026-08-26, pyscf's Ångström default; 2026-09-15, Bohr numbers in an Ångström input file): a reader holding the JSON alone can now tell at what scale the geometry was read without consulting the input file. It describes the INPUT, not the numbers — the internal geometry is Bohr under either value |
 | `converged` | bool | True when a convergence criterion fired |
 | `iterations` | int | Iterations spent; the budget when not converged |
 | `energy_delta_hartree` | number \| null | The achieved \|E_n − E_{n−1}\| **of the returned iterate** — the gate's own energy operand, recorded to qualify a bare `converged`. **null when no SCF loop filled it** (never a fabricated 0.0). Both gate legs are live on both paths, so a converged result has this below `[scf] energy_tolerance` by construction. It was **not** bounded on RHF until 2026-09-12 — the energy leg was inert there (closed), so a default-gate run carried a value orders of magnitude above the tolerance it was given. Cached RHF results from before that date are not comparable with this one (§7) |
 | `rms_density_delta` | number \| null | The RMS density change the gate compared (Frobenius/n); same null rule; below `[scf] density_tolerance` by construction. On RHF **before 2026-09-12** (when the energy-leg deferral closed) it was the leg that decided the stop while the energy leg was inert; since then both legs gate, so the stop requires this one AND `energy_delta_hartree` (§7's `16 → 17` correction) |
 | `num_removed_overlap_directions` | int \| null | The **linear-dependence removal**'s count (schema 27, the disclosure rule): how many overlap directions the orthogonalizer removed because they fell below `kOverlapEigenvalueFloorTolerance` (1e-8 relative) times the largest overlap eigenvalue. A **system** property — the basis set and the molecule — not a per-method switch, so RHF and UHF report the SAME count for the same inputs. **null when no SCF loop filled it**, never a fabricated 0.0; 0 is the well-conditioned answer. A non-zero value is **not** a smaller calculation: the run happened in the reduced orthonormal space and was mapped back, so `density`, `fock` and the energies are all in the full AO dimension. It exists because a silent truncation would be indistinguishable from a correct run, and a large diffuse basis is exactly where the removal is expected rather than exceptional. It is also the disclosure of **what the removal disengages**, and the only one: a nonzero count means the blocked diagonalization fell back to the plain `n`-dimensional solve and the `symmetry`/`symmetry_beta` blocks are absent **by construction** (§3.7) — a non-C1 run that trips the floor completes and returns the full-space answer instead of refusing the run for non-square coefficients |
-| `total_energy_hartree` | number | Electronic plus nuclear repulsion |
+| `total_energy_hartree` | number | Electronic plus nuclear repulsion, plus the `[dispersion]` correction when the run wrote one (schema 41). The SCF loop is dispersion-free, so `electronic_energy_hartree` and the convergence residuals do not carry the correction |
 | `electronic_energy_hartree` | number | 1/2 Tr[D (H + F)] |
 | `spin_squared` | number \| null | UHF spin-contamination diagnostic; **null on RHF** (not applicable — the key is present with value null, never omitted, never a fabricated 0.0) |
 | `populations` | object \| null | The population block (§3.2); null only when never computed |
@@ -441,6 +493,13 @@ which are always present and use null.
 | `qtaim` | `bond_critical_points` (each: `atom_a`, `atom_b`, `position_bohr`, `density`, `laplacian`, `ellipticity`, `eigenvalues` ascending, `bond_path` — the two gradient rays BCP -> nucleus), `other_critical_points` (`position_bohr`, `rank`, `signature_sum`), `unconverged_seeds` (3 each) | electrons/bohr³; electrons/bohr⁵ |
 | `molden` | `file` — the path of the written Molden-format F-file | path |
 | `xc_gradient` | `gradient` — dE_xc/dR at the converged density, 3 per atom in the molecule's canonical atom order; `energy_hartree` — the exchange-correlation energy the walk integrated. **Fixed density**: this is the exchange-correlation contribution to the nuclear gradient and never a total gradient | hartree/bohr; hartree |
+| `dispersion` | `form` (`"d3"` \| `"d4"`), `parameter_source` (`"method"` \| `"preset"` \| `"explicit"`), `parameter_set` (the preset name for `"preset"`, the method family for `"method"`; **absent** for `"explicit"`), `parameters` (the form's own key names: `s6, s8, rs6, alpha6, rs8, alpha8` for d3; `s6, s8, a1, a2` for d4), `energy_hartree` (the correction's own contribution to `total_energy_hartree`) | hartree; parameters are the form's published values |
+
+`dispersion` is present exactly when the input wrote a `[dispersion]` block,
+and absent otherwise — never a zero-filled block standing in for a correction
+that was never evaluated. It carries the **resolved** values rather than the
+input's words, so the number is reproducible from the document alone even when
+the source was a preset lookup or the method family (§2.4).
 
 ### 3.5 Null vs absent — stated precisely
 
@@ -454,6 +513,7 @@ A JSON consumer must distinguish three cases:
 3. **Key absent** — applies to the opt-in analysis blocks (`charges`, `esp`,
    `eddb`, `fukui`, `nalewajski`, `nocv`, `density_at_nuclei`, `qtaim`,
    `molden`, `xc_gradient`) when the run did not request the analysis, to
+   `dispersion` when the input wrote no `[dispersion]` block, to
    `certified_bound` (§3.9) when no Fock build reported the quantity, and to
    `qfmm_model` (§3.10) when the run wired no composed-QFMM builder.
    The key does not exist at all.
@@ -933,6 +993,24 @@ The errors below are what a user actually sees when a limit is tripped.
   shell-degeneracy table:
   `the Nalewajski-Mrozek Aufbau table covers Z = 1..19` /
   `the Aufbau table covers Z = 1..19`
+- **Dispersion, both forms: Z <= 86.** The D3 reference-data table ends at
+  radon and excgrid refuses above it (translated to `kUnimplemented` with the
+  dispersion context); D4 refuses by name:
+  `dispersion: form "d4" does not cover element Z = <N> (the published
+  parameterization ends at radon, Z = 86)`. The limit is a table's end, not a
+  design boundary — a higher element is refused rather than answered from a
+  partial table.
+
+**Dispersion limits:**
+
+- **D4 on a charged molecule is refused.** The shipped two-body energy
+  evaluates its electronegativity-equilibration charges at total charge 0, so
+  a charged run's number would be computed at the wrong charge; the input is
+  refused at validation by name, and the module refuses again defensively:
+  `dispersion: form "d4" evaluates its electronegativity-equilibration charges
+  at total charge 0, so a charged molecule cannot use it ...`. `form = "d3"`
+  is charge-independent and remains available. A charge-aware D4 energy is
+  recorded debt, not a boundary.
 
 **Method limits (v1, rejected before any computation):**
 
@@ -1170,7 +1248,7 @@ What to notice in this output:
 - No opt-in analysis key (`charges`, `esp`, `eddb`, `fukui`, `nalewajski`,
   `nocv`, `density_at_nuclei`, `qtaim`) appears anywhere — none was
   requested (§3.4).
-- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 40.
+- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 41.
 
 ### Other pin fixtures
 
@@ -1780,6 +1858,20 @@ an alias by construction cannot.
   gradient. Absent unless the run asked (the `xc_grid` presence rule beside
   it), and present on the Kohn-Sham lanes only: a request on `rhf`/`uhf` is
   refused by name before serialization rather than recorded as absent.
+- 40 → 41 (the dispersion correction's first input key): the `[dispersion]`
+  input block (§2.4) and the `dispersion` output block (§3.4) added. The
+  record carries the **resolved** parameter set the run consumed — form,
+  parameter source, the source's name, the form's own parameters and the
+  correction's own energy — and `total_energy_hartree` now includes that
+  energy when a block was written. The electronic energy and the convergence
+  residuals do not move: the SCF loop stays dispersion-free, so a document
+  with a `dispersion` block and one without remain comparable at the
+  electronic level. A key added, so the number moves with it. Two properties
+  a consumer must not assume away: the block is **method-independent** (an
+  `rhf`/`uhf` run may carry it, because both forms ship an `hf` set), and it
+  is **absent**, never zero-filled, when the input wrote no block — absence
+  means no correction was evaluated, not that one evaluated to zero. Energy
+  only at this schema: no dispersion gradient is emitted.
 
 ## 8. The builder-selection axes (schema 35)
 

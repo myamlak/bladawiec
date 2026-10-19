@@ -148,6 +148,27 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                              {"block_target", grid.blockTarget}};
     }
 
+    // The dispersion correction (schema 41): the resolved form, the source of
+    // its parameters, the values the kernel consumed and the energy it
+    // contributed to `total_energy_hartree`. Written exactly when the run
+    // applied one - a run that wrote no [dispersion] block has no correction
+    // to record, and an absent key is that statement (the null-honesty rule).
+    if (result.dispersion.has_value())
+    {
+        const auto& dispersion = *result.dispersion;
+        nlohmann::json block{{"form", dispersion.form},
+                             {"parameter_source", dispersion.parameterSource},
+                             {"parameters", dispersion.parameters},
+                             {"energy_hartree", dispersion.energyHartree}};
+
+        if (dispersion.parameterSet.has_value())
+        {
+            block["parameter_set"] = *dispersion.parameterSet;
+        }
+
+        document["dispersion"] = block;
+    }
+
     document["converged"] = result.converged;
     document["iterations"] = result.iterations;
     // The achieved residuals that qualify `converged` (schema 17): always
