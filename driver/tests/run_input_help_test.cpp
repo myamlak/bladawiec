@@ -970,6 +970,16 @@ TEST(RunInputHelpTest, TheHelpTextFollowsItsOwnFormat) {
         const std::string key = BlockKey(row);
         EXPECT_FALSE(row.shown.empty()) << key << " shows no value";
         EXPECT_FALSE(row.description.empty()) << key << " has no description";
+
+        // A key the parser reads only to refuse it is marked "(refused)" and
+        // must say so in its description; the accepted-value gate skips it
+        // because no value is accepted.
+        if (row.shown == "(refused)")
+        {
+            EXPECT_EQ(row.description.rfind("refused:", 0), 0u)
+                << key << " is marked refused but its description does not say so";
+        }
+
         EXPECT_TRUE(seen.insert(key).second) << key << " is documented twice";
     }
 }
@@ -1034,6 +1044,11 @@ TEST(RunInputHelpTest, ShowsAValueTheParserAcceptsForEveryKey) {
 
     for (const HelpRow& row : help.rows)
     {
+        if (row.shown == "(refused)")
+        {
+            continue; // a key the parser reads only to refuse it accepts no value
+        }
+
         Values values = base;
         values[BlockKey(row)] = row.shown;
 

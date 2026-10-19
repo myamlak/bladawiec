@@ -242,6 +242,29 @@ input file keys (a key marked required must be written):
                                     and is rhf only
     restart_path = ""               a path; the checkpoint to seed from;
                                     required when type = "restart"
+[dispersion]
+    form = "d3"                     d3 | d4; the London dispersion correction
+                                    added to the total energy after the SCF.
+                                    Absent = no correction
+    preset = "b3lyp"                a parameter-set name from the selected
+                                    form's table; one source only, so it is
+                                    refused beside a complete numeric set
+    s6 = 1.0                        optional; finite; the global C6 scale
+    s8 = 1.0                        optional; finite; the C8 scale
+    rs6 = 1.0                       optional; finite; the R^6 damping scale
+    alpha6 = 14.0                   optional; finite; the R^6 damping exponent
+    rs8 = 1.0                       optional; finite; the R^8 damping scale
+    alpha8 = 16.0                   optional; finite; the R^8 damping exponent
+    a1 = 0.0                        optional; finite; the D4 Becke-Johnson
+                                    damping scale
+    a2 = 0.0                        optional; finite; the D4 Becke-Johnson
+                                    damping offset, in Bohr
+    s9 = (refused)                  refused: the shipped D4 energy is the
+                                    Becke-Johnson two-body term (s6, s8, a1,
+                                    a2); a three-body term is not implemented
+    alp = (refused)                 refused: the shipped D4 energy is the
+                                    Becke-Johnson two-body term, which has no
+                                    element-dependent exponent
 [properties]
     hirshfeld = false               bool; Hirshfeld stockholder charges (the
                                     analysis needs Z <= 10)
