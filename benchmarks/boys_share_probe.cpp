@@ -22,6 +22,7 @@
 //                             [--chunks <n>] [--no-build]
 #include "alkane_sto3g.hpp"
 #include "internal/fock_screen.hpp"
+#include "internal/md_boys.hpp"
 #include "qcx/backend/cpu_backend.hpp"
 #include "qcx/integrals/accuracy.hpp"
 #include "qcx/integrals/boys.hpp"
@@ -467,6 +468,12 @@ int main(int argc, char** argv) {
     std::size_t carbons = 24;
     std::size_t chunks = 1;
     bool runBuild = true;
+    // The direct arm's sequence of builds, 'N' for a normal one and 'S' for one
+    // with the library call elided. The first entry is the build the report
+    // above is about, so the default runs it, then an elided one, then a second
+    // normal one whose distance from the first is the drift the elided arm is
+    // read against.
+    std::string arms = "NSN";
 
     for (int i = 1; i < argc; ++i)
     {
@@ -481,6 +488,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--chunks" && i + 1 < argc)
         {
             chunks = static_cast<std::size_t>(std::atoi(argv[++i]));
+        } else if (arg == "--arms" && i + 1 < argc)
+        {
+            arms = argv[++i];
         } else if (arg == "--no-build")
         {
             runBuild = false;
@@ -637,6 +647,9 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+#if defined(QCX_BOYS_SHARE_INSTRUMENT)
+        const auto fockStart = std::chrono::steady_clock::now();
+#endif
         auto fock = builder->BuildFock(*density, &stats);
 
         if (!fock.has_value())
@@ -645,6 +658,16 @@ int main(int argc, char** argv) {
 
             return 1;
         }
+
+#if defined(QCX_BOYS_SHARE_INSTRUMENT)
+        // Read the instrument the moment the build returns, before anything
+        // else touches it. This first arm is the build every span above is
+        // about, so it is the first entry of the arm sequence as well.
+        const double directSeconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - fockStart).count();
+        const std::uint64_t directCycles = qcx::integrals::internal::gBoysShareCycles;
+        const std::uint64_t directCalls = qcx::integrals::internal::gBoysShareCalls;
+#endif
 
         const auto millis = [](std::chrono::nanoseconds span) {
             return std::chrono::duration<double, std::milli>(span).count();
@@ -663,6 +686,203 @@ int main(int argc, char** argv) {
                     millis(stats.kernelKetWallTime),
                     millis(stats.kernelBraWallTime),
                     millis(stats.contractWallTime));
+
+#if defined(QCX_BOYS_SHARE_INSTRUMENT)
+        // The direct arm: the instrument in integrals/src/internal/md_boys.hpp
+        // reads the stamp counter at both ends of every Boys call the VRR
+        // makes, and the elided arm below runs the same build again with the
+        // library call taken out. The first is the calls' own measured cost;
+        // the second differences the engine's own spans, with no per-call
+        // model and no instrument at all. The instrument's own cost is
+        // subtracted from the first, so the two are independent.
+        using qcx::integrals::internal::BoysShareStamp;
+        using qcx::integrals::internal::gBoysShareCalls;
+        using qcx::integrals::internal::gBoysShareCycles;
+        using qcx::integrals::internal::gBoysShareSkip;
+
+        // The counter's rate: a stamp-counter delta over a known wall span, so
+        // the accumulated cycles can be quoted in the same units as the spans.
+        const auto rateStart = std::chrono::steady_clock::now();
+        const std::uint64_t rateCycles0 = BoysShareStamp();
+        std::int64_t spin = 0;
+
+        while (std::chrono::duration<double>(std::chrono::steady_clock::now() - rateStart).count() <
+               0.2)
+        {
+            spin += 1;
+        }
+
+        const std::uint64_t rateCycles1 = BoysShareStamp();
+        const double rateSeconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - rateStart).count();
+        const double cyclesPerSecond = static_cast<double>(rateCycles1 - rateCycles0) / rateSeconds;
+        const auto cyclesToMs = [cyclesPerSecond](std::uint64_t cycles) {
+            return 1000.0 * static_cast<double>(cycles) / cyclesPerSecond;
+        };
+        gSink += static_cast<double>(spin);
+
+        // The instrument's own cost per call: the same entry, the same two
+        // counter reads, with the library call elided. The stamped total is
+        // corrected by it, so the two arms of this section do not share an
+        // assumption.
+        constexpr int kCalibrationCalls = 2'000'000;
+        double calibrationOut[1 + 16];
+        gBoysShareCycles = 0;
+        gBoysShareCalls = 0;
+        gBoysShareSkip = true;
+
+        for (int i = 0; i < kCalibrationCalls; ++i)
+        {
+            qcx::integrals::internal::MdBoysBatch<double>(
+                4, 1.0 + 1e-9 * static_cast<double>(i), calibrationOut);
+        }
+
+        const std::uint64_t calibrationCycles = gBoysShareCycles;
+        gBoysShareSkip = false;
+        const double instrumentMsPerCall = 1000.0 * static_cast<double>(calibrationCycles) /
+                                           static_cast<double>(kCalibrationCalls) / cyclesPerSecond;
+        const double instrumentMs = instrumentMsPerCall * static_cast<double>(directCalls);
+
+        // The arm sequence. Arm one is the build the spans above are about and
+        // it is a normal one; every later entry of `arms` runs here, in the
+        // order given, so a sequence of N, S, N yields two normal readings that
+        // bracket the elided one. That bracket is the whole reason the sequence
+        // is configurable: two builds of the SAME source are not the same
+        // duration, so a single normal arm against a single elided one compares
+        // the elision with however much the machine drifted between them.
+        struct ArmRun {
+            char kind = 'N';
+            qcx::integrals::FockBuildStats stats;
+            double seconds = 0.0;
+            std::uint64_t cycles = 0;
+            std::uint64_t calls = 0;
+            bool ok = true;
+        };
+
+        const auto spanMs = [](std::chrono::nanoseconds span) {
+            return std::chrono::duration<double, std::milli>(span).count();
+        };
+
+        std::vector<ArmRun> runs;
+        ArmRun first;
+        first.kind = 'N';
+        first.stats = stats;
+        first.seconds = directSeconds;
+        first.cycles = directCycles;
+        first.calls = directCalls;
+        runs.push_back(first);
+
+        for (std::size_t i = 1; i < arms.size(); ++i)
+        {
+            ArmRun run;
+            run.kind = arms[i];
+            gBoysShareCycles = 0;
+            gBoysShareCalls = 0;
+            gBoysShareSkip = (run.kind == 'S');
+            const auto start = std::chrono::steady_clock::now();
+            auto built = builder->BuildFock(*density, &run.stats);
+
+            run.seconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            gBoysShareSkip = false;
+            run.cycles = gBoysShareCycles;
+            run.calls = gBoysShareCalls;
+            run.ok = built.has_value();
+
+            if (!run.ok)
+            {
+                std::printf("arm %c: %s\n", run.kind, built.error().message.c_str());
+            }
+
+            runs.push_back(run);
+        }
+
+        const double rawBoysMs = cyclesToMs(directCycles);
+        const double netBoysMs = rawBoysMs - instrumentMs;
+        const double vrrMsDirect = spanMs(stats.kernelVrrWallTime);
+        const double directEriMs = spanMs(stats.eriWallTime);
+        const double directTotalMs = spanMs(stats.totalWallTime);
+
+        std::printf("\ndirect arm (route (a)): the calls stamped in place, and the same build "
+                    "with the library call elided\n");
+        std::printf("  stamp-counter rate %.3f GHz over %.3f s; instrument %.1f ns per call over "
+                    "%d calibration calls\n",
+                    cyclesPerSecond / 1e9,
+                    rateSeconds,
+                    instrumentMsPerCall * 1e6,
+                    kCalibrationCalls);
+        std::printf("  calls stamped %llu; the engine's own VRR quadruple count %zu%s\n",
+                    static_cast<unsigned long long>(directCalls),
+                    stats.kernelVrrQuadruples,
+                    directCalls == static_cast<std::uint64_t>(stats.kernelVrrQuadruples)
+                        ? ""
+                        : "   <-- THE INSTRUMENT DID NOT REACH THE KERNEL");
+        std::printf("  stamped %.1f ms over %llu calls = %.1f ns per call, less the "
+                    "instrument's %.1f ms = %.1f ms\n",
+                    rawBoysMs,
+                    static_cast<unsigned long long>(directCalls),
+                    directCalls != 0 ? 1e6 * rawBoysMs / static_cast<double>(directCalls) : 0.0,
+                    instrumentMs,
+                    netBoysMs);
+        std::printf("  share (stamped): VRR %.2f%%  ERI %.2f%%  whole call %.2f%%\n",
+                    vrrMsDirect > 0.0 ? 100.0 * netBoysMs / vrrMsDirect : 0.0,
+                    directEriMs > 0.0 ? 100.0 * netBoysMs / directEriMs : 0.0,
+                    directTotalMs > 0.0 ? 100.0 * netBoysMs / directTotalMs : 0.0);
+
+        std::printf(
+            "  arm  wall s     VRR ms     ERI ms   total ms   stamped calls   stamped ms\n");
+
+        for (const ArmRun& run : runs)
+        {
+            std::printf("   %c  %8.2f  %9.1f  %9.1f  %9.1f  %14llu  %10.1f%s\n",
+                        run.kind,
+                        run.seconds,
+                        spanMs(run.stats.kernelVrrWallTime),
+                        spanMs(run.stats.eriWallTime),
+                        spanMs(run.stats.totalWallTime),
+                        static_cast<unsigned long long>(run.calls),
+                        cyclesToMs(run.cycles),
+                        run.ok ? "" : "  [failed]");
+        }
+
+        // The differential, against each normal arm in turn. An elided arm
+        // against the normal arm that follows it is the pair the machine's own
+        // drift does not reach; the one before it is printed beside, so how much
+        // of the difference is the elision and how much is the order is read
+        // rather than assumed.
+        for (std::size_t i = 0; i < runs.size(); ++i)
+        {
+            if (runs[i].kind != 'S' || !runs[i].ok)
+            {
+                continue;
+            }
+
+            for (std::size_t j = 0; j < runs.size(); ++j)
+            {
+                if (runs[j].kind != 'N' || !runs[j].ok || j == i)
+                {
+                    continue;
+                }
+
+                const double vrr = spanMs(runs[j].stats.kernelVrrWallTime);
+                const double eri = spanMs(runs[j].stats.eriWallTime);
+                const double total = spanMs(runs[j].stats.totalWallTime);
+                std::printf("  differential: elided arm %zu against normal arm %zu (%s%s)\n",
+                            i,
+                            j,
+                            j < i ? "the elided arm ran later" : "the elided arm ran earlier",
+                            j + 1 < i || i + 1 < j ? "" : " and adjacent");
+                std::printf(
+                    "    Boys %.1f ms of the VRR span   share: VRR %.2f%%  ERI %.2f%%  "
+                    "whole call %.2f%%\n",
+                    vrr - spanMs(runs[i].stats.kernelVrrWallTime),
+                    vrr > 0.0 ? 100.0 * (vrr - spanMs(runs[i].stats.kernelVrrWallTime)) / vrr : 0.0,
+                    eri > 0.0 ? 100.0 * (eri - spanMs(runs[i].stats.eriWallTime)) / eri : 0.0,
+                    total > 0.0 ? 100.0 * (total - spanMs(runs[i].stats.totalWallTime)) / total
+                                : 0.0);
+            }
+        }
+#endif
     }
 
     double boysNanos = 0.0;

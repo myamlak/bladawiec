@@ -19,8 +19,12 @@ qcx_apply_blas_runtime(qcx-bench-molecule)
 # The benchmark partitions inputs with the
 # exact region boundaries, so it includes the generated detail header.
 add_executable(qcx-bench-boys boys_benchmark.cpp)
-# The Boys kernel lives in the boys submodule; the table constants the driver
-# reads are part of its published surface (external/boys/include/boys/).
+# The Boys kernel lives in the boys submodule. The region boundaries this
+# driver partitions by are that library's generated coefficients header - the
+# one it marks Not API, and the same read the CUDA engine's own table builder
+# makes. This target reaches past the published surface knowingly, which is
+# why the include path is stated here rather than implied: a revision that
+# moves those names breaks this target instead of being absorbed silently.
 target_include_directories(qcx-bench-boys PRIVATE ${CMAKE_SOURCE_DIR}/external/boys/include)
 target_compile_features(qcx-bench-boys PRIVATE cxx_std_23)
 target_link_libraries(qcx-bench-boys PRIVATE qcx-integrals benchmark::benchmark)
@@ -57,6 +61,37 @@ else()
     # version of it to build: the target is reported and skipped rather than
     # compiled into something that would time a different kernel.
     message(STATUS "qcx-bench-boys-unsorted-simd: non-x86-64 target - its AVX2 lane is not built")
+endif()
+
+# The option-count probe: the fp64 evaluation options' work, counted from the
+# platform's instruction and retirement counters rather than from a clock, on
+# the option probe's own workload. Plain main(), one option per run, no Google
+# Benchmark: a count is read from outside the process and a per-pass figure is
+# the difference of two runs at two repetition counts.
+add_executable(qcx-bench-boys-option-count boys_option_count.cpp)
+target_compile_features(qcx-bench-boys-option-count PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-boys-option-count PRIVATE NOMINMAX)
+target_link_libraries(qcx-bench-boys-option-count PRIVATE qcx-integrals)
+target_precompile_headers(qcx-bench-boys-option-count PRIVATE
+    <qcx/integrals/boys.hpp>)
+qcx_apply_blas_runtime(qcx-bench-boys-option-count)
+
+# The option-cost probe: what the same options cost on the platform that
+# ships, measured from outside the process that runs them. The instrument is
+# QueryProcessCycleTime - a process's cycle count accrues only while one of its
+# threads runs, so a pass that is descheduled contributes nothing to it, which
+# is the term a wall clock cannot remove. It launches the option-count driver
+# as a child, one option per process, and takes the per-pass figure from two
+# child runs at two repetition counts. Windows-only: the instrument is a Win32
+# call and has no counterpart the other leg could be given.
+if (WIN32)
+    add_executable(qcx-bench-boys-option-cost boys_option_cost_windows.cpp)
+    target_compile_features(qcx-bench-boys-option-cost PRIVATE cxx_std_23)
+    target_compile_definitions(qcx-bench-boys-option-cost PRIVATE NOMINMAX)
+else()
+    message(STATUS "qcx-bench-boys-option-cost: non-Windows target - QueryProcessCycleTime "
+        "is the instrument and it has no counterpart here; the option-count driver still "
+        "builds and is counted from outside with the platform's own counters")
 endif()
 
 # The matched-accuracy throughput comparator: the qcx BoysAllOrders ladder vs
@@ -423,6 +458,28 @@ if (QCX_ENABLE_CUDA AND TARGET qcx-integrals-cuda-md)
         <benchmark/benchmark.h>
         <qcx/integrals/eri_cuda.hpp>)
     qcx_apply_blas_runtime(qcx-bench-gpu-eri)
+
+    # The Boys-swap A/B probe: one process, one fixture, both Boys ladders
+    # through the real Fock build (plain main(), no Google Benchmark). The
+    # frame is the alkane fixture the CPU share probe uses, so the two
+    # measurements describe the same molecule and the same basis. It needs the
+    # instrument compiled into the lane: without
+    # -DQCX_BOYS_SWAP_INSTRUMENT=ON it builds and reports that it has nothing
+    # to measure (exit 77).
+    add_executable(qcx-bench-boys-swap boys_cuda_swap_probe.cpp)
+    target_include_directories(qcx-bench-boys-swap PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/fixtures)
+    target_compile_features(qcx-bench-boys-swap PRIVATE cxx_std_23)
+    target_compile_definitions(qcx-bench-boys-swap PRIVATE
+        NOMINMAX
+        QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+    target_link_libraries(qcx-bench-boys-swap PRIVATE
+        qcx-integrals-cuda-md qcx-integrals qcx-test-fixtures)
+    # The /FORCE:MULTIPLE workaround for the Boys pin (7e005f0) is gone: the 5.0.0 entries are
+    # templates and carry weak linkage, so this target links without it.
+    target_precompile_headers(qcx-bench-boys-swap PRIVATE
+        <qcx/integrals/eri_cuda.hpp>)
+    qcx_apply_blas_runtime(qcx-bench-boys-swap)
 endif()
 
 # The Boys GPU throughput

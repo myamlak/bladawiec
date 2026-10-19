@@ -218,12 +218,16 @@ void BenchFoldPairETable(benchmark::State& state) {
     {
         for (const qcx::integrals::internal::MdPrimPair& prim : pair->primPairs)
         {
+            // A plain pair, so no derivative tier: the third argument is the
+            // raise count, and the Hermite row count the function needs is
+            // derived from la + lb + raises rather than passed in. nHerm below
+            // is this benchmark's own report line.
             qcx::integrals::internal::FoldPairETable(pair->la,
                                                      pair->lb,
+                                                     0,
                                                      prim.perAxisTables,
                                                      pair->isSphericalA,
                                                      pair->isSphericalB,
-                                                     nHerm,
                                                      folded);
             sink += folded.front();
         }

@@ -46,6 +46,12 @@ git clone --recurse-submodules git@github.com:myamlak/bladawiec.git
 git submodule update --init
 ```
 
+The program is built at the AVX2 + FMA instruction-set tier on x86-64: every first-party
+translation unit carries `/arch:AVX2` (GCC and Clang: `-mavx2 -mfma -mf16c`, with
+`-ffp-contract=off`). The tier is program-wide because the Boys kernel is header-defined and
+the library refuses a program whose translation units disagree about it, so the `qcx` binary
+an x86-64 build produces requires an AVX2-capable processor.
+
 Configure and build (native Windows):
 
 ```powershell

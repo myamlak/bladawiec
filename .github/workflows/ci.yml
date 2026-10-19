@@ -411,6 +411,24 @@ jobs:
         with:
           submodules: true
 
+      # The class-matrix build writes one precompiled header per instantiation class (154 at
+      # Lmax 6), and two runs died writing them with C1085/C1088. This removes the image's
+      # unused toolchains and prints the space it returned, so the run states its own headroom.
+      - name: Free runner disk space
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive $env:SystemDrive.TrimEnd(':')).Free
+          @('C:\Program Files\Android', 'C:\Program Files\dotnet',
+            'C:\Program Files\Microsoft SDKs\Azure',
+            'C:\hostedtoolcache\windows\CodeQL', 'C:\hostedtoolcache\windows\Java_*',
+            'C:\hostedtoolcache\windows\Ruby', 'C:\hostedtoolcache\windows\go',
+            'C:\hostedtoolcache\windows\node', 'C:\ProgramData\Package Cache') |
+            ForEach-Object { Get-Item $_ -ErrorAction SilentlyContinue } |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+          $after = (Get-PSDrive $env:SystemDrive.TrimEnd(':')).Free
+          'Freed {0:N1} GB; {1:N1} GB free on {2}' -f (($after - $before) / 1GB), ($after / 1GB), $env:SystemDrive
+
       - uses: ilammy/msvc-dev-cmd@v1.13.0
       # Path-based caching of the vcpkg classic tree (the runner's vcpkg has no
       # x-gha cache backend, so the tree is cached as files). Both build-type
@@ -473,9 +491,9 @@ jobs:
       # lmax_arg and follows the Release one; until then the pin is the
       # deliberate exception, not a leftover.
       - name: Configure
-        run: cmake -S . -B build/windows-msvc-ci-${{ matrix.build_type }} -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DQCX_ENABLE_IO=OFF ${{ matrix.lmax_arg }} -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: cmake -S . -B C:/bld/windows-msvc-ci-${{ matrix.build_type }} -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DQCX_ENABLE_IO=OFF ${{ matrix.lmax_arg }} -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
       - name: Build
-        run: cmake --build build/windows-msvc-ci-${{ matrix.build_type }} -j $env:NUMBER_OF_PROCESSORS
+        run: cmake --build C:/bld/windows-msvc-ci-${{ matrix.build_type }} -j $env:NUMBER_OF_PROCESSORS
       - name: Check module DAG
         run: python tools/check_dag.py
       - name: Check docs-gate coverage
@@ -491,7 +509,7 @@ jobs:
       # $env:NUMBER_OF_PROCESSORS is Windows' own count, read by this step's
       # shell, so the step scales with whichever runner it lands on.
       - name: Test (routine selection, large excluded; Debug runs the fast subset)
-        run: ctest --test-dir build/windows-msvc-ci-${{ matrix.build_type }} -LE large -j $env:NUMBER_OF_PROCESSORS --output-on-failure
+        run: ctest --test-dir C:/bld/windows-msvc-ci-${{ matrix.build_type }} -LE large -j $env:NUMBER_OF_PROCESSORS --output-on-failure
 
   # -------------------------------------------------------------------------
   # THE FIVE LEGS THIS FILE GAINED (2026-09-19): the sanitizer lane, the two
@@ -650,6 +668,24 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           submodules: true
+
+      # The class-matrix build writes one precompiled header per instantiation class (154 at
+      # Lmax 6), and two runs died writing them with C1085/C1088. This removes the image's
+      # unused toolchains and prints the space it returned, so the run states its own headroom.
+      - name: Free runner disk space
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive $env:SystemDrive.TrimEnd(':')).Free
+          @('C:\Program Files\Android', 'C:\Program Files\dotnet',
+            'C:\Program Files\Microsoft SDKs\Azure',
+            'C:\hostedtoolcache\windows\CodeQL', 'C:\hostedtoolcache\windows\Java_*',
+            'C:\hostedtoolcache\windows\Ruby', 'C:\hostedtoolcache\windows\go',
+            'C:\hostedtoolcache\windows\node', 'C:\ProgramData\Package Cache') |
+            ForEach-Object { Get-Item $_ -ErrorAction SilentlyContinue } |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+          $after = (Get-PSDrive $env:SystemDrive.TrimEnd(':')).Free
+          'Freed {0:N1} GB; {1:N1} GB free on {2}' -f (($after - $before) / 1GB), ($after / 1GB), $env:SystemDrive
 
       # arch is stated rather than inherited: msvc-dev-cmd defaults to host
       # x64, and on an arm64 runner that builds an x64 binary which then runs
@@ -972,6 +1008,24 @@ jobs:
         with:
           submodules: true
 
+      # The class-matrix build writes one precompiled header per instantiation class (154 at
+      # Lmax 6), and two runs died writing them with C1085/C1088. This removes the image's
+      # unused toolchains and prints the space it returned, so the run states its own headroom.
+      - name: Free runner disk space
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive $env:SystemDrive.TrimEnd(':')).Free
+          @('C:\Program Files\Android', 'C:\Program Files\dotnet',
+            'C:\Program Files\Microsoft SDKs\Azure',
+            'C:\hostedtoolcache\windows\CodeQL', 'C:\hostedtoolcache\windows\Java_*',
+            'C:\hostedtoolcache\windows\Ruby', 'C:\hostedtoolcache\windows\go',
+            'C:\hostedtoolcache\windows\node', 'C:\ProgramData\Package Cache') |
+            ForEach-Object { Get-Item $_ -ErrorAction SilentlyContinue } |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+          $after = (Get-PSDrive $env:SystemDrive.TrimEnd(':')).Free
+          'Freed {0:N1} GB; {1:N1} GB free on {2}' -f (($after - $before) / 1GB), ($after / 1GB), $env:SystemDrive
+
       - uses: ilammy/msvc-dev-cmd@v1.13.0
       # Path-based caching of the vcpkg classic tree (the runner's vcpkg has no
       # x-gha cache backend, so the tree is cached as files).
@@ -992,9 +1046,9 @@ jobs:
       # Windows leg that had ever reported green the one leg compiling a
       # different class matrix than the release does.
       - name: Configure
-        run: cmake -S . -B build/windows-msvc-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_ENABLE_IO=OFF -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: cmake -S . -B C:/bld/windows-msvc-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_ENABLE_IO=OFF -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
       - name: Build
-        run: cmake --build build/windows-msvc-release -j $env:NUMBER_OF_PROCESSORS
+        run: cmake --build C:/bld/windows-msvc-release -j $env:NUMBER_OF_PROCESSORS
       # The static gates are NOT tests and are kept: they cost seconds and they
       # are gates.
       - name: Check module DAG

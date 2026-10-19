@@ -612,6 +612,10 @@ inline void BuildCenterTable(const MdPrimPair& prim,
     const double dcz = prim.pz - center.z();
     const double x = prim.p * (dcx * dcx + dcy * dcy + dcz * dcz);
     double tmp[1 + kMaxBoysOrder];
+    // Seeds the one-center VRR table of this primitive pair at this nucleus.
+    // The library's published bound for the double batch ladder is the larger
+    // of 1e-13 * F_n(x) and 1e-13 * F_0(x) per value - an absolute bound
+    // scaled by F_0(x), since F_n <= F_0.
     BoysAllOrders(order, x, tmp);
 
     for (int m = 0; m <= order; ++m)

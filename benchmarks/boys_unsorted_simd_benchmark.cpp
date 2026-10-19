@@ -20,6 +20,10 @@
 // 5.5e-14) and exits; the default mode runs the runs-log protocol
 // (warmup + 3 passes, min/median/max, median = paper cell).
 #include "boys/boys_coefficients.hpp"
+// The split's group header: kCoeffs is defined there, and a group header precedes the front
+// door below.
+#include "boys/boys_coefficients_d_coarse_cheb.hpp"
+
 #include "qcx/integrals/boys.hpp"
 
 #include <algorithm>

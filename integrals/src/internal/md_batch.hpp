@@ -10,6 +10,7 @@
 #include "md_hermite.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/error.hpp"
+#include "qcx/integrals/boys.hpp"
 #include "qcx/integrals/shell_pairs.hpp"
 #include "qcx/molecule/molecule.hpp"
 

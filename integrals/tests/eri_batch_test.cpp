@@ -22,6 +22,7 @@
 #include "shellset_fixture.hpp"
 #include "unfolded_reference.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>

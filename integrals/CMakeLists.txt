@@ -25,8 +25,25 @@ set(QCX_REFERENCE_REGENERATION_CHECK OFF CACHE BOOL
 set(QCX_INTEGRALS_FP16 ON CACHE BOOL
     "Build the certified fp16/bf16 Boys lane (F16/Bf16 I/O over the fp32 engine)")
 
+# The multiply-add route the Boys kernel is compiled at: the one axis of the
+# submodule's option space this tree pins rather than inherits, and the only one
+# it can pin, because no call site can name it. The selection travels as a
+# public compile definition and the kernels are header-defined, so an inherited
+# change reaches every translation unit that instantiates one; the other axes
+# are read at a call and are left to the library's own defaults (see the
+# wrapper's header for that division and why it is drawn there).
+#
+# OFF is the fused route, one rounding, which is the route the bounds this
+# surface publishes are certified for. The wrapper (include/qcx/integrals/
+# boys.hpp) states this request again as QcxBoysMulAddSeparate and refuses to
+# compile a translation unit whose definitions do not agree with it; the record
+# (BoysBuildRecord) reads back the route the library reports the values were
+# computed at, which is a different question from the one a flag answers.
+set(QCX_INTEGRALS_BOYS_MULADD_SEPARATE OFF CACHE BOOL
+    "Compile the Boys kernel at the separate multiply-add route (two roundings) instead of the fused one (one rounding)")
+
 # The Boys-function kernel is consumed from the boys submodule
-# (external/boys, gitlink pinned at the Boys 2.0 release; upstream-first -
+# (external/boys; upstream-first -
 # the public repo is the slice's source of truth, the monorepo bumps the
 # gitlink per release, never edits the submodule). The kernel compiles from
 # the submodule's sources into qcx-integrals; the qcx/integrals/boys.hpp and
@@ -36,9 +53,68 @@ set(QCX_INTEGRALS_FP16 ON CACHE BOOL
 # monorepo never regenerates or edits them.
 set(_qcxBoysExt "${CMAKE_SOURCE_DIR}/external/boys")
 
+# The route's definitions, on an interface target rather than on qcx-integrals,
+# because qcx-integrals is not the only target whose translation units include
+# <qcx/integrals/boys.hpp>: the per-class MD object libraries do too, through
+# their PCH, and link no further than qcx-core. An interface target gives the
+# pin one home, and the guard in the header turns a target that includes the
+# header without linking this into a build failure rather than a translation
+# unit compiled at another route.
+#
+# BoysFp16 rides here for the same reason, and it is the library's own seam
+# rather than this tree's: the library refuses at start-up a program whose
+# translation units disagree about it (boys/isa_tiers.hpp). Defined on
+# qcx-integrals alone, every class TU reached the headers through its PCH with
+# the seam closed while the module announced it open - a refusal in the default
+# configuration. On this target, every TU that includes the library's headers
+# announces the same value.
+#
+# The submodule revision this build was configured against rides along, so the
+# record a maintainer reads names the revision its numbers came from. It is
+# captured here, at configure time: a gitlink move that nothing reconfigures is
+# not seen by this, which is why the record prints the library's own
+# compiled-in version beside it - that one moves with the source.
+set(_qcxBoysPin "unknown")
+if (EXISTS "${_qcxBoysExt}/.git")
+    execute_process(
+        COMMAND git -C "${_qcxBoysExt}" rev-parse "HEAD^{commit}"
+        OUTPUT_VARIABLE _qcxBoysPin
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _qcxBoysPinResult)
+    if (NOT _qcxBoysPinResult EQUAL 0)
+        set(_qcxBoysPin "unknown")
+    endif()
+endif()
+
+add_library(qcx-boys-route INTERFACE)
+target_compile_definitions(qcx-boys-route INTERFACE
+    QcxBoysMulAddSeparate=$<BOOL:${QCX_INTEGRALS_BOYS_MULADD_SEPARATE}>
+    QcxBoysPin="${_qcxBoysPin}"
+    BoysFp16=$<BOOL:${QCX_INTEGRALS_FP16}>)
+# The submodule's own route name, spelled the way the submodule's CMake option
+# spells it. It is set only when the route is separate, because the library
+# reads it with #if defined().
+if (QCX_INTEGRALS_BOYS_MULADD_SEPARATE)
+    target_compile_definitions(qcx-boys-route INTERFACE BOYS_MULADD_SEPARATE=1)
+    message(STATUS "qcx-integrals: Boys multiply-add route = separate (two roundings, asked for by QCX_INTEGRALS_BOYS_MULADD_SEPARATE); submodule ${_qcxBoysPin}")
+else()
+    message(STATUS "qcx-integrals: Boys multiply-add route = fused (one rounding); submodule ${_qcxBoysPin}")
+endif()
+
+# The kernel's five translation units, not two. The option space is spread
+# across them - the C surface, the packed axis, the vector lanes, and the
+# option probe that measures which option is fastest on the machine it is
+# called on - and a consumer can only link what this list compiles. Leaving a
+# unit out does not remove the option, it removes the ability to reach it, and
+# it arrives at the linker as an undefined symbol rather than as an error here.
 add_library(qcx-integrals
   ${_qcxBoysExt}/src/boys.cpp
+  ${_qcxBoysExt}/src/boys_c.cpp
+  ${_qcxBoysExt}/src/boys_orders_simd.cpp
+  ${_qcxBoysExt}/src/boys_probe.cpp
   ${_qcxBoysExt}/src/boys_simd.cpp
+  src/boys_build_record.cpp
   src/one_electron.cpp
   src/two_electron.cpp
   src/eri_batch.cpp
@@ -68,6 +144,13 @@ add_library(qcx-integrals
 target_include_directories(qcx-integrals PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${_qcxBoysExt}/include)
+# The option probe's one translation unit exceeds MSVC's object-file section
+# limit. The library's own CMake states /bigobj for the same source (under
+# BOYS_BUILD_PROBE); this tree compiles the source into its own target, so the
+# request has to be repeated here or the TU fails with C1128.
+if (MSVC)
+    set_source_files_properties(${_qcxBoysExt}/src/boys_probe.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 target_include_directories(qcx-integrals PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(qcx-integrals PUBLIC cxx_std_23)
@@ -78,98 +161,109 @@ target_compile_features(qcx-integrals PUBLIC cxx_std_23)
 # integrals). ${_qcxBoysExt}/include (PUBLIC) lets the forwarding shims'
 # <boys/...> includes resolve in every consumer TU.
 target_link_libraries(qcx-integrals
-  PUBLIC qcx-core qcx-molecule qcx-basisset qcx-memory
+  PUBLIC qcx-core qcx-molecule qcx-basisset qcx-memory qcx-boys-route
   PRIVATE eigen qcx-linalg qcx-backend)
 # The engine caps consumed by the public limits.hpp and the internal
 # dispatch table (QcxIntegralsF32=0 is defined too so #if guards are
-# uniform). BoysFp16 mirrors QCX_INTEGRALS_FP16 onto the submodule's seam
-# (its headers gate the fp16/bf16 entries on BoysFp16); QcxIntegralsFp16
-# stays defined for the retained monorepo files gated on the old name.
+# uniform). QcxIntegralsFp16 stays defined for the retained monorepo files
+# gated on the old name; the library's own seam (BoysFp16) is stated once on
+# qcx-boys-route above, the target every translation unit that includes the
+# library's headers links, because the library refuses a program whose
+# translation units disagree about it.
 target_compile_definitions(qcx-integrals PUBLIC
     QcxIntegralsLMax=${QCX_INTEGRALS_LMAX}
     QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>
-    QcxIntegralsFp16=$<BOOL:${QCX_INTEGRALS_FP16}>
-    BoysFp16=$<BOOL:${QCX_INTEGRALS_FP16}>)
+    QcxIntegralsFp16=$<BOOL:${QCX_INTEGRALS_FP16}>)
+
+# The Boys-share probe's instrument, local-only and never in CI: it wraps the
+# engine's Boys seed call in the stamp counter and adds an elision switch, and
+# is compiled into this module and the one benchmark that reads it and nothing
+# else. QCX_BOYS_SHARE_INSTRUMENT is OFF in every configured build; a run that
+# wants the direct share sets it for one configure and rebuilds.
+set(QCX_BOYS_SHARE_INSTRUMENT OFF CACHE BOOL
+    "Compile the Boys-share probe's direct instrument into qcx-integrals (local-only)")
+if (QCX_BOYS_SHARE_INSTRUMENT)
+    # On qcx-boys-route and not on qcx-integrals, because the call being
+    # instrumented runs in the per-class MD object libraries, which link no
+    # further than qcx-core and take their definitions from qcx-boys-route
+    # alone. A define on qcx-integrals reaches the module and the benchmark and
+    # not one of the 154 class TUs the kernel is actually compiled into.
+    target_compile_definitions(qcx-boys-route INTERFACE QCX_BOYS_SHARE_INSTRUMENT=1)
+    message(STATUS "qcx-integrals: the Boys-share direct instrument is compiled in")
+endif()
+
+# The Boys-swap A/B probe's instrument, local-only and never in CI: it keeps
+# the engine's own device Boys ladder in the tree beside the library's lane,
+# adds the arm that selects between them and the cycle stamps around each, and
+# is compiled into the CUDA MD lane and the one benchmark that drives it and
+# nothing else. QCX_BOYS_SWAP_INSTRUMENT is OFF in every configured build; a
+# run that wants the two sides measured in one process sets it for one
+# configure and rebuilds. The define goes on qcx-integrals-cuda-md because
+# every per-class instantiation TU includes eri_cuda.cu and the kernels are
+# compiled there, and on the benchmark that reads the counters back.
+set(QCX_BOYS_SWAP_INSTRUMENT OFF CACHE BOOL
+    "Compile the Boys-swap A/B probe's arm switch and stamps into the CUDA MD lane (local-only)")
+if (QCX_BOYS_SWAP_INSTRUMENT)
+    message(STATUS "qcx-integrals: the Boys-swap A/B instrument is compiled in")
+endif()
+
 if (QCX_INTEGRALS_CHUNKED_VRR)
     target_compile_definitions(qcx-integrals PUBLIC QcxIntegralsChunkedVrr=1)
 endif()
 
-# AVX2 intrinsics only in the SIMD translation unit; the entry points are
-# precondition-checked at runtime via BoysAvx2Available(). The TU skips the
-# module PCH: clang rejects a PCH built without the target feature the TU
-# compiles with.
+# The SIMD translation units. The instruction-set tier they compile at is the
+# PROGRAM's, stated once in the root CMakeLists (AVX2 + FMA for every
+# first-party translation unit): the library's headers refuse at start-up a
+# program whose units disagree about the tier, and three of these units reach
+# them - the two boys SIMD sources by including the library directly, and
+# fock_contract_simd.cpp through this module's own eri_batch.hpp. The entry
+# points stay runtime-gated on BoysAvx2Available()/FockAvx2Available(); the
+# PCH skip remains because these units are compiled from the submodule's
+# sources and their own SIMD-heavy headers.
 if (QCX_ARCH_X86_64)
-    if (MSVC)
-        # /arch:AVX2 also enables the F16C intrinsics the fp16 lane uses.
-        set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-        set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-    else()
-        # -mf16c for the fp16 lane's F16C load/store (GCC does not imply it via
-        # -mavx2, unlike MSVC's /arch:AVX2).
-        set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
-        # -ffp-contract=off is LOAD-BEARING here, not hygiene (2026-09-13). The
-        # TU's own BIT-IDENTITY section contracts this tier to the SCALAR kernels
-        # the class TUs instantiate (no /arch flag), and simd_micro_gemm_test.cpp
-        # enforces it with memcmp. MulAdd keeps the hand-written vectors
-        # contraction-neutral, but that only covers what the SOURCE can control:
-        # the scalar tails (SmallnScalarTailAdd and friends, plain `a * b + c`)
-        # are fused by the COMPILER under this TU's -mfma, and gcc re-fuses the
-        # _mm256_mul_pd + _mm256_add_pd pairs inside MulAdd itself. Measured, the
-        # scalar TUs unmoved at 0 both ways: clang 21 at the CI Debug geometry 7
-        # fused -> 0, g++ 15.2 -O3 54 (32 packed) -> 0.
-        set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-ffp-contract=off")
-    endif()
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
-    # Non-x86-64: no AVX2/FMA/F16C option exists to set, and neither TU defines
-    # the tier. md_bra_simd.cpp routes its entry points to the portable kernels.
-    # boys' SIMD TU is told its answer explicitly, because its own guard is
-    # written for a consumer that compiles that source into a target of its own
-    # and refuses to guess where the compiler is not x86-64. The PCH skip goes
-    # with the flag it exists for.
+    # Non-x86-64: no AVX2/FMA/F16C tier exists, and neither TU defines it.
+    # md_bra_simd.cpp routes its entry points to the portable kernels. boys'
+    # SIMD TU is told its answer explicitly, because its own guard is written
+    # for a consumer that compiles that source into a target of its own and
+    # refuses to guess where the compiler is not x86-64.
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES COMPILE_DEFINITIONS "BOYS_SIMD_X86=0")
+    set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES COMPILE_DEFINITIONS "BOYS_SIMD_X86=0")
     message(STATUS "qcx-integrals: non-x86-64 target - the AVX2 micro-GEMM tier is excluded")
 endif()
 
-# The Fock-contraction kernel's AVX2 copy. The kernel body is
-# ONE template (internal/fock_contract_kernel.hpp); the scalar copy
-# instantiates inside fock_build.cpp (no /arch flag on that TU) and this TU
-# compiles the AVX2 copy, entered only after the runtime cpuid check
-# (FockAvx2Available - the boys_simd.cpp dispatch shape, auto-vectorization
-# only, no hand-written intrinsics here). Same PCH skip as the
-# other SIMD TUs.
+# The split (boys 5.0.0) makes a group header precede the front door in the unit that names it,
+# and this target's PCH parses the front door first: these two submodule units open a group of
+# their own and are therefore compiled without it.
+set_source_files_properties(${_qcxBoysExt}/src/boys.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(${_qcxBoysExt}/src/boys_probe.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
+# The Fock-contraction kernel's AVX2 copy. The kernel body is ONE template
+# (internal/fock_contract_kernel.hpp); the scalar copy instantiates inside
+# fock_build.cpp and this unit compiles the AVX2 copy, entered only after the
+# runtime cpuid check (FockAvx2Available - the boys_simd.cpp dispatch shape,
+# auto-vectorization only, no hand-written intrinsics here). Same PCH skip as
+# the other SIMD units.
 #
-# -ffp-contract=off is LOAD-BEARING here, not hygiene (2026-09-13). The
-# header states "both copies must deliver bit-identical output"; the scalar
-# TUs carry no target flag, so there is no FMA instruction for them to
-# contract into, while this TU's -mfma does - and clang defaults to
-# -ffp-contract=on and gcc to -ffp-contract=fast. Measured at the CI Debug
-# geometry: 10 vfmadd213sd in this TU against 0 in lean_fock_build.cpp and
-# fock_build.cpp, which broke
-# LeanDirectFockBuilderTest.SerialPathPinsItsOwnBytesAcrossCallsAndBuilders
-# on the clang leg (5 of the 49 H2O/STO-3G elements, max 4.44e-16).
+# The header states "both copies must deliver bit-identical output". The
+# program-wide contraction pin in the root CMakeLists is what holds that: on
+# GCC and Clang -mfma is a licence to fuse a bare `a * b + c`, and measured at
+# the CI Debug geometry, 10 vfmadd213sd in this unit against 0 in
+# lean_fock_build.cpp and fock_build.cpp broke
+# LeanDirectFockBuilderTest.SerialPathPinsItsOwnBytesAcrossCallsAndBuilders on
+# the clang leg (5 of the 49 H2O/STO-3G elements, max 4.44e-16) before the pin
+# was added. MSVC never contracts under its default /fp:precise - measured 0
+# fused in this tree's own Avx2 objects, Debug and Release, with /fp:fast at
+# /O2 as the 2-fused positive control.
 if (QCX_ARCH_X86_64)
-    if (MSVC)
-        # No counterpart owed: /fp:precise (the default) does not contract -
-        # measured 0 fused in this tree's own Avx2 objects, Debug and Release,
-        # with /fp:fast at /O2 as the 2-fused positive control. A future
-        # /fp:contract would have to come back here.
-        set_source_files_properties(src/fock_contract_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-    else()
-        # The flag belongs on the SIMD TUs ONLY. On a scalar TU it is inert
-        # (measured 0 fused either way, there is no FMA to fuse) and it would
-        # hide the regression it exists to catch: a scalar TU silently gaining a
-        # target feature and contracting away from the copy it must match.
-        set_source_files_properties(src/fock_contract_simd.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-ffp-contract=off")
-    endif()
     set_source_files_properties(src/fock_contract_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
-    # Same as the micro-GEMM block above: no target feature exists here to set,
-    # and this TU's copy is entered only after FockAvx2Available(), which reads
-    # the x86-64-only CPU feature probe and is false on this target. No flag
-    # means no contraction, which is exactly what the scalar copies carry, so
-    # the bit-identity the two are compared under still holds.
+    # Same as the micro-GEMM block above: no target feature exists here, and
+    # this unit's copy is entered only after FockAvx2Available(), which reads
+    # the x86-64-only CPU feature probe and is false on this target.
     message(STATUS "qcx-integrals: non-x86-64 target - the Fock contraction AVX2 copy is excluded")
 endif()
 
@@ -177,40 +271,49 @@ endif()
 target_precompile_headers(qcx-integrals PRIVATE
     <qcx/integrals/boys.hpp>)
 
-# The per-class instantiation matrix: one OBJECT library per {L_bra, L_ket}
-# class - the 2e triangle (LBra <= LKet <= 2*QCX_INTEGRALS_LMAX) UNION the
-# RI rectangle (LKet <= QCX_INTEGRALS_LMAX, LBra <= 2*QCX_INTEGRALS_LMAX);
-# 154 classes at Lmax=6, 24 at Lmax=2 (the counts match the CUDA matrix
-# below). Parallel compilation (MSBuild multi-project), incremental builds
-# recompile only touched classes, and the hot template surface stays out of
-# the public headers - dispatch runs through the generated function-pointer
-# table (md_dispatch_gen.hpp).
-function(qcx_add_md_class_object lBra lKet)
-    set(_genDir ${CMAKE_CURRENT_BINARY_DIR}/md_instantiate)
-    set(_tu ${_genDir}/md_instantiate_${lBra}_${lKet}.cpp)
-    configure_file(src/md_instantiate.cpp.in ${_tu} @ONLY)
-    add_library(qcx-md-class-${lBra}-${lKet} OBJECT ${_tu})
-    target_include_directories(qcx-md-class-${lBra}-${lKet} PRIVATE
+# The per-class instantiation matrix: the 2e triangle (LBra <= LKet <=
+# 2*QCX_INTEGRALS_LMAX) UNION the RI rectangle (LKet <= QCX_INTEGRALS_LMAX,
+# LBra <= 2*QCX_INTEGRALS_LMAX) - 154 classes at Lmax=6, 24 at Lmax=2 (the
+# counts match the CUDA matrix below). The classes are one OBJECT library, not
+# one per class: a precompiled header of <internal/md_vrr.hpp> measured about
+# 1 GiB, so one per class wrote 152 GiB and filled the Windows runners' disks
+# (C1085/C1088). One PCH for the matrix bounds the disk; parallelism is the
+# build tool's (Ninja compiles sources in parallel, and the vcpkg toolchain's
+# /MP does it inside the one MSBuild project). The split below stays a knob:
+# more shards trade disk for projects.
+set(_qcxMdShards 1)
+function(qcx_add_md_class_shard shard)
+    set(_target qcx-md-class-shard-${shard})
+    add_library(${_target} OBJECT ${ARGN})
+    target_include_directories(${_target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${_qcxBoysExt}/include)
-    target_compile_features(qcx-md-class-${lBra}-${lKet} PRIVATE cxx_std_23)
-    target_compile_definitions(qcx-md-class-${lBra}-${lKet} PRIVATE
+    target_compile_features(${_target} PRIVATE cxx_std_23)
+    target_compile_definitions(${_target} PRIVATE
         QcxIntegralsLMax=${QCX_INTEGRALS_LMAX}
         QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>)
     if (QCX_INTEGRALS_CHUNKED_VRR)
-        target_compile_definitions(qcx-md-class-${lBra}-${lKet} PRIVATE
+        target_compile_definitions(${_target} PRIVATE
             QcxIntegralsChunkedVrr=1)
     endif()
     # Usage requirements of the linked targets reach the object TU's compile
     # (include dirs, definitions); nothing links from the object lib itself.
-    target_link_libraries(qcx-md-class-${lBra}-${lKet} PRIVATE
-        qcx-core qcx-molecule qcx-basisset qcx-memory qcx-linalg eigen)
-    target_precompile_headers(qcx-md-class-${lBra}-${lKet} PRIVATE
+    # qcx-boys-route is the multiply-add pin these TUs' PCH needs: they include
+    # <qcx/integrals/boys.hpp> and would otherwise be refused by its guard.
+    target_link_libraries(${_target} PRIVATE
+        qcx-core qcx-molecule qcx-basisset qcx-memory qcx-linalg eigen qcx-boys-route)
+    target_precompile_headers(${_target} PRIVATE
         <internal/md_vrr.hpp>)
+    # The toolchain turns /MP on with no ceiling; one project now holds every class TU, so an
+    # unbounded /MP would run 154 heavy compiles at once. Four is what these TUs' memory fits.
+    if (MSVC)
+        target_compile_options(${_target} PRIVATE /MP4)
+    endif()
 endfunction()
 
 math(EXPR _qcxLmax2 "2 * ${QCX_INTEGRALS_LMAX}")
+set(_qcxMdIndex 0)
 foreach(_lket RANGE 0 ${_qcxLmax2})
     # The 2e triangle (lBra <= lKet) UNION the RI rectangle
     # (lKet <= Lmax, lBra <= 2*Lmax): the 3c kernels use the orbital pair
@@ -221,9 +324,25 @@ foreach(_lket RANGE 0 ${_qcxLmax2})
         set(_lbraMax ${_lket})
     endif()
     foreach(_lbra RANGE 0 ${_lbraMax})
-        qcx_add_md_class_object(${_lbra} ${_lket})
-        list(APPEND _qcxMdClassObjects $<TARGET_OBJECTS:qcx-md-class-${_lbra}-${_lket}>)
+        set(_genDir ${CMAKE_CURRENT_BINARY_DIR}/md_instantiate)
+        set(_tu ${_genDir}/md_instantiate_${_lbra}_${_lket}.cpp)
+        # The template's placeholders are @lBra@/@lKet@, substituted from these names.
+        set(lBra ${_lbra})
+        set(lKet ${_lket})
+        configure_file(src/md_instantiate.cpp.in ${_tu} @ONLY)
+        math(EXPR _shard "${_qcxMdIndex} % ${_qcxMdShards}")
+        set(_shardVar qcxMdShard_${_shard}_tus)
+        list(APPEND ${_shardVar} ${_tu})
+        math(EXPR _qcxMdIndex "${_qcxMdIndex} + 1")
     endforeach()
+endforeach()
+set(_qcxMdClassObjects "")
+foreach(_shard RANGE 0 7)
+    set(_shardVar qcxMdShard_${_shard}_tus)
+    if (${_shardVar})
+        qcx_add_md_class_shard(${_shard} ${${_shardVar}})
+        list(APPEND _qcxMdClassObjects $<TARGET_OBJECTS:qcx-md-class-shard-${_shard}>)
+    endif()
 endforeach()
 target_sources(qcx-integrals PRIVATE ${_qcxMdClassObjects})
 
@@ -233,6 +352,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/boys_test.cpp
         tests/boys_accuracy_test.cpp
         tests/boys_boundary_test.cpp
+        tests/boys_build_record_test.cpp
         tests/f16_test.cpp
         tests/aux_basis_test.cpp
         tests/one_electron_test.cpp
@@ -306,6 +426,10 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     target_precompile_headers(qcx-integrals-tests PRIVATE
         <gtest/gtest.h>
         <qcx/integrals/boys.hpp>)
+    # The split's rule: these two tests open a group header before the front door, and the PCH
+    # parses the front door first.
+    set_source_files_properties(tests/boys_test.cpp tests/boys_accuracy_test.cpp
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
     include(GoogleTest)
     qcx_blas_is_mkl(_qcxMkl)
@@ -434,8 +558,12 @@ if (QCX_ENABLE_CUDA)
         <cuda_runtime.h>)
 
     if (QCX_BUILD_TESTS AND TARGET gtest)
-        # tests/boys_cuda_test.cpp is the submodule's canonical test verbatim
-        # (boys namespace, BoysStatus) - single source of truth.
+        # tests/boys_cuda_test.cpp is the submodule's canonical test, copied
+        # across and then clang-formatted to this repository's own style file -
+        # the two configs break one declaration differently, so the copy is
+        # verbatim apart from formatting. It is the single source of truth for
+        # what the boys namespace and BoysStatus must do, and a pin bump does
+        # not update it: re-copy it from the new revision.
         add_executable(qcx-integrals-cuda-tests tests/boys_cuda_test.cpp)
         target_link_libraries(qcx-integrals-cuda-tests PRIVATE qcx-integrals-cuda gtest gtest_main)
 
@@ -567,10 +695,17 @@ if (QCX_ENABLE_CUDA)
         target_include_directories(qcx-md-cuda-class-${_qcxLb}-${_qcxLk} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_BINARY_DIR})
+            ${CMAKE_CURRENT_BINARY_DIR}
+            # The Boys library's device handle and device-callable entries
+            # (boys_device_tables.hpp in the registry TU's Part 1,
+            # boys_cuda_device.hpp in its Part 2): every instantiation TU
+            # includes eri_cuda.cu, and these object libraries link nothing
+            # that would carry the path in.
+            ${_qcxBoysExt}/include)
         target_compile_definitions(qcx-md-cuda-class-${_qcxLb}-${_qcxLk} PRIVATE
             QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>
-            QcxIntegralsCudaLMax=${_qcxCudaLmax})
+            QcxIntegralsCudaLMax=${_qcxCudaLmax}
+            $<$<BOOL:${QCX_BOYS_SWAP_INSTRUMENT}>:QCX_BOYS_SWAP_INSTRUMENT=1>)
         target_compile_features(qcx-md-cuda-class-${_qcxLb}-${_qcxLk} PRIVATE cxx_std_20)
         # CUDA-safe PCH only.
         target_precompile_headers(qcx-md-cuda-class-${_qcxLb}-${_qcxLk} PRIVATE
@@ -628,14 +763,21 @@ if (QCX_ENABLE_CUDA)
     target_compile_features(qcx-integrals-cuda-md PUBLIC cxx_std_23)
     target_link_libraries(qcx-integrals-cuda-md
         PUBLIC qcx-integrals qcx-core qcx-molecule qcx-basisset qcx-memory
-        PRIVATE qcx-linalg qcx-backend-cuda CUDA::cublas)
+        PRIVATE qcx-linalg qcx-backend-cuda CUDA::cublas qcx-integrals-cuda)
+    # qcx-integrals-cuda (the submodule's own CUDA lane) is PRIVATE and
+    # required at link time: the engine's Create calls BoysCuda::DeviceTables
+    # to fill the device handle its kernels read, and that symbol and the
+    # device image behind it live in that library. The device-callable entries
+    # themselves are header-defined (boys_cuda_device.hpp) and add no link
+    # dependency of their own.
     # qcx-linalg is PRIVATE but required at compile time: the eri_cuda.cpp
     # TU reaches md_transform.hpp's qcx/linalg/batched_ops.hpp through the
     # md_vrr_3c.hpp / md_engine.hpp chain (the class-object libraries
     # carry the same PRIVATE linalg link - the same implementation seam).
     target_compile_definitions(qcx-integrals-cuda-md PUBLIC
         QcxIntegralsF32=$<BOOL:${QCX_INTEGRALS_F32}>
-        QcxIntegralsCudaLMax=${_qcxCudaLmax})
+        QcxIntegralsCudaLMax=${_qcxCudaLmax}
+        $<$<BOOL:${QCX_BOYS_SWAP_INSTRUMENT}>:QCX_BOYS_SWAP_INSTRUMENT=1>)
     # CUDA-safe PCH only.
     target_precompile_headers(qcx-integrals-cuda-md PRIVATE
         <cuda_runtime.h>)

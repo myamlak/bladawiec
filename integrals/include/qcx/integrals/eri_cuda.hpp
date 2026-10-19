@@ -79,6 +79,13 @@ struct EriCudaOptions {
     /// in the per-call paths) and releases them at the call end instead of
     /// retaining them from Create.
     bool forceLightPath = false;
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    /// The A/B probe's arm (probe build only): 0 runs the Boys library's
+    /// device lane, non-zero the engine's own retained ladder. Exists only
+    /// where QCX_BOYS_SWAP_INSTRUMENT is defined, so no production consumer
+    /// sees the field.
+    int boysProbeArm = 0;
+#endif
 };
 
 /// The Create-time mode record of the GPU engine: the
@@ -135,6 +142,45 @@ struct EriCudaTransferAccounting {
                boundsDownloadBytes + staticsUploadBytes;
     }
 };
+
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+/// The A/B probe's span record (probe build only): what the kernels spent
+/// inside the Boys call and inside the VRR around it, on the calls since the
+/// last read. All three region counters are in SM clock cycles, which are the
+/// unit the two lanes are compared in because the comparison is a ratio.
+/// \ingroup qcx-integrals
+struct EriCudaBoysProbeCounters {
+    /// Cycles inside the Boys call, by the evaluation region the argument
+    /// fell in: A and B read a table, C is the recursion alone.
+    /// \{
+    unsigned long long boysCyclesA = 0; ///< region A (the per-order piece table).
+    unsigned long long boysCyclesB = 0; ///< region B (the region-B seed fit).
+    unsigned long long boysCyclesC = 0; ///< region C (no table).
+    /// \}
+    /// The calls per region and the library's refusals.
+    /// \{
+    unsigned long long callsA = 0;
+    unsigned long long callsB = 0;
+    unsigned long long callsC = 0;
+    unsigned long long refused = 0;
+    /// \}
+    /// Cycles the VRR around the Boys call cost, in the same kernels: the
+    /// slice triangle, the pq scatter and the certified-bound accumulation of
+    /// the same quadruples.
+    unsigned long long vrrCycles = 0;
+
+    /// The Boys cycles of every region, and the calls of every region.
+    /// \returns The Boys span in cycles.
+    unsigned long long BoysCycles() const noexcept {
+        return boysCyclesA + boysCyclesB + boysCyclesC;
+    }
+
+    /// \returns The number of Boys calls.
+    unsigned long long Calls() const noexcept {
+        return callsA + callsB + callsC;
+    }
+};
+#endif
 
 /// The engine's Create-time device footprint estimate: the byte terms the
 /// device workspace budget is charged against - the exact uploaded table
@@ -296,6 +342,23 @@ public:
     /// \returns The last Fock-build call's accounting.
     /// \ingroup qcx-integrals
     EriCudaTransferAccounting TransferAccounting() const noexcept;
+
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    /// The A/B probe's span record of the calls since the last read (probe
+    /// build only): the cycles the kernel spent inside the Boys call, how
+    /// many calls it made, and how many the library's entry refused. Read
+    /// through a device-to-host copy and zeroed on the way out, so the
+    /// record covers the calls since the previous accessor call.
+    /// \returns The three sums (all zero before the first call).
+    /// \ingroup qcx-integrals
+    EriCudaBoysProbeCounters BoysProbeCounters();
+
+    /// The arm this engine was created with (probe build only): the
+    /// EriCudaOptions::boysProbeArm value Create recorded.
+    /// \returns 0 for the library's device lane, non-zero for the engine's.
+    /// \ingroup qcx-integrals
+    int BoysProbeArm() const noexcept;
+#endif
 
     /// The engine is movable, not copyable (owns device resources).
     EriCudaEngine(EriCudaEngine&&) noexcept = default;

@@ -26,6 +26,13 @@
 #include <cstddef>
 #include <cuda_runtime.h>
 
+// The Boys library's device handle (boys::BoysDeviceTables): plain host-side
+// data - pointers into the library's own device-resident tables - so this
+// part stays compilable by the host compiler. The device-callable entries
+// that read it are in boys_cuda_device.hpp, which only an nvcc TU may
+// include (Part 2 below).
+#include "boys/boys_device_tables.hpp"
+
 // The file-level include guard: the registry TU (this file compiled by
 // nvcc) includes eri_cuda.cu both as its own body (Parts 1-4) and through
 // eri_cuda_dispatch_gen.hpp (the header-style include of Part 4) - the
@@ -82,6 +89,13 @@ inline constexpr int kEriCudaMaxClassL = 12;
 /// transform terms.
 inline constexpr double kEriCudaCertifiedEpsilon = 1e-7;
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+// The engine's own Boys ladder, retained only for the A/B probe
+// (QCX_BOYS_SWAP_INSTRUMENT, default OFF; the build that measures the swap
+// turns it on for qcx-integrals and the probe). Production compiles none of
+// this: the ladder below is what the library's device lane replaced, and the
+// probe keeps it so both sides can be timed in one process, over one fixture,
+// on one card.
 /// Boys table capacity (boys_coefficients.hpp): 12 pieces per order row,
 /// 2304 coefficients total, 33 order rows, 24 region-B coefficients.
 /// \{
@@ -115,6 +129,7 @@ struct EriCudaBoysTables {
     float bcoeffs32[kEriCudaMaxBcoeffs];
     int bDeg32;
 };
+#endif // defined(QCX_BOYS_SWAP_INSTRUMENT)
 
 /// Compact per-pair data of the device (the md_batch.hpp MdPairData fields
 /// the kernels read, flattened to contiguous tables uploaded at Create).
@@ -152,7 +167,11 @@ struct EriCudaClassDispatchEntry {
 /// The per-class launch arguments. Every pointer refers to a DeviceBuffer
 /// allocation (memory module); stream is a cudaStream_t passed as void*.
 struct EriCudaClassArgs {
-    const EriCudaBoysTables* boys;
+    /// The Boys library's device handle: filled once at Create by
+    /// BoysCuda::DeviceTables and passed by value, so the kernel reads it
+    /// from the parameter bank. The tables behind it are the library's own
+    /// device-resident ones; the engine uploads no Boys table of its own.
+    boys::BoysDeviceTables boysDevice;
     const EriCudaPairMeta* pairMeta;
     const double* primData;
     const double* braTransforms;
@@ -180,6 +199,16 @@ struct EriCudaClassArgs {
     const int* chunkRanges;
     int nChunks;
     void* stream;
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    /// The engine's own Boys tables (probe build only) and the arm that
+    /// selects it: 0 runs the library's device lane, non-zero the engine's
+    /// retained ladder. One process, one fixture, both sides.
+    const EriCudaBoysTables* engineBoys;
+    int boysArm;
+    /// The span accumulators of one call - {VRR cycles, Boys cycles, calls}
+    /// - accumulated by the kernels with atomicAdd.
+    unsigned long long* probe;
+#endif
 };
 
 } // namespace qcx::integrals::internal::cuda
@@ -200,15 +229,44 @@ const qcx::integrals::internal::cuda::EriCudaClassDispatchEntry* QcxEriCudaFindC
 #include <math.h>
 #include <type_traits>
 
+// The Boys library's device-callable entries (boys::BoysDeviceAllNF64 and its
+// fp32 twin). Header-defined device functions: nothing to link, no device
+// link step - what the build pays is this include, which brings the
+// coefficient tables the arithmetic reads (boys_coefficients.hpp).
+//
+// KNOWN DEFECT AT THIS PIN, and the reason this include is not free. The
+// header's entries are plain __device__ functions - not inline, not templates
+// - and nvcc's host pass sees __CUDACC__ defined, so every translation unit
+// that includes the header also emits an externally visible host definition of
+// every entry. This lane has 156 such units (the registry TU plus one per
+// {lBra, lKet} class) and the host linker refuses the duplicate definitions
+// (LNK2005): including this header is not enough to link the lane at
+// 7e005f0. The fix is the library's, one word per entry (inline), or a pin
+// bump to a revision whose entries are templates - which the library's own
+// next revision has. Until then the consumers of this lane that must link
+// carry /FORCE:MULTIPLE, and that flag comes off with the bump.
+#include "boys/boys_cuda_device.hpp"
+
+/// The kernels take their arguments by value, and the Boys handle inside them
+/// is passed on by reference - which, without this qualifier, makes the
+/// compiler copy the whole argument block to local memory per thread. The
+/// qualifier (sm_70+; the CUDA preset fixes the arch) is what the library's
+/// own header asks for.
+#define QCX_ERI_CUDA_GRID_CONSTANT __grid_constant__
+
 namespace qcx::integrals::internal::cuda {
 namespace {
 
-// The Boys region boundaries and constants (boys.cpp; the f32 lane needs the
-// double constants for the region-B seed divisor).
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+// The Boys region boundaries and constants of the engine's own ladder
+// (boys.cpp; the f32 lane needs the double constants for the region-B seed
+// divisor). Probe build only - the library's device lane carries its own.
 __device__ constexpr double kEriCudaX0d = 1.18998481521084840e+01;
 __device__ constexpr double kEriCudaX1d = 2.89893377388207400e+01;
 __device__ constexpr double kEriCudaHalfSqrtPi = 0.886226925452758014; // sqrt(pi)/2
 __device__ constexpr float kEriCudaHalfSqrtPiF32 = 0.88622693f;
+#endif
+
 __device__ constexpr double kEriCudaPi = 3.14159265358979323846264338327950288;
 
 /// Number of 3D-Hermite functions with tx + ty + tz <= total (md_defs.hpp).
@@ -235,6 +293,7 @@ __device__ __forceinline__ constexpr int DevHermite3DIndex(int tx, int ty, int t
     return DevH2PrefixValue(n) + DevSubIndex3(ty, tz, n);
 }
 
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
 /// Split Clenshaw evaluation (boys.cpp ClenshawSplit): the even/odd split
 /// with the D-family recurrence, __fma_rn for std::fma, and the deg == 2
 /// special the even/odd split assumes away. The generator emits only even
@@ -521,6 +580,46 @@ __device__ __forceinline__ void DevBoysBatch<float>(const EriCudaBoysTables& tab
     }
 }
 
+#endif // defined(QCX_BOYS_SWAP_INSTRUMENT)
+
+/// F_0(x)..F_kTopOrder(x) into out, from the Boys library's device lane
+/// (boys_cuda_device.hpp, reached through the handle BoysCuda::DeviceTables
+/// filled at Create).
+///
+/// The top order is a template argument, not the run-time value the engine's
+/// own ladder took: the library's compile-time-order entry is the fused
+/// kernel's shape, so the recursion bounds are constants here.
+///
+/// The double lane runs the library's fp64 entry; the float lane its fp32
+/// twin, which holds the same 1e-7 contract the certified fp32 pipeline
+/// carries. The status is not branchable in a device kernel and cannot vary
+/// per call: the handle is filled at Create, which refuses when
+/// BoysCuda::DeviceTables fails, and the entry's other refusal - a relaxed
+/// accuracy multiplier that is not resident - is unreachable because every
+/// call here names the default multiplier.
+/// \tparam kTopOrder the top order, the VRR's L (0..kMaxBoysOrder).
+/// \tparam T double (the fp64 lane) or float (the certified fp32 lane).
+/// \returns True when the ladder was written; false when the entry refused
+/// (the caller's array is then untouched, and the probe build counts it).
+template <int kTopOrder, typename T>
+__device__ __forceinline__ bool DevBoysLadder(const boys::BoysDeviceTables& libraryTables,
+                                              double x,
+                                              T* out) {
+    if constexpr (std::is_same_v<T, double>)
+    {
+        // boys 5.0.0 puts the defaulted division form first, so the top order is named after it.
+        return boys::BoysDeviceAllNF64<boys::kDefaultDeviceDivisionForm, kTopOrder>(
+                   libraryTables, x, out) == boys::BoysDeviceStatus::kSuccess;
+    } else
+    {
+        // The library's fp32 entry takes and returns float; its region-A seed
+        // is computed in double inside the entry, so the amplification-
+        // sensitive seeds keep the precision the certified lane needs.
+        return boys::BoysDeviceAllNF32<boys::kDefaultDeviceDivisionForm, kTopOrder>(
+                   libraryTables, static_cast<float>(x), out) == boys::BoysDeviceStatus::kSuccess;
+    }
+}
+
 /// One primitive quadruple of one task: the Boys seeds, the slice triangle
 /// (rotating 3-tier buffer - tier n of the current slice lives at rotation
 /// n % 3, and tier 0 always at rotation 0; tier m's last reader is tier m+2
@@ -567,8 +666,32 @@ __device__ __forceinline__ void DevBoysBatch<float>(const EriCudaBoysTables& tab
 /// launches all accumulate into the same run-level bound slot, so the
 /// contribution must be an atomicAdd; the fused kernels pass false and hand
 /// each thread its own local accumulator.
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+/// The A/B probe's per-thread span accumulators (probe build only): the
+/// cycles the Boys call costs, split by the evaluation region the argument
+/// fell in, how many calls there were per region, and how many the library's
+/// entry refused. Flushed to global memory once per thread.
+///
+/// The region split is what separates a table read from arithmetic: region A
+/// (x below the library's kX0) locates and sums a piece of the Chebyshev
+/// table, region B (up to kX1) sums the region-B seed fit, and region C is the
+/// F_0 asymptotic form with the upward recursion and no table read at all. A
+/// difference between two Boys lanes that lands in C is arithmetic; one that
+/// lands in A or B is a table access.
+struct BoysProbeSpans {
+    unsigned long long boysA = 0; ///< cycles in region A (the per-order piece table)
+    unsigned long long boysB = 0; ///< cycles in region B (the region-B seed fit)
+    unsigned long long boysC = 0; ///< cycles in region C (no table: the recursion alone)
+    unsigned long long vrr = 0; ///< cycles in the VRR around the Boys call
+    unsigned int callsA = 0; ///< calls in region A
+    unsigned int callsB = 0; ///< calls in region B
+    unsigned int callsC = 0; ///< calls in region C
+    unsigned int refused = 0; ///< calls the library's entry refused
+};
+#endif
+
 template <int L, int LBra, int LKet, typename T, bool AtomicBound>
-__device__ __forceinline__ void DevVrrQuadruple(const EriCudaBoysTables& tables,
+__device__ __forceinline__ void DevVrrQuadruple(const boys::BoysDeviceTables& libraryTables,
                                                 const EriCudaPairMeta& bra,
                                                 const EriCudaPairMeta& ket,
                                                 const double* primData,
@@ -578,7 +701,14 @@ __device__ __forceinline__ void DevVrrQuadruple(const EriCudaBoysTables& tables,
                                                 int primG,
                                                 int scatterSlot,
                                                 T* pq,
-                                                double* bound) {
+                                                double* bound
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                                                ,
+                                                const EriCudaBoysTables& engineTables,
+                                                int boysArm,
+                                                BoysProbeSpans* spans
+#endif
+) {
     constexpr int kMaxTier = (L + 1) * (L + 2) / 2;
     constexpr int kHermBra = DevHermite3DCount(LBra);
     constexpr int kHermKet = DevHermite3DCount(LKet);
@@ -605,7 +735,48 @@ __device__ __forceinline__ void DevVrrQuadruple(const EriCudaBoysTables& tables,
         2.0 * pow(kEriCudaPi, 2.5) / (p * q * sqrt(p + q)) * primBData[2] * primGData[2];
 
     T seeds[L + 1];
-    DevBoysBatch<T>(tables, L, x, seeds);
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    // The A/B probe's arm: both sides run the same instruction stream from
+    // here on, and the stamp is a predictable branch plus two counter reads
+    // present in both arms, so it cancels in the difference.
+    const unsigned long long boysStart = clock64();
+
+    if (boysArm != 0)
+    {
+        DevBoysBatch<T>(engineTables, L, x, seeds);
+    } else
+    {
+        const bool written = DevBoysLadder<L, T>(libraryTables, x, seeds);
+        spans->refused += static_cast<unsigned int>(!written);
+    }
+
+    const unsigned long long boysCycles = clock64() - boysStart;
+
+    // The library's own region cuts, which are the constants the engine's
+    // ladder carried too (the two static asserts pin them against the literals
+    // the engine's kEriCudaX0d/kEriCudaX1d are written with, so a divergence
+    // is a compile error rather than a mislabelled bucket).
+    static_assert(boys::detail::kX0 == 1.18998481521084840e+01, "the probe's region A/B cut");
+    static_assert(boys::detail::kX1 == 2.89893377388207400e+01, "the probe's region B/C cut");
+
+    if (x < boys::detail::kX0)
+    {
+        spans->boysA += boysCycles;
+        ++spans->callsA;
+    } else if (x < boys::detail::kX1)
+    {
+        spans->boysB += boysCycles;
+        ++spans->callsB;
+    } else
+    {
+        spans->boysC += boysCycles;
+        ++spans->callsC;
+    }
+#else
+    // The handle is filled at Create, which refused when the fill failed, and
+    // every call names the default multiplier: the entry cannot refuse here.
+    (void)DevBoysLadder<L, T>(libraryTables, x, seeds);
+#endif
     double seedSum = 0.0;
 
     for (int m = 0; m <= L; ++m)
@@ -816,12 +987,15 @@ __device__ __forceinline__ void DevVrrQuadruple(const EriCudaBoysTables& tables,
 /// slot bounds are staged in shared memory (boundSh) and summed by tid 0
 /// into the task's running total; the last chunk finalizes errorBounds.
 template <int LBra, int LKet, typename T>
-__global__ void EriFusedKernel(const EriCudaClassArgs args) {
+__global__ void EriFusedKernel(QCX_ERI_CUDA_GRID_CONSTANT const EriCudaClassArgs args) {
     constexpr int L = LBra + LKet;
     constexpr int kHermBra = DevHermite3DCount(LBra);
     constexpr int kHermKet = DevHermite3DCount(LKet);
     constexpr bool kCertified = std::is_same_v<T, float>;
     const int tid = static_cast<int>(threadIdx.x);
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    BoysProbeSpans spans;
+#endif
     const int block = static_cast<int>(blockIdx.x);
     const int rangeStart = args.chunkRanges[2 * block];
     const int rangeEnd = args.chunkRanges[2 * block + 1];
@@ -906,7 +1080,10 @@ __global__ void EriFusedKernel(const EriCudaClassArgs args) {
                     // overwrite dropped 8 of 9 STO-3G pairs from the
                     // a-priori bound - fixed on the CPU 2026-08-22, mirrored
                     // here). Zeroed once per task before the g loop.
-                    DevVrrQuadruple<L, LBra, LKet, T, false>(*args.boys,
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                    const unsigned long long vrrStart = clock64();
+#endif
+                    DevVrrQuadruple<L, LBra, LKet, T, false>(args.boysDevice,
                                                              bra,
                                                              ket,
                                                              args.primData,
@@ -916,7 +1093,21 @@ __global__ void EriFusedKernel(const EriCudaClassArgs args) {
                                                              g,
                                                              0,
                                                              pqBand,
-                                                             kCertified ? &boundAcc : nullptr);
+                                                             kCertified ? &boundAcc : nullptr
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                                                             ,
+                                                             *args.engineBoys,
+                                                             args.boysArm,
+                                                             &spans
+#endif
+                    );
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                    // The span the Boys call sits inside: the slice triangle,
+                    // the pq scatter and the certified-bound accumulation of
+                    // this quadruple, with the ket/bra transforms of the
+                    // fused kernel outside it.
+                    spans.vrr += clock64() - vrrStart;
+#endif
 
                     // The ket transform: MicroGemmAdd order (j outer, l
                     // middle, i inner), accumulating into the acc rows. The
@@ -1010,6 +1201,19 @@ __global__ void EriFusedKernel(const EriCudaClassArgs args) {
             }
         }
     }
+
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    // One flush per thread at the end of its whole task range, so the
+    // atomics are outside the spans they measure.
+    atomicAdd(&args.probe[0], spans.boysA);
+    atomicAdd(&args.probe[1], spans.boysB);
+    atomicAdd(&args.probe[2], spans.boysC);
+    atomicAdd(&args.probe[3], static_cast<unsigned long long>(spans.callsA));
+    atomicAdd(&args.probe[4], static_cast<unsigned long long>(spans.callsB));
+    atomicAdd(&args.probe[5], static_cast<unsigned long long>(spans.callsC));
+    atomicAdd(&args.probe[6], static_cast<unsigned long long>(spans.refused));
+    atomicAdd(&args.probe[7], spans.vrr);
+#endif
 }
 
 /// The global-memory VRR kernel (variant V2): one thread per (task, bra
@@ -1027,7 +1231,7 @@ __global__ void EriFusedKernel(const EriCudaClassArgs args) {
 /// CPU's taskBound[t] - the last-g-only gate dropped 8 of 9 STO-3G pairs
 /// from the a-priori bound (mirrors the CPU fix of 2026-08-22).
 template <int LBra, int LKet, typename T>
-__global__ void EriVrrGlobalKernel(const EriCudaClassArgs args) {
+__global__ void EriVrrGlobalKernel(QCX_ERI_CUDA_GRID_CONSTANT const EriCudaClassArgs args) {
     constexpr int L = LBra + LKet;
     constexpr int kHermBra = DevHermite3DCount(LBra);
     constexpr int kHermKet = DevHermite3DCount(LKet);
@@ -1038,6 +1242,10 @@ __global__ void EriVrrGlobalKernel(const EriCudaClassArgs args) {
     {
         return;
     }
+
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    BoysProbeSpans spans;
+#endif
 
     const int t = args.runStart + tPrime / args.vrrMaxNBraPrims;
     const int b = tPrime % args.vrrMaxNBraPrims;
@@ -1059,7 +1267,10 @@ __global__ void EriVrrGlobalKernel(const EriCudaClassArgs args) {
         bound = static_cast<double*>(args.bound) + (t - args.runStart);
     }
 
-    DevVrrQuadruple<L, LBra, LKet, T, true>(*args.boys,
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    const unsigned long long vrrStart = clock64();
+#endif
+    DevVrrQuadruple<L, LBra, LKet, T, true>(args.boysDevice,
                                             bra,
                                             ket,
                                             args.primData,
@@ -1069,7 +1280,28 @@ __global__ void EriVrrGlobalKernel(const EriCudaClassArgs args) {
                                             args.vrrG,
                                             b,
                                             pq,
-                                            bound);
+                                            bound
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+                                            ,
+                                            *args.engineBoys,
+                                            args.boysArm,
+                                            &spans
+#endif
+    );
+
+#if defined(QCX_BOYS_SWAP_INSTRUMENT)
+    // This kernel is the VRR and nothing else: the span the Boys call sits
+    // inside is the whole of it.
+    spans.vrr += clock64() - vrrStart;
+    atomicAdd(&args.probe[0], spans.boysA);
+    atomicAdd(&args.probe[1], spans.boysB);
+    atomicAdd(&args.probe[2], spans.boysC);
+    atomicAdd(&args.probe[3], static_cast<unsigned long long>(spans.callsA));
+    atomicAdd(&args.probe[4], static_cast<unsigned long long>(spans.callsB));
+    atomicAdd(&args.probe[5], static_cast<unsigned long long>(spans.callsC));
+    atomicAdd(&args.probe[6], static_cast<unsigned long long>(spans.refused));
+    atomicAdd(&args.probe[7], spans.vrr);
+#endif
 }
 
 /// The V2 bound finalize: errorBounds[boundsBase + t] =
