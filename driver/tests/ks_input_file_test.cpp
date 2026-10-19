@@ -402,3 +402,75 @@ xc_gradient = true
     EXPECT_NE(refused.error().message.find("properties.xc_gradient"), std::string::npos)
         << refused.error().message;
 }
+
+// The ETS-NOCV analysis is Hartree-Fock in v1. Before the refusal below
+// existed, this rks file ran and came back with an HF decomposition beside a
+// DFT total energy: HF fragment energies and HF E_orb channels, while
+// total_energy_hartree was the PBE energy - so the documented identity
+// binding_energy = E_mol - sum E_frag (result_json.hpp) was violated by the
+// exchange-correlation difference, and nothing in the record said so. The
+// request is now refused by NAME before the SCF, and the refusal names the
+// mismatch and the remedies.
+//
+// The key is method.functional (the method having one), not the string
+// "rks": a rule stated on the functional cannot drift from the validator's
+// own word policy.
+TEST(KsInputFileTest, NocvOnAKohnShamFileIsRefusedByName) {
+    auto refused = RunFile(TempInputPath("nocv-rks"),
+                           WaterToml(R"(type = "rks"
+functional = "pbe"
+fock_builder = "direct"
+)",
+                                     R"([properties]
+nocv_fragments = [[0], [1, 2]]
+)"));
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(refused.error().message.find("Hartree-Fock in v1"), std::string::npos)
+        << refused.error().message;
+    EXPECT_NE(refused.error().message.find("nocv_fragments"), std::string::npos)
+        << refused.error().message;
+    EXPECT_NE(refused.error().message.find("DFT total energy"), std::string::npos)
+        << refused.error().message;
+    EXPECT_NE(refused.error().message.find("method.functional"), std::string::npos)
+        << refused.error().message;
+}
+
+// The control beside the refusal: the same water and the same partition on
+// the method the analysis supports. RHF names no functional, so the guard
+// does not fire and the block is the decomposition the contract documents.
+// A refusal written too wide - keyed on the "rks" word, or on the property
+// alone - fails here.
+TEST(KsInputFileTest, NocvOnTheHartreeFockFileStillRuns) {
+    auto ran = RunFile(TempInputPath("nocv-rhf"),
+                       WaterToml(R"(type = "rhf"
+fock_builder = "direct"
+)",
+                                 R"([properties]
+nocv_fragments = [[0], [1, 2]]
+)"));
+    ASSERT_TRUE(ran.has_value()) << ran.error().message;
+    EXPECT_EQ(ran->result.method, MethodType::kRhf);
+    EXPECT_TRUE(ran->result.converged);
+    ASSERT_TRUE(ran->result.properties.has_value());
+    ASSERT_TRUE(ran->result.properties->nocv.has_value());
+    const auto& nocv = *ran->result.properties->nocv;
+
+    // The two fragment SCFs are the isolated O atom and H2, in the caller's
+    // fragment order (the file writes [O], [H, H]); the module and driver
+    // pins put the same numbers on this geometry.
+    ASSERT_EQ(nocv.fragmentEnergies.size(), 2U);
+    EXPECT_NEAR(nocv.fragmentEnergies[0], -73.834215719824, 1e-6);
+    EXPECT_NEAR(nocv.fragmentEnergies[1], -0.921901167759, 1e-6);
+
+    // The partition identity the block is built on.
+    EXPECT_NEAR(nocv.bindingEnergy, nocv.electrostatic + nocv.pauli + nocv.orbital, 1e-9);
+
+    // The documented meaning of that number: E_mol - sum E_frag. On this
+    // lane both sides are Hartree-Fock, so the identity holds; the same
+    // assertion on the rks lane was the wrong-answer path this pair closes.
+    EXPECT_NEAR(nocv.bindingEnergy,
+                ran->result.totalEnergyHartree -
+                    (nocv.fragmentEnergies[0] + nocv.fragmentEnergies[1]),
+                1e-6);
+}

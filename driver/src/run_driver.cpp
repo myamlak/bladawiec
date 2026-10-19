@@ -1991,6 +1991,22 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
                                    "nocv_fragments cannot be requested on a UHF run"));
     }
 
+    // ETS-NOCV is Hartree-Fock in v1 (no functional enters the fragment SCFs or
+    // the density-energy evaluator), so a functional-naming method is refused.
+    if (input.method.functional.has_value() && !input.properties.nocvFragments.empty())
+    {
+        return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
+                                   "the ETS-NOCV analysis is Hartree-Fock in v1: the fragment "
+                                   "SCFs and the density-energy evaluator take no density "
+                                   "functional, so nocv_fragments cannot be requested on a "
+                                   "method that names method.functional; the decomposition "
+                                   "would report HF fragment energies and HF E_orb channels "
+                                   "beside the run's DFT total energy. Remove "
+                                   "method.functional (an rhf run keeps ETS-NOCV) or remove "
+                                   "nocv_fragments; the functional-aware decomposition is "
+                                   "not implemented"));
+    }
+
     // The NOCV fragment groups index the atom rows as written in the file;
     // an out-of-range index is pure input validation (only the atom count
     // is needed) and must fail before the SCF. MapFragmentsToCanonical
@@ -6137,7 +6153,7 @@ qcx::Result<std::optional<qcx::io::RunFukui>> BuildFukuiBlock(
     return block;
 }
 
-// The opt-in ETS-NOCV block . The UHF rejection lives in
+// The opt-in ETS-NOCV block . The UHF and functional rejections live in
 // ValidateCombination, with the other not-wired combinations; only the
 // analysis itself runs here.
 qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(

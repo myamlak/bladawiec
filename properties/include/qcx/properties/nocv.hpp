@@ -52,6 +52,10 @@
 /// DIIS-extrapolated one, so the evaluator's fresh F at the converged
 /// density differs at the residue level, ~1e-11).
 ///
+/// The decomposition is Hartree-Fock in v1: the fragment SCFs are UHF and
+/// no density functional enters it, so a Kohn-Sham run's total energy is
+/// not the energy it partitions (see AnalyzeNocvEts).
+///
 /// E_orb is resolved twice. The restricted resolution evaluates every
 /// density with the closed-shell functional (self-consistent - the
 /// partition identity holds exactly - but the restricted functional
@@ -169,7 +173,16 @@ struct NocvEtsDecomposition {
 /// full core Hamiltonian and the dense repulsion tensor - the same
 /// integrals the molecular SCF used, so the energy identity
 /// E_elstat + E_Pauli + E_orb = E_mol - sum_i E_frag_i pins against the
-/// molecular run's own total energy.
+/// molecular run's own total energy on the RHF run this function supports
+/// (a Kohn-Sham total energy is not the decomposed energy).
+///
+/// The decomposition is Hartree-Fock in v1: the fragments run UHF and every
+/// energy functional value (E_elstat, E_Pauli, the transition Fock, both
+/// E_orb resolutions) is the Hartree-Fock functional. The function takes no
+/// density functional, so a Kohn-Sham run's total energy is not the energy
+/// it partitions; the driver refuses `nocv_fragments` on a method that
+/// names method.functional (kUnimplemented, naming both remedies). The
+/// supported caller is an RHF run.
 /// \param molecule Validated molecule; the canonical atom order indexes
 /// the fragment groups.
 /// \param basisSet The molecular basis set (function counts; the fragment
