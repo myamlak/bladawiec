@@ -42,6 +42,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/ao_evaluator_test.cpp
         tests/xc_assembly_test.cpp
         tests/xc_gradient_test.cpp
+        tests/tau_reference_test.cpp
         tests/quadrature_cross_validation_test.cpp
         tests/synthetic_fixture.cpp
         tests/synthetic_fixture_test.cpp

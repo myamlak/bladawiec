@@ -116,10 +116,12 @@ add_library(qcx-integrals
   ${_qcxBoysExt}/src/boys_simd.cpp
   src/boys_build_record.cpp
   src/one_electron.cpp
+  src/one_electron_gradient.cpp
   src/two_electron.cpp
   src/eri_batch.cpp
   src/eri_cache.cpp
   src/eri_dense.cpp
+  src/eri_gradient.cpp
   src/fock_build.cpp
   src/fock_contract_simd.cpp
   src/lean_fock_build.cpp
@@ -356,7 +358,9 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/f16_test.cpp
         tests/aux_basis_test.cpp
         tests/one_electron_test.cpp
+        tests/one_electron_gradient_test.cpp
         tests/two_electron_test.cpp
+        tests/eri_gradient_test.cpp
         tests/md_tables_test.cpp
         tests/md_scatter_table_test.cpp
         tests/md_derivative_test.cpp
