@@ -14,10 +14,14 @@
 
 namespace qcx::grid::internal {
 
-/// One spin's density and density gradient at a grid point.
+/// One spin's density, density gradient, and kinetic-energy density at a grid
+/// point.
 struct PointDensity {
     double rho = 0.0;
     std::array<double, 3> gradient{};
+    /// 1/2 sum_mu nu D_mu nu grad phi_mu . grad phi_nu, Bohr^-5. The
+    /// libxc/PySCF per-spin convention: the 1/2 is on the gradient products.
+    double tau = 0.0;
 };
 
 /// A row-major copy of a density matrix.
@@ -42,12 +46,16 @@ inline std::vector<double> FlattenRowMajor(const Eigen::MatrixXd& density) {
 ///
 ///     rho      = sum_mu nu D_mu nu phi_mu phi_nu
 ///     grad rho = sum_mu nu D_mu nu (grad phi_mu phi_nu + phi_mu grad phi_nu)
+///     tau      = 1/2 sum_mu nu D_mu nu grad phi_mu . grad phi_nu
+///              = 1/2 sum_mu grad phi_mu . (D grad phi)_mu
 ///
-/// Both sums factor through (D phi)_mu and (D grad phi)_mu, so one point costs
-/// O(nAO^2) rather than O(nAO^3). The double-sum form is written out, so the
-/// result is exact for a non-symmetric D as well. Dropping a shell drops its
-/// density-matrix row and column along with its AO values, which is what the
-/// significance test argued for.
+/// All three sums factor through (D phi)_mu and (D grad phi)_mu, so one point
+/// costs O(nAO^2) rather than O(nAO^3). The double-sum form is written out, so
+/// the result is exact for a non-symmetric D as well. Dropping a shell drops
+/// its density-matrix row and column along with its AO values, which is what
+/// the significance test argued for. The tau sum is taken beside the density
+/// gradient, from the same (D grad phi)_mu scratch: a caller that reuses that
+/// scratch for the other spin must read tau before the overwrite.
 ///
 /// Only the selected slots are read, as the slot contract requires: the fetch
 /// writes the selected range of a point's slice and leaves the rest of it
@@ -60,7 +68,7 @@ inline std::vector<double> FlattenRowMajor(const Eigen::MatrixXd& density) {
 /// written with (D phi)_mu and read back by callers that need them.
 /// \param gradientContraction Scratch of size 3 * AOCount(); the selected slots
 /// are written with (D grad phi)_mu in the same layout as \p gradients.
-/// \returns The point's density and density gradient.
+/// \returns The point's density, density gradient, and kinetic-energy density.
 inline PointDensity ContractSelectedSpinDensity(const Eigen::MatrixXd& density,
                                                 std::span<const double> values,
                                                 std::span<const double> gradients,
@@ -103,6 +111,7 @@ inline PointDensity ContractSelectedSpinDensity(const Eigen::MatrixXd& density,
         {
             result.gradient[axis] += gradients[3 * mu + axis] * valueContraction[mu] +
                                      values[mu] * gradientContraction[3 * mu + axis];
+            result.tau += 0.5 * gradients[3 * mu + axis] * gradientContraction[3 * mu + axis];
         }
     }
 

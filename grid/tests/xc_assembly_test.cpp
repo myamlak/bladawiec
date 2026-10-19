@@ -17,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <excgrid/kernel.hpp>
 #include <gtest/gtest.h>
 #include <string>
 #include <string_view>
@@ -264,6 +265,48 @@ TEST(XcGridEngineTest, PbePotentialIsTheEnergyDerivative) {
     ExpectPotentialMatchesEnergyDerivative(*engine, 1e-4);
 }
 
+TEST(XcGridEngineTest, TauExchangeKernelReproducesTheUniformGasWitness) {
+    // The point-level witness for tau_x: at sigma = 0 with tau_s = tau_unif
+    // the enhancement is exactly 1, and at tau = 0 it is 13/12. The second
+    // value is the live defect the engine's tau plumbing removes; the first
+    // pins that the supplied tau reaches the kernel at its physical value.
+    const excgrid::XcFunctional* functional = excgrid::FindFunctional("tau_x");
+    ASSERT_NE(functional, nullptr);
+    EXPECT_TRUE(functional->RequiredMask().Test(excgrid::Component::TauA));
+    EXPECT_TRUE(functional->RequiredMask().Test(excgrid::Component::TauB));
+
+    constexpr double rho = 0.5;
+    constexpr double pi = 3.14159265358979323846;
+    const double tauUniform =
+        (3.0 / 10.0) * std::pow(6.0 * pi * pi, 2.0 / 3.0) * std::pow(rho, 5.0 / 3.0);
+
+    const auto energyDensity = [functional, rho](double tau) {
+        excgrid::PointInputs inputs;
+        inputs.Set(excgrid::Component::RhoA, rho);
+        inputs.Set(excgrid::Component::RhoB, rho);
+        inputs.Set(excgrid::Component::SigmaAa, 0.0);
+        inputs.Set(excgrid::Component::SigmaAb, 0.0);
+        inputs.Set(excgrid::Component::SigmaBb, 0.0);
+        inputs.Set(excgrid::Component::TauA, tau);
+        inputs.Set(excgrid::Component::TauB, tau);
+
+        excgrid::PointResult result;
+        EXPECT_EQ(functional->EvaluatePoint(inputs, result), excgrid::KernelStatus::kOk);
+
+        return result.exc;
+    };
+
+    // Both spins carry the same density, so the exchange energy density is
+    // twice the per-spin value at enhancement 1.
+    const double scale = -0.9305257363491 * 2.0 * std::pow(rho, 4.0 / 3.0);
+    const double uniform = energyDensity(tauUniform);
+    const double zeroTau = energyDensity(0.0);
+
+    EXPECT_NEAR(uniform, scale, 1e-12 * std::abs(scale)) << "enhancement at tau_unif";
+    EXPECT_NEAR(zeroTau, (13.0 / 12.0) * scale, 1e-12 * std::abs(scale))
+        << "enhancement at tau = 0";
+}
+
 TEST(XcGridEngineTest, UnrestrictedPotentialIsTheEnergyDerivative) {
     // Spin-polarized: alpha and beta differ, so sigma_ab and both spins'
     // sigma-weighted cross terms are on the path. "b3lyp" is the load-bearing
@@ -279,6 +322,21 @@ TEST(XcGridEngineTest, UnrestrictedPotentialIsTheEnergyDerivative) {
         ExpectUnrestrictedPotentialMatchesEnergyDerivative(
             *engine, 1e-4, H2PolarizedAlpha(), H2PolarizedBeta());
     }
+}
+
+TEST(XcGridEngineTest, TauExchangePotentialIsTheEnergyDerivative) {
+    // The vtau gate: tau_x is the one shipped name that reads tau, so this is
+    // the only end-to-end check that the tau assembled at each point reaches
+    // the potential. A missing vtau term fails by the full contribution and a
+    // missing 1/2 fails by a factor of two; the spin-resolved path pins
+    // vtauA and vtauB separately.
+    const auto engine = MakeEngine("tau_x");
+    ASSERT_TRUE(engine.has_value());
+    EXPECT_TRUE(engine->Functional().RequiredMask().Test(excgrid::Component::TauA));
+
+    ExpectPotentialMatchesEnergyDerivative(*engine, 1e-4);
+    ExpectUnrestrictedPotentialMatchesEnergyDerivative(
+        *engine, 1e-4, H2PolarizedAlpha(), H2PolarizedBeta());
 }
 
 TEST(XcGridEngineTest, NonSymmetricDensityUsesTheFullContraction) {
