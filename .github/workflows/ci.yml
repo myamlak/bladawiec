@@ -386,26 +386,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Quoted on purpose: an unquoted number is read as an integer by some
-          # YAML parsers and as a string by others, and this value is handed to
-          # timeout-minutes as a rendered string.
-          #
           # The cap is per entry rather than one number for the job: an MSVC
           # Debug build of this tree compiles several times slower than the
           # Release one, and a cap sized for Release would end the Debug entry
-          # as a platform timeout - a red leg carrying no diagnostic.
+          # as a platform timeout - a red leg carrying no diagnostic. The
+          # job-level expression below selects the cap from the build type; the
+          # quoted string it used to read was not a usable timeout and the jobs
+          # were not created, so the cap is a numeric expression.
           #
           # lmax_arg is the ceiling each entry asks for, and the empty string
           # is not a shorthand for zero: it is the entry naming no ceiling at
           # all, so the configure takes the value integrals/CMakeLists.txt
           # ships. Read the Configure step's note before changing either.
           - build_type: Release
-            timeout_minutes: '90'
             lmax_arg: ''
           - build_type: Debug
-            timeout_minutes: '150'
             lmax_arg: '-DQCX_INTEGRALS_LMAX=2'
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    timeout-minutes: ${{ matrix.build_type == 'Debug' && 150 || 90 }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -769,15 +766,14 @@ jobs:
   macos:
     name: macos ${{ matrix.arch }} ${{ matrix.build_type }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    timeout-minutes: ${{ matrix.build_type == 'Debug' && 180 || 120 }}
     strategy:
       fail-fast: false
       matrix:
         include:
           # Quoted on purpose: an unquoted ON/OFF is a boolean in some YAML
           # parsers and a string in others, and this value is compared as a
-          # string in the step below. timeout_minutes is quoted for the same
-          # reason - it is handed to timeout-minutes as a rendered string.
+          # string in the step below.
           #
           # lmax_arg is the ceiling each entry asks for; the empty string is the
           # entry naming no ceiling at all, so the configure takes the value
@@ -787,13 +783,11 @@ jobs:
           - runner: macos-latest
             arch: arm64
             build_type: Release
-            timeout_minutes: '120'
             expect_x86_64: 'OFF'
             lmax_arg: ''
           - runner: macos-15-intel
             arch: x64
             build_type: Release
-            timeout_minutes: '120'
             expect_x86_64: 'ON'
             lmax_arg: ''
           # The Debug lane: Apple Silicon, the fast subset, and the reason it
@@ -801,7 +795,6 @@ jobs:
           - runner: macos-latest
             arch: arm64
             build_type: Debug
-            timeout_minutes: '180'
             expect_x86_64: 'OFF'
             lmax_arg: '-DQCX_INTEGRALS_LMAX=2'
     steps:
