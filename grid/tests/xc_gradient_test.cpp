@@ -335,6 +335,34 @@ void FieldsAtPoint(const Eigen::MatrixXd& density,
     }
 }
 
+// One spin's kinetic-energy density at a point, written as the double sum
+// itself rather than through the assembly's factored form:
+//     tau = 1/2 sum_mu nu D_mu nu grad phi_mu . grad phi_nu.
+double TauAtPoint(const Eigen::MatrixXd& density,
+                  std::span<const double> gradients,
+                  std::span<const std::size_t> slots) {
+    double tau = 0.0;
+
+    for (const std::size_t mu : slots)
+    {
+        for (const std::size_t nu : slots)
+        {
+            const double element =
+                density(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu));
+            double dot = 0.0;
+
+            for (std::size_t axis = 0; axis < 3; ++axis)
+            {
+                dot += gradients[3 * mu + axis] * gradients[3 * nu + axis];
+            }
+
+            tau += 0.5 * element * dot;
+        }
+    }
+
+    return tau;
+}
+
 // The fixture's energy at one geometry, under one tolerance, with the selection
 // reproduced from the same public rule the engine makes its own with.
 struct ReferenceResult {
@@ -421,11 +449,28 @@ ReferenceResult ReferenceEnergy(const GeometryState& state,
         FieldsAtPoint(densityAlpha, values, gradients, slots, rhoAlpha, gradientAlpha);
         FieldsAtPoint(densityBeta, values, gradients, slots, rhoBeta, gradientBeta);
 
+        const double tauAlpha = TauAtPoint(densityAlpha, gradients, slots);
+        const double tauBeta = TauAtPoint(densityBeta, gradients, slots);
+
         const Eigen::Vector3d alpha(gradientAlpha[0], gradientAlpha[1], gradientAlpha[2]);
         const Eigen::Vector3d beta(gradientBeta[0], gradientBeta[1], gradientBeta[2]);
 
-        const excgrid::XcKernelValue kernel = functional.Evaluate(
-            rhoAlpha, rhoBeta, alpha.dot(alpha), alpha.dot(beta), beta.dot(beta));
+        // The named entry point, not the five-argument adapter: a tau
+        // functional read through the adapter would silently see tau = 0, and
+        // the reference would then be a different energy than the walk's. The
+        // fixture's other functionals ignore the two extra components.
+        excgrid::PointInputs inputs;
+        inputs.Set(excgrid::Component::RhoA, rhoAlpha);
+        inputs.Set(excgrid::Component::RhoB, rhoBeta);
+        inputs.Set(excgrid::Component::SigmaAa, alpha.dot(alpha));
+        inputs.Set(excgrid::Component::SigmaAb, alpha.dot(beta));
+        inputs.Set(excgrid::Component::SigmaBb, beta.dot(beta));
+        inputs.Set(excgrid::Component::TauA, tauAlpha);
+        inputs.Set(excgrid::Component::TauB, tauBeta);
+
+        excgrid::PointResult kernel;
+        EXPECT_EQ(functional.EvaluatePoint(inputs, kernel), excgrid::KernelStatus::kOk)
+            << "the fixture's functional refused a point";
 
         result.energy += PointWeight(state.geometry, owner, position) * kernel.exc;
     }
@@ -674,6 +719,78 @@ TEST(XcGradientTest, TheAssembledGradientMatchesAFiniteDifferenceOfTheFixturesEn
                                       << ": the assembled gradient and the difference of "
                                          "the fixture's own energy disagree";
     }
+}
+
+// I1 for the kinetic-energy density: the assembled gradient against a central
+// difference of the fixture's own tau energy. No other gate in this suite
+// differentiates an energy the kernel was told tau at, so this is the one place
+// a tau coefficient that is consistently wrong in the point and orbital terms
+// cannot hide: the screening comparison moves its two sides together.
+TEST(XcGradientTest, TheTauGradientMatchesAFiniteDifferenceOfTheFixturesTauEnergy) {
+    const auto basis = qcx::testing::MakeSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+
+    const excgrid::XcFunctional* functional = excgrid::FindFunctional("tau_x");
+    ASSERT_NE(functional, nullptr);
+    ASSERT_TRUE(functional->RequiredMask().Test(excgrid::Component::TauA));
+
+    const auto state = MakeGeometryState(kPositions, *basis);
+    ASSERT_TRUE(state.has_value());
+
+    const auto blocks = MakeBlocks(*state);
+    const Eigen::MatrixXd alpha = AlphaDensity();
+    const Eigen::MatrixXd beta = BetaDensity();
+
+    const auto assembled = EvaluateXcGradient(blocks,
+                                              FixtureProvider(state->geometry),
+                                              state->evaluator,
+                                              *functional,
+                                              state->envelopes,
+                                              XcIntegrationThresholds::FromEnergyPath({}, 0.0),
+                                              {},
+                                              alpha,
+                                              beta);
+    ASSERT_TRUE(assembled.has_value()) << assembled.error().message;
+
+    const std::size_t coordinates = 3U * kPositions.size();
+    double maxDeviation = 0.0;
+
+    for (std::size_t coordinate = 0; coordinate < coordinates; ++coordinate)
+    {
+        const std::size_t atom = coordinate / 3U;
+        const std::size_t axis = coordinate % 3U;
+
+        auto plus = kPositions;
+        plus[atom][axis] += kFiniteDifferenceStep;
+        auto minus = kPositions;
+        minus[atom][axis] -= kFiniteDifferenceStep;
+
+        const auto plusState = MakeGeometryState(plus, *basis);
+        const auto minusState = MakeGeometryState(minus, *basis);
+        ASSERT_TRUE(plusState.has_value() && minusState.has_value());
+
+        const ReferenceResult plusEnergy =
+            ReferenceEnergyAll(*plusState, *functional, alpha, beta, 0.0);
+        const ReferenceResult minusEnergy =
+            ReferenceEnergyAll(*minusState, *functional, alpha, beta, 0.0);
+
+        // The selection must not move with the displacement, as in the other
+        // finite-difference gates.
+        ASSERT_EQ(plusEnergy.keptShells, minusEnergy.keptShells);
+        ASSERT_EQ(plusEnergy.visitedPoints, minusEnergy.visitedPoints);
+
+        const double difference =
+            (plusEnergy.energy - minusEnergy.energy) / (2.0 * kFiniteDifferenceStep);
+        maxDeviation = std::max(
+            maxDeviation,
+            std::abs(assembled->gradient[static_cast<Eigen::Index>(coordinate)] - difference));
+    }
+
+    RecordProperty("tau gradient agreement (max deviation, Hartree/Bohr)",
+                   Scientific(maxDeviation));
+    EXPECT_LT(maxDeviation, 1e-9)
+        << "the assembled tau gradient and the difference of the fixture's own tau energy "
+           "disagree";
 }
 
 // I1 again, on the walk that ships: the screened selection, with the reference
