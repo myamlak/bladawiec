@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -152,10 +154,17 @@ std::vector<SourceLine> SplitLines(std::string_view text) {
     return lines;
 }
 
-// Parses one double strictly via std::from_chars; trailing junk is an error.
+// Parses one double strictly; trailing junk, a range error and a non-finite
+// value are errors. The standard library's floating-point from_chars is used
+// where the build probes it as usable (QCX_HAS_FLOATING_FROM_CHARS, from
+// basisset/CMakeLists.txt); Apple's libc++ has none, so the fallback parses
+// with std::strtod under the same checks. strtod is locale-sensitive, and no
+// code in this program calls setlocale, so the C locale holds and '.' is the
+// decimal point.
 qcx::Result<double> ParseDouble(const std::string& token,
                                 std::size_t lineNumber,
                                 const char* what) {
+#if QCX_HAS_FLOATING_FROM_CHARS
     double value = 0.0;
     const auto result = std::from_chars(token.data(), token.data() + token.size(), value);
 
@@ -166,6 +175,27 @@ qcx::Result<double> ParseDouble(const std::string& token,
     }
 
     return value;
+#else
+    // strtod also accepts a leading plus and a hexadecimal significand, and
+    // from_chars (chars_format::general) accepts neither: refuse them so a
+    // file reads the same on every platform.
+    if (token.empty() || token.front() == '+' ||
+        (token.size() >= 2 && token[0] == '0' && (token[1] == 'x' || token[1] == 'X')))
+    {
+        return std::unexpected(MakeError(lineNumber, std::string("invalid ") + what));
+    }
+
+    errno = 0;
+    char* parsedEnd = nullptr;
+    const double value = std::strtod(token.c_str(), &parsedEnd);
+
+    if (parsedEnd != token.c_str() + token.size() || errno == ERANGE || !std::isfinite(value))
+    {
+        return std::unexpected(MakeError(lineNumber, std::string("invalid ") + what));
+    }
+
+    return value;
+#endif
 }
 
 // Parses one integer strictly via std::from_chars; trailing junk (including
