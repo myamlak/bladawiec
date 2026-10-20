@@ -115,14 +115,21 @@ std::vector<double> CoordinatesRowMajor(const qcx::molecule::Molecule& molecule)
     return flat;
 }
 
+// The axis a quarter-transform contracts and the basis dimension it runs over.
+struct AxisContraction {
+    std::size_t axis = 0;
+    std::size_t numBasis = 0;
+};
+
 // One quarter-transform of the AO two-electron tensor: contracts one of its
 // four axes with the MO coefficients. The tensor is row-major, so axis k has
 // stride numBasis^(3-k); the three free axes are decoded from a counter and
 // the summed axis is the innermost loop.
 std::vector<double> ContractAxis(const std::vector<double>& tensor,
                                  std::span<const double> coefficients,
-                                 std::size_t numBasis,
-                                 std::size_t axis) {
+                                 AxisContraction contraction) {
+    const std::size_t numBasis = contraction.numBasis;
+    const std::size_t axis = contraction.axis;
     const std::array<std::size_t, 4> strides{
         numBasis * numBasis * numBasis, numBasis * numBasis, numBasis, 1};
     const std::size_t axisStride = strides[axis];
@@ -173,10 +180,10 @@ std::vector<double> ContractAxis(const std::vector<double>& tensor,
 std::vector<double> TransformEriToMo(const std::vector<double>& aoTensor,
                                      std::span<const double> coefficients,
                                      std::size_t numBasis) {
-    const std::vector<double> lastAxis = ContractAxis(aoTensor, coefficients, numBasis, 3);
-    const std::vector<double> thirdAxis = ContractAxis(lastAxis, coefficients, numBasis, 2);
-    const std::vector<double> secondAxis = ContractAxis(thirdAxis, coefficients, numBasis, 1);
-    return ContractAxis(secondAxis, coefficients, numBasis, 0);
+    const std::vector<double> lastAxis = ContractAxis(aoTensor, coefficients, {3, numBasis});
+    const std::vector<double> thirdAxis = ContractAxis(lastAxis, coefficients, {2, numBasis});
+    const std::vector<double> secondAxis = ContractAxis(thirdAxis, coefficients, {1, numBasis});
+    return ContractAxis(secondAxis, coefficients, {0, numBasis});
 }
 
 // The screening structure the response state carries: its geometry digest,

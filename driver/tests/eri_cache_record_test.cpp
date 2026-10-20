@@ -166,16 +166,20 @@ constexpr std::size_t kOneMebibyte = 1048576;
 // which is the instrument the unrestricted row below needs.
 constexpr double kNormalEnergyLegHartree = 1e-8;
 
-std::string RunWithCache(const char* fixture,
-                         const char* methodWord,
-                         std::size_t bytes,
-                         const std::string& extra = {}) {
+// The fixture a run starts from and the method word it writes: the two strings
+// that pick a run, kept together so neither can be passed for the other.
+struct RunChoice {
+    const char* fixture;
+    const char* methodWord;
+};
+
+std::string RunWithCache(RunChoice choice, std::size_t bytes, const std::string& extra = {}) {
     const std::string method =
-        std::string("[method]\ntype = \"") + methodWord +
+        std::string("[method]\ntype = \"") + choice.methodWord +
         "\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\neri_cache_bytes = " +
         std::to_string(bytes) + "\n";
 
-    return std::string(fixture) + method + extra;
+    return std::string(choice.fixture) + method + extra;
 }
 
 const std::string kRhfWithoutKey = std::string(kAsymmetricWater) + R"(
@@ -196,7 +200,7 @@ accuracy = "kNormal"
 
 TEST(EriCacheRecordTest, RestrictedRunFiresTheGrantWholeAndLandsOnTheUnmovedEnergy) {
     const auto run =
-        RunInputText(RunWithCache(kAsymmetricWater, "rhf", kOneMebibyte, kOneThreadTeam));
+        RunInputText(RunWithCache({kAsymmetricWater, "rhf"}, kOneMebibyte, kOneThreadTeam));
 
     ASSERT_TRUE(run.has_value()) << "the cache request failed the run: " << run.error().message;
     EXPECT_NE(run->find("\"converged\": true"), std::string::npos);
@@ -229,7 +233,7 @@ TEST(EriCacheRecordTest, RestrictedRunFiresTheGrantWholeAndLandsOnTheUnmovedEner
 
 TEST(EriCacheRecordTest, UnrestrictedRunOverridesTheCapDerivedGrantOnBothHalves) {
     const auto run =
-        RunInputText(RunWithCache(kUnrestrictedWater, "uhf", kOneMebibyte, kOneThreadTeam));
+        RunInputText(RunWithCache({kUnrestrictedWater, "uhf"}, kOneMebibyte, kOneThreadTeam));
 
     ASSERT_TRUE(run.has_value()) << "the cache request failed the run: " << run.error().message;
     EXPECT_NE(run->find("\"converged\": true"), std::string::npos);
@@ -275,7 +279,7 @@ TEST(EriCacheRecordTest, AGrantTheWorkspaceCannotHoldFiresBelowTheRequest) {
     // fired budget as two different numbers - the clamped flag is the
     // statement, and the effective budget (0 or the clamped grant) is below
     // the request in either arm.
-    std::string toml = RunWithCache(kAsymmetricWater, "rhf", 2147483648);
+    std::string toml = RunWithCache({kAsymmetricWater, "rhf"}, 2147483648);
     toml += R"(
 [resources]
 thread_cap = 1
@@ -336,7 +340,7 @@ TEST(EriCacheRecordTest, AKeyAtTheNullBudgetPathIsRefusedWithTheGateNamed) {
     // The engine's sure-fit clamp reads the workspace budget's remaining
     // bytes; memory_cap_gib = 0 selects the legacy null-budget path, where no
     // such gate exists. The refusal names the key that would re-engage it.
-    std::string toml = RunWithCache(kAsymmetricWater, "rhf", kOneMebibyte);
+    std::string toml = RunWithCache({kAsymmetricWater, "rhf"}, kOneMebibyte);
     toml += R"(
 [resources]
 memory_cap_gib = 0
