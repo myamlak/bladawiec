@@ -1,10 +1,11 @@
 # The properties module (populations, bond orders, multipole
 # moments, condensed indices, density partitioning charges, ESP fits,
 # EDDB delocalization, Nalewajski-Mrozek bond orders, ETS-NOCV, density
-# at the nuclei).
+# at the nuclei, and the total analytic gradient).
 # Consumes the scf results' densities through pure matrix algebra and
 # grid quadrature; links integrals for the overlap/dipole/quadrupole
-# matrices and the shell list. Sits after scf in the module DAG
+# matrices and the shell list, and response/dispersion for the gradient's
+# response state and dispersion term. Sits after scf in the module DAG
 # (check_dag.py).
 add_library(qcx-properties
   src/populations.cpp
@@ -17,17 +18,17 @@ add_library(qcx-properties
   src/nocv.cpp
   src/density_at_nuclei.cpp
   src/qtaim.cpp
+  src/gradient.cpp
 )
 target_include_directories(qcx-properties PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(qcx-properties PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(qcx-properties PUBLIC cxx_std_23)
-# The public headers expose Molecule, BasisSet, MolecularGrid, and Eigen
-# matrix types, so the consumers need those include paths and link
-# targets too; integrals stays implementation-only (the overlap/moment
-# builders and the shell list are called from the .cpp files).
+# The public headers expose Molecule, BasisSet, MolecularGrid, Eigen
+# matrix types, the integrals derivative surface, the SCF reference, the
+# response state and the resolved dispersion request, so consumers need
+# those include paths and link targets too.
 target_link_libraries(qcx-properties
-  PUBLIC qcx-core qcx-molecule qcx-basisset qcx-grid eigen
-  PRIVATE qcx-integrals qcx-scf)
+  PUBLIC qcx-core qcx-molecule qcx-basisset qcx-grid qcx-integrals qcx-scf qcx-response qcx-dispersion eigen)
 
 # PCH is mandatory on every target.
 target_precompile_headers(qcx-properties PRIVATE
@@ -41,6 +42,7 @@ target_precompile_headers(qcx-properties PRIVATE
     <qcx/properties/nocv.hpp>
     <qcx/properties/density_at_nuclei.hpp>
     <qcx/properties/qtaim.hpp>
+    <qcx/properties/gradient.hpp>
     <qcx/grid/molecular_grid.hpp>
     <Eigen/Dense>)
 
@@ -55,8 +57,9 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/nalewajski_test.cpp
         tests/nocv_test.cpp
         tests/density_at_nuclei_test.cpp
-        tests/qtaim_test.cpp)
-    target_link_libraries(qcx-properties-tests PRIVATE qcx-properties qcx-integrals qcx-scf qcx-grid qcx-test-fixtures gtest gtest_main)
+        tests/qtaim_test.cpp
+        tests/gradient_test.cpp)
+    target_link_libraries(qcx-properties-tests PRIVATE qcx-properties qcx-integrals qcx-scf qcx-response qcx-dispersion qcx-grid qcx-test-fixtures gtest gtest_main)
 
     qcx_apply_asan_runtime(qcx-properties-tests)
     qcx_apply_blas_runtime(qcx-properties-tests)
@@ -73,7 +76,8 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         <qcx/properties/nalewajski.hpp>
         <qcx/properties/nocv.hpp>
         <qcx/properties/density_at_nuclei.hpp>
-        <qcx/properties/qtaim.hpp>)
+        <qcx/properties/qtaim.hpp>
+        <qcx/properties/gradient.hpp>)
 
     include(GoogleTest)
     qcx_blas_is_mkl(_qcxMkl)

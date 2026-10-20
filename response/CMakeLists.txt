@@ -3,6 +3,8 @@ add_library(qcx-response
   src/response_solver.cpp
   src/response_gradient.cpp
   src/response_kernel.cpp
+  src/response_band.cpp
+  src/response_state.cpp
 )
 target_include_directories(qcx-response PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(qcx-response PUBLIC cxx_std_23)
@@ -12,7 +14,7 @@ target_compile_features(qcx-response PUBLIC cxx_std_23)
 # against spans, so a consumer that has never heard of Eigen can use it. The
 # physical operator a caller wants (OrbitalHessianOperator) consumes the MO
 # two-electron tensor and the orbital energies as plain spans for that reason.
-target_link_libraries(qcx-response PUBLIC qcx-core)
+target_link_libraries(qcx-response PUBLIC qcx-core qcx-linalg)
 
 # PCH is mandatory on every target; response_solver.hpp carries the operator
 # header, so this one entry covers both translation units.
@@ -24,6 +26,8 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
       tests/response_solver_test.cpp
       tests/response_gradient_test.cpp
       tests/response_kernel_test.cpp
+      tests/response_band_test.cpp
+      tests/response_state_test.cpp
     )
     # The C1 anchor runs the real H2/STO-3G SCF at three field strengths, so the
     # test target pulls scf, integrals, basisset and the shared H2/STO-3G
