@@ -878,9 +878,15 @@ struct TauField {
     std::array<double, 3> gradient{};
 };
 
+// The AO derivative fields TauAtPoint reads: the gradients (3 per AO) and the
+// Hessians (6 per AO), each in the evaluator's layout.
+struct TauDerivatives {
+    std::span<const double> gradients;
+    std::span<const double> hessians;
+};
+
 TauField TauAtPoint(const Eigen::MatrixXd& density,
-                    std::span<const double> gradients,
-                    std::span<const double> hessians,
+                    TauDerivatives derivatives,
                     std::span<const std::size_t> slots) {
     TauField field;
 
@@ -895,16 +901,16 @@ TauField TauAtPoint(const Eigen::MatrixXd& density,
 
             for (std::size_t axis = 0; axis < 3; ++axis)
             {
-                densityGradient[axis] += element * gradients[3 * mu + axis];
+                densityGradient[axis] += element * derivatives.gradients[3 * mu + axis];
             }
         }
 
         for (std::size_t axis = 0; axis < 3; ++axis)
         {
-            field.tau += 0.5 * gradients[3 * nu + axis] * densityGradient[axis];
+            field.tau += 0.5 * derivatives.gradients[3 * nu + axis] * densityGradient[axis];
         }
 
-        const double* hessian = hessians.data() + 6 * nu;
+        const double* hessian = derivatives.hessians.data() + 6 * nu;
         field.gradient[0] += densityGradient[0] * hessian[0] + densityGradient[1] * hessian[1] +
                              densityGradient[2] * hessian[2];
         field.gradient[1] += densityGradient[0] * hessian[1] + densityGradient[1] * hessian[3] +
@@ -978,8 +984,9 @@ TauScreeningError MeasureTauScreening(const XcGridEngine& engine,
             for (const Eigen::MatrixXd* density : {&densityAlpha, &densityBeta})
             {
                 const TauField dense =
-                    TauAtPoint(*density, denseGradients, denseHessians, allSlots);
-                const TauField screened = TauAtPoint(*density, gradients, hessians, slots);
+                    TauAtPoint(*density, TauDerivatives{denseGradients, denseHessians}, allSlots);
+                const TauField screened =
+                    TauAtPoint(*density, TauDerivatives{gradients, hessians}, slots);
 
                 error.tauWeighted +=
                     std::abs(quadratureWeight) * std::abs(screened.tau - dense.tau);

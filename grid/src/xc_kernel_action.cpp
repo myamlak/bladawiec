@@ -117,21 +117,30 @@ double ComponentValue(excgrid::Component id, const PointDensity& field, double s
     }
 }
 
+// The trial vector's total response at one point, as the three pair sums the
+// kernel contracts: the density value, the response gradient against the
+// density gradient, and the kinetic-energy density.
+struct DensityResponse {
+    double u = 0.0;
+    double gradientDirection = 0.0;
+    double tau = 0.0;
+};
+
 // One component of the density response to a unit amplitude x: the component's
 // derivative in the same identifier order the kernel expects.
-double ResponseComponent(excgrid::Component id, double u, double gradientDirection, double tau) {
+double ResponseComponent(excgrid::Component id, const DensityResponse& response) {
     switch (id)
     {
     case excgrid::Component::RhoA:
     case excgrid::Component::RhoB:
-        return 2.0 * u;
+        return 2.0 * response.u;
     case excgrid::Component::SigmaAa:
     case excgrid::Component::SigmaAb:
     case excgrid::Component::SigmaBb:
-        return 4.0 * gradientDirection;
+        return 4.0 * response.gradientDirection;
     case excgrid::Component::TauA:
     case excgrid::Component::TauB:
-        return tau;
+        return response.tau;
     default:
         return 0.0;
     }
@@ -139,6 +148,10 @@ double ResponseComponent(excgrid::Component id, double u, double gradientDirecti
 
 } // namespace
 
+// The parameter order is the constructor's declaration in the class, where
+// each call site reads it by name; BEGIN/END because the diagnostic lands on a
+// later parameter line of the multi-line definition.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 XcKernelAction::XcKernelAction(std::span<const excgrid::Block> blocks,
                                const AoEvaluator& evaluator,
                                const excgrid::XcFunctional& functional,
@@ -157,6 +170,8 @@ XcKernelAction::XcKernelAction(std::span<const excgrid::Block> blocks,
     _shellWeights(std::move(shellWeights)), _active(std::move(active)), _numOccupied(numOccupied),
     _numVirtual(numVirtual), _numOrbitals(numOccupied + numVirtual), _aoCount(aoCount),
     _screeningTolerance(screeningTolerance), _needsGradient(needsGradient) {}
+
+// NOLINTEND(bugprone-easily-swappable-parameters)
 
 qcx::Result<XcKernelAction> XcKernelAction::Create(const XcGridEngine& engine,
                                                    const Eigen::MatrixXd& moCoefficients,
@@ -436,8 +451,8 @@ qcx::Result<void> XcKernelAction::Apply(std::span<const double> amplitudes,
 
             for (std::size_t slot = 0; slot < active; ++slot)
             {
-                rightHandSide[slot] =
-                    ResponseComponent(_active[slot], uTotal, gradientDirection, tauTotal);
+                rightHandSide[slot] = ResponseComponent(
+                    _active[slot], DensityResponse{uTotal, gradientDirection, tauTotal});
             }
 
             const excgrid::KernelStatus status = _functional->EvaluatePointWithSecondDerivatives(

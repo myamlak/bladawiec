@@ -248,6 +248,13 @@ public:
 
     ResponseState(const ResponseState&) = delete;
     ResponseState& operator=(const ResponseState&) = delete;
+    /// Moves every member, the operator included: moving a vector transfers
+    /// its buffer rather than copying it, so the spans the operator holds into
+    /// the state's arrays stay valid and point into the new state's storage.
+    ///
+    /// Move-assignment is deleted instead: an assigned-into state would still
+    /// carry an operator and solvers bound to its old buffers, so replacing a
+    /// reference is Rebase's job, not assignment's.
     ResponseState(ResponseState&&) = default;
     ResponseState& operator=(ResponseState&&) = delete;
 

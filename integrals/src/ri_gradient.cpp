@@ -132,13 +132,11 @@ int PopCount(unsigned mask) noexcept {
 
 /// Gathers a target tuple's coordinates at the positions one sub-tuple mask
 /// names, in ascending position order.
-/// \param coordinates The flat tuple-major coordinate list.
-/// \param offset The target tuple's first coordinate.
+/// \param coordinates The tuple's coordinates in order.
 /// \param mask The sub-tuple mask.
 /// \param subTuple Out: the sub-tuple's coordinates.
 /// \returns The sub-tuple's size (the mask's population count).
 std::size_t GatherSubTuple(std::span<const std::size_t> coordinates,
-                           std::size_t offset,
                            unsigned mask,
                            std::span<std::size_t> subTuple) noexcept {
     std::size_t count = 0;
@@ -148,7 +146,7 @@ std::size_t GatherSubTuple(std::span<const std::size_t> coordinates,
     {
         if ((bits & 1U) != 0U)
         {
-            subTuple[count] = coordinates[offset + position];
+            subTuple[count] = coordinates[position];
             ++count;
         }
     }
@@ -525,6 +523,13 @@ double AccumulateExchangeDerivative(std::span<const double> block,
     return skeleton;
 }
 
+/// The ordered multiplicities a canonical shell pair stands for: how many
+/// target orientations each side of the quartet contributes.
+struct PairMultiplicities {
+    double bra = 1.0; ///< The bra pair's ordered multiplicity.
+    double ket = 1.0; ///< The ket pair's ordered multiplicity.
+};
+
 /// The Coulomb derivative Fock block's accumulation into one coordinate's AO
 /// matrix: J'_uv = sum_ls D_ls (uv|ls)'. The canonical pair pair stands for
 /// the ordered target orientations - target (a, b) with density (c, d), and
@@ -535,17 +540,14 @@ double AccumulateExchangeDerivative(std::span<const double> block,
 /// \param shape The four shells' function counts.
 /// \param density The density matrix.
 /// \param offsets The four shells' first functions.
-/// \param braMultiplicity The bra pair's ordered multiplicity.
-/// \param ketMultiplicity The ket pair's ordered multiplicity.
+/// \param multiplicities The bra and ket pairs' ordered multiplicities.
 /// \param samePair True when the bra and ket canonical pairs coincide.
 /// \param target In-out: the coordinate's AO J' matrix.
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): shape, offsets, the multiplicities.
 void AccumulateCoulombDerivativeBlock(std::span<const double> block,
                                       const std::array<std::size_t, 4>& shape,
                                       const Eigen::MatrixXd& density,
                                       const std::array<std::size_t, 4>& offsets,
-                                      double braMultiplicity,
-                                      double ketMultiplicity,
+                                      PairMultiplicities multiplicities,
                                       bool samePair,
                                       Eigen::MatrixXd& target) {
     const std::size_t nA = shape[0];
@@ -573,7 +575,7 @@ void AccumulateCoulombDerivativeBlock(std::span<const double> block,
                     const double value = block[EriBlockIndex(fa, fb, fc, fd, nA, nB, nC, nD)];
                     const double densityB = density(static_cast<Eigen::Index>(oC + fc),
                                                     static_cast<Eigen::Index>(oD + fd));
-                    const double weightA = ketMultiplicity * densityB;
+                    const double weightA = multiplicities.ket * densityB;
                     target(static_cast<Eigen::Index>(oA + fa),
                            static_cast<Eigen::Index>(oB + fb)) += weightA * value;
 
@@ -585,7 +587,7 @@ void AccumulateCoulombDerivativeBlock(std::span<const double> block,
 
                     if (!samePair)
                     {
-                        const double weightB = braMultiplicity * densityA;
+                        const double weightB = multiplicities.bra * densityA;
                         target(static_cast<Eigen::Index>(oC + fc),
                                static_cast<Eigen::Index>(oD + fd)) += weightB * value;
 
@@ -673,7 +675,7 @@ struct RiDerivativeWalk {
                 continue;
             }
 
-            const std::size_t size = GatherSubTuple(target, 0, mask, subTuple);
+            const std::size_t size = GatherSubTuple(target, mask, subTuple);
             Eigen::VectorXd accumulated =
                 Eigen::VectorXd::Zero(static_cast<Eigen::Index>(vectorSize));
             auto walked = internal::AccumulateAuxiliaryDensityDerivative(
@@ -710,7 +712,7 @@ struct RiDerivativeWalk {
 
                 for (unsigned sub = mask; sub != 0U; sub = (sub - 1U) & mask)
                 {
-                    const std::size_t subSize = GatherSubTuple(target, 0, sub, subTuple);
+                    const std::size_t subSize = GatherSubTuple(target, sub, subTuple);
                     Eigen::VectorXd applied =
                         Eigen::VectorXd::Zero(static_cast<Eigen::Index>(vectorSize));
                     auto appliedMetric = internal::ApplyMetricDerivative(
@@ -1826,14 +1828,15 @@ qcx::Result<TwoElectronFockDerivative> ComputeTwoElectronFockDerivative(
                 {
                     const std::span<const double> block(derivatives.data() + coordinate * elements,
                                                         elements);
-                    AccumulateCoulombDerivativeBlock(block,
-                                                     shape,
-                                                     densityMatrix,
-                                                     offsets,
-                                                     static_cast<double>(braMultiplicity),
-                                                     static_cast<double>(ketMultiplicity),
-                                                     braIndex == ketIndex,
-                                                     coulombAO[coordinates[coordinate]]);
+                    AccumulateCoulombDerivativeBlock(
+                        block,
+                        shape,
+                        densityMatrix,
+                        offsets,
+                        PairMultiplicities{static_cast<double>(braMultiplicity),
+                                           static_cast<double>(ketMultiplicity)},
+                        braIndex == ketIndex,
+                        coulombAO[coordinates[coordinate]]);
                 }
             }
 

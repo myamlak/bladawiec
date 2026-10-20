@@ -225,7 +225,6 @@ endif()
 # sources and their own SIMD-heavy headers.
 if (QCX_ARCH_X86_64)
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
     # Non-x86-64: no AVX2/FMA/F16C tier exists, and neither TU defines it.
@@ -239,10 +238,14 @@ else()
 endif()
 
 # The split (boys 5.0.0) makes a group header precede the front door in the unit that names it,
-# and this target's PCH parses the front door first: these two submodule units open a group of
-# their own and are therefore compiled without it.
+# and this target's PCH parses the front door first: these submodule units open a group of their
+# own and are therefore compiled without it. boys_orders_simd.cpp is skipped on every
+# architecture, not only where its SIMD tier exists: its own header opens six groups, and the
+# PCH's front door settles their markers first, so AppleClang reports the group specializations
+# as after instantiation.
 set_source_files_properties(${_qcxBoysExt}/src/boys.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(${_qcxBoysExt}/src/boys_probe.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # The Fock-contraction kernel's AVX2 copy. The kernel body is ONE template
 # (internal/fock_contract_kernel.hpp); the scalar copy instantiates inside

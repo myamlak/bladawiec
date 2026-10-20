@@ -203,12 +203,18 @@ double SecondDifference(const KernelFixture& fixture,
     return (plusPlus - plusMinus - minusPlus + minusMinus) / (4.0 * step * step);
 }
 
+// The capability report the synthetic functional returns.
+struct CapabilityReport {
+    excgrid::ComponentMask required; ///< The components the functional reads.
+    excgrid::ComponentMask spanned; ///< The components its tier spans.
+};
+
 // A functional whose masks are the test's: the action's refusal path reads the
 // capability report and nothing else.
 class SyntheticFunctional final : public excgrid::XcFunctional {
 public:
-    SyntheticFunctional(excgrid::ComponentMask required, excgrid::ComponentMask spanned) :
-        _required(required), _spanned(spanned) {}
+    explicit SyntheticFunctional(CapabilityReport report) :
+        _required(report.required), _spanned(report.spanned) {}
 
     [[nodiscard]] bool UsesGradient() const override {
         return false;
@@ -287,8 +293,8 @@ TEST(XcKernelActionTest, AFunctionalWithNoTierIsRefusedByName) {
     const auto fixture = MakeKernelFixture("slater");
     ASSERT_TRUE(fixture.has_value());
 
-    const SyntheticFunctional functional{excgrid::ComponentMask::Collinear(),
-                                         excgrid::ComponentMask{}};
+    const SyntheticFunctional functional{
+        CapabilityReport{excgrid::ComponentMask::Collinear(), excgrid::ComponentMask{}}};
 
     const auto action = XcKernelAction::Create(fixture->engine.Grid().Blocks(),
                                                fixture->engine.Evaluator(),
@@ -310,8 +316,8 @@ TEST(XcKernelActionTest, ATierThatDoesNotSpanTheRequiredComponentsIsRefusedByNam
     const auto fixture = MakeKernelFixture("slater");
     ASSERT_TRUE(fixture.has_value());
 
-    const SyntheticFunctional functional{excgrid::ComponentMask::Collinear(),
-                                         DensityAndGradientTier()};
+    const SyntheticFunctional functional{
+        CapabilityReport{excgrid::ComponentMask::Collinear(), DensityAndGradientTier()}};
 
     const auto action = XcKernelAction::Create(fixture->engine.Grid().Blocks(),
                                                fixture->engine.Evaluator(),

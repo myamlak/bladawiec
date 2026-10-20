@@ -164,16 +164,20 @@ qcx::Result<qcx::molecule::Molecule> DisplacedBase(const qcx::molecule::Molecule
     return Moved(base, coordinates, kBaseShifts);
 }
 
+/// One flat coordinate's displacement: which coordinate and by how much.
+struct Displacement {
+    std::size_t flatCoordinate = 0; ///< The coordinate (3 * atom + axis).
+    double delta = 0.0; ///< The displacement, Bohr.
+};
+
 /// The geometry with one flat coordinate displaced.
 /// \param base The base molecule.
-/// \param flatCoordinate The coordinate (3 * atom + axis) to displace.
-/// \param delta The displacement (Bohr).
+/// \param displacement The flat coordinate and its displacement.
 /// \returns The displaced molecule, or an Error.
 qcx::Result<qcx::molecule::Molecule> MakeDisplaced(const qcx::molecule::Molecule& base,
-                                                   std::size_t flatCoordinate,
-                                                   double delta) {
-    const std::array<std::size_t, 1> coordinates = {flatCoordinate};
-    const std::array<double, 1> deltas = {delta};
+                                                   Displacement displacement) {
+    const std::array<std::size_t, 1> coordinates = {displacement.flatCoordinate};
+    const std::array<double, 1> deltas = {displacement.delta};
     return Moved(base, coordinates, deltas);
 }
 
@@ -325,8 +329,8 @@ TEST(OneElectronFockDerivativeTest, TheOverlapBlockIsTheFiniteDifference) {
 
     for (std::size_t flat = 0; flat < 3 * fixture->molecule.AtomCount(); ++flat)
     {
-        auto plus = MakeDisplaced(fixture->molecule, flat, kFiniteDifferenceStep);
-        auto minus = MakeDisplaced(fixture->molecule, flat, -kFiniteDifferenceStep);
+        auto plus = MakeDisplaced(fixture->molecule, {flat, kFiniteDifferenceStep});
+        auto minus = MakeDisplaced(fixture->molecule, {flat, -kFiniteDifferenceStep});
 
         ASSERT_TRUE(plus.has_value()) << plus.error().message;
         ASSERT_TRUE(minus.has_value()) << minus.error().message;
@@ -398,8 +402,8 @@ TEST(OneElectronFockDerivativeTest, TheHamiltonianBlockIsTheFiniteDifference) {
 
     for (std::size_t flat = 0; flat < 3 * fixture->molecule.AtomCount(); ++flat)
     {
-        auto plus = MakeDisplaced(fixture->molecule, flat, kFiniteDifferenceStep);
-        auto minus = MakeDisplaced(fixture->molecule, flat, -kFiniteDifferenceStep);
+        auto plus = MakeDisplaced(fixture->molecule, {flat, kFiniteDifferenceStep});
+        auto minus = MakeDisplaced(fixture->molecule, {flat, -kFiniteDifferenceStep});
 
         ASSERT_TRUE(plus.has_value()) << plus.error().message;
         ASSERT_TRUE(minus.has_value()) << minus.error().message;
