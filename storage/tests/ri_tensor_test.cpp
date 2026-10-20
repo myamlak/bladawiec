@@ -62,7 +62,7 @@ TEST(RiTensorTest, RoundTripIsBitIdentical) {
     if (qcx::testing::IsFastOnlyMode() || !qcx::integrals::SupportsL(3))
     {
         GTEST_SKIP() << "the RI build is a full integrals sweep; the rifit f shells "
-                        "exceed this build's kMaxEngineL (CI lmax=2)";
+                        "exceed this build's kMaxEngineL (a reduced-size build; CI builds 6)";
     }
 
     const auto molecule = MakeH2oCcpvdz();
@@ -106,7 +106,7 @@ TEST(RiTensorTest, LoadRejectsWrongAux) {
     if (qcx::testing::IsFastOnlyMode() || !qcx::integrals::SupportsL(3))
     {
         GTEST_SKIP() << "the RI build is a full integrals sweep; the rifit f shells "
-                        "exceed this build's kMaxEngineL (CI lmax=2)";
+                        "exceed this build's kMaxEngineL (a reduced-size build; CI builds 6)";
     }
 
     const auto molecule = MakeH2oCcpvdz();

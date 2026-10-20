@@ -29,6 +29,7 @@
 // sparse grid.
 
 #include "alkane_sto3g.hpp"
+#include "fast_test_mode.hpp"
 #include "h2o_sto3g.hpp"
 #include "internal/fock_screen.hpp"
 #include "internal/footprint.hpp"
@@ -182,8 +183,8 @@ END
 // functions at 24 waters). The band's positive fast-light floor gap comes
 // from the kWaterSto3g orbital (the 5-function O shells make 2 x tensor +
 // riMatrix - slice ~ 320 MB), NOT from aux angular momentum - d shells are
-// the ceiling, so the pins also run on the CI Lmax=2 builds (a guard
-// would be needed only for l >= 3 aux shells).
+// the ceiling, so the pins run even on a reduced build with a ceiling of 2 (a
+// guard would be needed only for l >= 3 aux shells).
 inline constexpr std::string_view kRiBandAux = R"(BASIS "ao basis" SPHERICAL PRINT
 O    S
       2.5000000000E+00       3.0000000000E-01
@@ -1427,8 +1428,8 @@ TEST(Footprint, RiFirstIterationFiresTheLightRung) {
     // shells widen the gap to ~ 320 MB (2 x tensorBytes + riMatrixBytes -
     // sliceBytes), a documented deviation from the literal family the
     // band was drafted on.
-    // The aux stays d-max (l <= 2), so the pin runs on the CI Lmax=2
-    // builds.
+    // The aux stays d-max (l <= 2), so the pin runs even on a reduced build
+    // with a ceiling of 2.
     auto molecule = MakeWaterCluster(24);
     ASSERT_TRUE(molecule.has_value());
     auto basis = qcx::basisset::ParseNwchemText(kWaterSto3g);
@@ -3196,6 +3197,15 @@ TEST(Footprint, LightPathExclusionBoundsTheChunkByTheCountedPeakRow) {
 }
 
 TEST(Footprint, RiJkNestedExchangeReachesItsOwnLightRungOnTheCountedPreGate) {
+    // Debug-slow by two orders of magnitude: this case was still running past
+    // 1200 s in Debug against 27.6 s in Release on this tree 2026-09-20, so the
+    // routine Debug selection skips it and every Release leg at the shipped
+    // ceiling runs it.
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";
@@ -3829,6 +3839,13 @@ TEST(Footprint, CountSchwarzSurvivingRiTasksSparseGridShrinksTheDenseReserve) {
 // expose. Both rungs are printed because the engine's choice between them is
 // the budget decision's, not this print's.
 TEST(RiFootprint, PrintsTheEngineCreateTimeFootprintAtC24H50Def2Svp) {
+    // Release-only for the same reason as the sibling above: measured at 830 s
+    // in Debug against 6.25 s in Release on this tree 2026-09-20.
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";
