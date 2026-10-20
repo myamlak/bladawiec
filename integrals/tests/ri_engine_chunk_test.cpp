@@ -124,8 +124,8 @@ TEST(RiEngineChunkTest, ChunkedEqualsMonolithicOnTheSameTasks) {
         GTEST_SKIP() << "heavy numerical test: Release-only";
     }
 
-    // The vendored jfit carries g shells on O: the CI Lmax=2 builds cannot
-    // instantiate the classes those need.
+    // The vendored jfit carries g shells on O: a build below kMaxEngineL 4
+    // cannot instantiate the classes those need. CI builds 6, so it runs there.
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";

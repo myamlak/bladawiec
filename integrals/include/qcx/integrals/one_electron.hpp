@@ -3,6 +3,7 @@
 #include "qcx/backend/tags.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/error.hpp"
+#include "qcx/integrals/screening.hpp"
 #include "qcx/memory/tensor.hpp"
 #include "qcx/molecule/molecule.hpp"
 
@@ -340,5 +341,88 @@ qcx::Result<OneElectronGradient> ComputeOneElectronGradient(
     const qcx::basisset::BasisSet& basisSet,
     const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& density,
     const OneElectronGradientOptions& options = {});
+
+/// What one derivative Fock-block assembly counted.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct OneElectronFockDerivativeCounts {
+    std::size_t orbitalPairs = 0; ///< Canonical shell pairs walked.
+    std::size_t pairChunks = 0; ///< Pair-data chunks materialized.
+    std::size_t overlapTuples = 0; ///< Overlap derivative tuples built.
+    std::size_t hamiltonianTuples = 0; ///< Kinetic and attraction derivative tuples built.
+};
+
+/// One derivative Fock-block walk's settings.
+/// \ingroup qcx-integrals
+struct OneElectronFockDerivativeOptions {
+    /// The cap on materialized pair data per chunk, in bytes - the matrix
+    /// builders' own chunk policy, exactly as ComputeOneElectronGradient
+    /// reads it. Zero walks one pair at a time.
+    std::size_t maxPairChunkBytes = 512 * 1024 * 1024;
+    /// The screening structure a caller may carry between geometries. This
+    /// walk forms no pair screen - every canonical pair contributes - so the
+    /// field is accepted for the shared options shape of the derivative
+    /// Fock-block entries and does not change a number here.
+    FockDerivativeWarmStart warmStart;
+};
+
+/// The one-electron derivative Fock blocks in the molecular-orbital basis.
+///
+/// The returned blocks are the fixed-density derivatives the coupled-
+/// perturbed SCF's right-hand side reads: the overlap derivative in the
+/// whole MO basis and the core-Hamiltonian (kinetic plus nuclear-attraction)
+/// derivative in the occupied-virtual block.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct OneElectronFockDerivative {
+    /// C^T dS/dR C: 3N blocks of nMo x nMo, displacement-major and
+    /// row-major inside the block: entry (d * nMo + p) * nMo + q is
+    /// (C^T dS/dR_d C)_pq. nMo is numOccupied + numVirtual; the orbital
+    /// columns are the caller's MO coefficients' columns, in their order.
+    std::vector<double> moOverlapDerivative;
+    /// dH/dR in the occupied-virtual block, H = T + V: row
+    /// (3 * atom + axis) * numVirtual + a, column i, with a the virtual
+    /// orbital numOccupied + a and i the occupied orbital i. Displacement-
+    /// major, one row block per flat coordinate.
+    Eigen::MatrixXd occupiedVirtual;
+    /// The counted cost of this assembly.
+    OneElectronFockDerivativeCounts counts;
+};
+
+/// Assembles the one-electron derivative Fock blocks in the MO basis.
+///
+/// One walk of the canonical shell pairs, in the chunked shape
+/// ComputeOneElectronGradient walks: each pair's overlap, kinetic and
+/// nuclear-attraction derivative blocks come from the one-electron
+/// derivative tier, are scattered into a 3N x nBasis x nBasis AO buffer in
+/// the pair's own triangle (mirrored for an off-diagonal pair, because the
+/// matrices are symmetric), and are transformed once per displacement at the
+/// end, (C^T X' C). The alternative - transforming each pair block as it is
+/// built - costs a pair-sized matrix product per pair per displacement; the
+/// AO buffer costs 2 x 3N x nBasis^2 bytes and one nMo-column transform per
+/// displacement.
+///
+/// The overlap derivative is returned whole because the orthonormality term
+/// reads every occupied-occupied and virtual-virtual entry as well.
+/// \param molecule Molecule providing the atom coordinates (Bohr).
+/// \param basisSet Basis set; every shell must satisfy l <= 6 (the parser cap).
+/// \param moCoefficients The MO coefficients, row-major, nBasis x nMo with
+/// nMo = numOccupied + numVirtual: entry p * nMo + q is C_{p q}.
+/// \param numOccupied The occupied orbital count (the leading columns).
+/// \param numVirtual The virtual orbital count (the following columns).
+/// \param options The walk's settings.
+/// \returns The MO-basis blocks and the counted cost, or an Error:
+/// kInvalidArgument for a coefficient span that is not nBasis x
+/// (numOccupied + numVirtual) or a virtual count that leaves the occupied
+/// block past the basis, and the pair and derivative builders' own errors
+/// otherwise.
+/// \ingroup qcx-integrals
+qcx::Result<OneElectronFockDerivative> ComputeOneElectronFockDerivative(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basisSet,
+    std::span<const double> moCoefficients,
+    std::size_t numOccupied,
+    std::size_t numVirtual,
+    const OneElectronFockDerivativeOptions& options = {});
 
 } // namespace qcx::integrals

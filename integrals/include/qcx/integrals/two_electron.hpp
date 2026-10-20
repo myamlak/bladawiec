@@ -5,10 +5,13 @@
 #include "qcx/error.hpp"
 #include "qcx/integrals/accuracy.hpp"
 #include "qcx/integrals/eri_dense.hpp"
+#include "qcx/integrals/screening.hpp"
 #include "qcx/memory/tensor.hpp"
 #include "qcx/molecule/molecule.hpp"
 
 #include <Eigen/Core>
+#include <span>
+#include <vector>
 
 namespace qcx::integrals {
 
@@ -148,5 +151,107 @@ qcx::Result<EriGradient> ComputeEriGradient(
     const qcx::basisset::BasisSet& basisSet,
     const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& density,
     const EriGradientOptions& options = {});
+
+/// The derivative Fock-block walk's screening settings.
+/// \ingroup qcx-integrals
+struct TwoElectronFockDerivativeOptions {
+    /// The accuracy preset whose Schwarz threshold the screen reads, exactly
+    /// as ComputeEriGradient reads it.
+    AccuracyPreset accuracy = AccuracyPreset::kNormal;
+    /// Screen the canonical quartets. Off, every quartet is differentiated -
+    /// the exact contraction. On, the Coulomb half keeps exactly the
+    /// quartets ComputeEriGradient keeps, and the two Fock-block halves keep
+    /// their own conservative supersets.
+    bool useDensityScreening = true;
+    /// A screening structure carried from another geometry: when its vectors
+    /// are non-empty the walk lifts it (LiftFockDerivativeWarmStart) instead
+    /// of recomputing the bounds, and reads its threshold when that threshold
+    /// is positive. Empty computes the bounds at this geometry.
+    FockDerivativeWarmStart warmStart;
+};
+
+/// What one derivative Fock-block walk counted.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct TwoElectronFockDerivativeCounts {
+    std::size_t braPairs = 0; ///< Canonical bra pairs walked.
+    std::size_t ketPairs = 0; ///< Canonical ket pairs walked.
+    std::size_t quartets = 0; ///< Quartets differentiated.
+    std::size_t screenedQuartets = 0; ///< Quartets every predicate discarded.
+};
+
+/// The two-electron derivative Fock blocks at fixed density.
+///
+/// The exchange blocks carry the exchange matrix itself, not the Fock
+/// matrix's negative contribution: an SCF reader applies its own -c_HF/2
+/// factor. Both AO matrices are symmetric; the returned MO blocks are their
+/// occupied-virtual contractions.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct TwoElectronFockDerivative {
+    /// (C^T J' C) in the occupied-virtual block, J'_uv = sum_ls D_ls
+    /// (uv|ls)': row (3 * atom + axis) * numVirtual + a, column i, with a
+    /// the virtual orbital numOccupied + a and i the occupied orbital i.
+    Eigen::MatrixXd coulombOccupiedVirtual;
+    /// (C^T K' C) in the occupied-virtual block, K'_uv = sum_ls D_ls
+    /// (ul|vs)'. Same row and column mapping as the Coulomb block.
+    Eigen::MatrixXd exchangeOccupiedVirtual;
+    /// The Coulomb skeleton gradient, dE_J/dR for
+    /// E_J = 1/2 sum D D (uv|ls), 3N atom-major entries (Hartree/Bohr) - the
+    /// quantity ComputeEriGradient returns, accumulated on the same blocks
+    /// and weights.
+    Eigen::VectorXd coulombSkeleton;
+    /// The exchange skeleton gradient, dE_K/dR for
+    /// E_K = 1/2 sum D D (ul|vs), 3N atom-major entries.
+    Eigen::VectorXd exchangeSkeleton;
+    /// The Coulomb energy this walk's skeleton differentiates, Hartree.
+    double coulombEnergy = 0.0;
+    /// The exchange energy, Hartree, as the positive half-trace
+    /// 1/2 sum D K the SCF subtracts.
+    double exchangeEnergy = 0.0;
+    /// The counted cost of this assembly.
+    TwoElectronFockDerivativeCounts counts;
+};
+
+/// Assembles the two-electron derivative Fock blocks and skeletons.
+///
+/// One walk of the canonical shell-pair pairs, each quartet differentiated
+/// through the two-electron derivative tier. Three contractions run on every
+/// retained block: the Coulomb skeleton (the energy gradient's own weights),
+/// the Coulomb derivative Fock block J', and the exchange derivative Fock
+/// block K' - the latter two through the direct-exchange kernel's four
+/// targets. The J' and K' AO matrices are accumulated per displacement and
+/// transformed once, (C^T X' C); the skeletons are accumulated directly.
+///
+/// The Coulomb half keeps exactly the quartets ComputeEriGradient keeps, and
+/// accumulates the same weights in the same order, so its skeleton and
+/// energy reproduce that entry's. The J' and K' halves read conservative
+/// supersets of that screen, because their weights carry the MO
+/// coefficients.
+///
+/// \param molecule Molecule providing the atom coordinates (Bohr).
+/// \param basisSet Basis set; every shell must satisfy l <= kMaxEngineL
+/// (kUnimplemented otherwise).
+/// \param density The density matrix, nBasis x nBasis, symmetric, in the
+/// basis set's function order.
+/// \param moCoefficients The MO coefficients, row-major, nBasis x nMo with
+/// nMo = numOccupied + numVirtual.
+/// \param numOccupied The occupied orbital count (the leading columns).
+/// \param numVirtual The virtual orbital count (the following columns).
+/// \param options The walk's settings.
+/// \returns The MO blocks, the skeletons, the energies and the counted cost,
+/// or an Error: kInvalidArgument for a density or coefficient shape that does
+/// not match the basis set, a carried screening structure of the wrong shape,
+/// kUnimplemented for a shell beyond kMaxEngineL or a quartet past the
+/// derivative tier's Hermite table, and the builders' own errors otherwise.
+/// \ingroup qcx-integrals
+qcx::Result<TwoElectronFockDerivative> ComputeTwoElectronFockDerivative(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basisSet,
+    const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& density,
+    std::span<const double> moCoefficients,
+    std::size_t numOccupied,
+    std::size_t numVirtual,
+    const TwoElectronFockDerivativeOptions& options = {});
 
 } // namespace qcx::integrals
