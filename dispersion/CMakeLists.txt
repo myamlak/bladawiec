@@ -1,8 +1,9 @@
 # The qcx-dispersion module (geometry-only London dispersion corrections).
 #
-# Provides the D3 zero-damping and D4 two-body dispersion energies the run
-# driver adds to the total: the request vocabulary, the parameter resolution
-# and the evaluation seam onto excgrid. Sits after grid in the module DAG
+# Provides the D3 zero-damping energy and its coordinate gradient and the D4
+# two-body energy the run driver adds to the total: the request vocabulary,
+# the parameter resolution and the evaluation seam onto excgrid. Sits after
+# grid in the module DAG
 # (check_dag.py): the geometry translation and the excgrid error translation
 # are grid's, and io (which carries the parsed request in RunInput) and the
 # driver come after it. The module depends on neither io nor scf - an input
@@ -24,7 +25,8 @@ target_precompile_headers(qcx-dispersion PRIVATE
 
 if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-dispersion-tests
-        tests/dispersion_test.cpp)
+        tests/dispersion_test.cpp
+        tests/dispersion_gradient_test.cpp)
     target_link_libraries(qcx-dispersion-tests PRIVATE
         qcx-dispersion gtest gtest_main)
 

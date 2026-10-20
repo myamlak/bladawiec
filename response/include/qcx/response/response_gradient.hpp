@@ -220,6 +220,18 @@ struct OrbitalResponse {
 };
 
 /// \ingroup qcx-response
+/// A solved response together with what the solve itself reported.
+///
+/// The response entry points return the response alone; this one keeps the
+/// solver's report beside it, because a warm-start claim is only evidence when
+/// the report travels with the answer. Public aggregate: the fields are the API
+/// (aggregate-struct exemption).
+struct OrbitalResponseReport {
+    OrbitalResponse response; ///< The solved response.
+    ResponseSolveReport solve; ///< The solve that produced it.
+};
+
+/// \ingroup qcx-response
 /// The handle a solved response is filed under, and the thing that makes a stale
 /// one refusable.
 ///
@@ -341,6 +353,32 @@ qcx::Result<void> OrbitalGradient(std::span<const double> moFock,
 /// \returns The response, or an Error - kInvalidArgument on a shape mismatch,
 /// otherwise whatever the assembly, the solve or the preconditioner refused.
 qcx::Result<OrbitalResponse> SolveNuclearDisplacementResponse(
+    const OrbitalHessianOperator& hessian,
+    const NuclearDisplacementRightHandSide& rightHandSide,
+    const FockDerivativeRequest& request,
+    std::span<const double> moOverlapDerivative,
+    const ResponseReferenceIdentity& reference,
+    ResponseSolver<OrbitalHessianOperator>& solver);
+
+/// \ingroup qcx-response
+/// Solves the nuclear-displacement response and keeps the solver's report.
+///
+/// The same solve as SolveNuclearDisplacementResponse - it is that function's
+/// own walk, with the report the solver returned carried beside the response
+/// rather than dropped. The solver's report is what makes warm-startedness,
+/// iteration counts and the final residual observable; the response alone
+/// cannot say whether the previous displacement's answer was reused.
+/// \param hessian The orbital-Hessian operator at the reference.
+/// \param rightHandSide The assembled right-hand side.
+/// \param request The reference quantities and the displacement.
+/// \param moOverlapDerivative C^T S^R C, the MO-basis overlap derivative,
+/// numOrbitals^2 row-major.
+/// \param reference The reference identity to stamp on the answer.
+/// \param solver The solver to run; its state is what a displacement sweep
+/// reuses.
+/// \returns The response and the solve report, or the same Errors as
+/// SolveNuclearDisplacementResponse.
+qcx::Result<OrbitalResponseReport> SolveNuclearDisplacementResponseWithReport(
     const OrbitalHessianOperator& hessian,
     const NuclearDisplacementRightHandSide& rightHandSide,
     const FockDerivativeRequest& request,

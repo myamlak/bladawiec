@@ -49,14 +49,15 @@ qcx::Result<void> ValidateDenseShape(const ResponseLayout& layout, std::span<con
 OrbitalHessianOperator::OrbitalHessianOperator(ResponseLayout layout,
                                                OrbitalEnergies orbitalEnergies,
                                                MoTwoElectronTensor moTwoElectron,
+                                               double exchangeFraction,
                                                HessianExtraTermFn extraTerm) :
     _layout(layout), _numOrbitals(layout.numOccupied + layout.numVirtual),
     _orbitalEnergies(orbitalEnergies.values), _moTwoElectron(moTwoElectron.values),
-    _extraTerm(std::move(extraTerm)) {}
+    _exchangeFraction(exchangeFraction), _extraTerm(std::move(extraTerm)) {}
 
 qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
     ResponseLayout layout, OrbitalEnergies orbitalEnergies, MoTwoElectronTensor moTwoElectron) {
-    return Create(layout, orbitalEnergies, moTwoElectron, HessianExtraTermFn{});
+    return Create(layout, orbitalEnergies, moTwoElectron, 1.0, HessianExtraTermFn{});
 }
 
 qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
@@ -64,11 +65,35 @@ qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
     OrbitalEnergies orbitalEnergies,
     MoTwoElectronTensor moTwoElectron,
     HessianExtraTermFn extraTerm) {
+    return Create(layout, orbitalEnergies, moTwoElectron, 1.0, std::move(extraTerm));
+}
+
+qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
+    ResponseLayout layout,
+    OrbitalEnergies orbitalEnergies,
+    MoTwoElectronTensor moTwoElectron,
+    double exchangeFraction) {
+    return Create(layout, orbitalEnergies, moTwoElectron, exchangeFraction, HessianExtraTermFn{});
+}
+
+qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
+    ResponseLayout layout,
+    OrbitalEnergies orbitalEnergies,
+    MoTwoElectronTensor moTwoElectron,
+    double exchangeFraction,
+    HessianExtraTermFn extraTerm) {
     auto layoutStatus = ValidateLayout(layout);
 
     if (!layoutStatus.has_value())
     {
         return std::unexpected(layoutStatus.error());
+    }
+
+    // Written as a positive test so that a Not-a-Number fraction fails too.
+    if (!(exchangeFraction >= 0.0 && exchangeFraction <= 1.0))
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "the exact-exchange fraction must lie in [0, 1]"});
     }
 
     const std::size_t numOrbitals = layout.numOccupied + layout.numVirtual;
@@ -87,7 +112,8 @@ qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
             "the two-electron tensor must be the full fourth power of the orbital count"});
     }
 
-    return OrbitalHessianOperator(layout, orbitalEnergies, moTwoElectron, std::move(extraTerm));
+    return OrbitalHessianOperator(
+        layout, orbitalEnergies, moTwoElectron, exchangeFraction, std::move(extraTerm));
 }
 
 qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
@@ -130,6 +156,20 @@ qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
 
 void OrbitalHessianOperator::ApplyHartreeFock(std::span<const double> x,
                                               std::span<double> y) const {
+    // The unscaled branch is the branch every Hartree-Fock anchor was computed
+    // on: dispatching on the fraction keeps that loop, not a rewritten copy of
+    // it, so the anchors cannot move.
+    if (_exchangeFraction == 1.0)
+    {
+        ApplyHartreeFockUnscaled(x, y);
+        return;
+    }
+
+    ApplyHartreeFockScaled(x, y);
+}
+
+void OrbitalHessianOperator::ApplyHartreeFockUnscaled(std::span<const double> x,
+                                                      std::span<double> y) const {
     const std::size_t numOccupied = _layout.numOccupied;
     const std::size_t numVirtual = _layout.numVirtual;
     const std::size_t numOrbitals = _numOrbitals;
@@ -170,6 +210,55 @@ void OrbitalHessianOperator::ApplyHartreeFock(std::span<const double> x,
                                   virtualPartner];
 
                     value += (coulomb - directExchange - exchange) * x[j * numVirtual + b];
+                }
+            }
+
+            y[i * numVirtual + a] = value;
+        }
+    }
+}
+
+void OrbitalHessianOperator::ApplyHartreeFockScaled(std::span<const double> x,
+                                                    std::span<double> y) const {
+    const std::size_t numOccupied = _layout.numOccupied;
+    const std::size_t numVirtual = _layout.numVirtual;
+    const std::size_t numOrbitals = _numOrbitals;
+    const double* integrals = _moTwoElectron.data();
+    const double exchangeFraction = _exchangeFraction;
+
+    for (std::size_t i = 0; i < numOccupied; ++i)
+    {
+        for (std::size_t a = 0; a < numVirtual; ++a)
+        {
+            const std::size_t virtualOrbital = numOccupied + a;
+            double value =
+                (_orbitalEnergies[virtualOrbital] - _orbitalEnergies[i]) * x[i * numVirtual + a];
+
+            for (std::size_t j = 0; j < numOccupied; ++j)
+            {
+                for (std::size_t b = 0; b < numVirtual; ++b)
+                {
+                    const std::size_t virtualPartner = numOccupied + b;
+
+                    const double coulomb =
+                        4.0 * integrals[((virtualOrbital * numOrbitals + i) * numOrbitals +
+                                         virtualPartner) *
+                                            numOrbitals +
+                                        j];
+                    const double directExchange =
+                        integrals[((virtualOrbital * numOrbitals + virtualPartner) * numOrbitals +
+                                   i) *
+                                      numOrbitals +
+                                  j];
+                    const double exchange =
+                        integrals[((virtualOrbital * numOrbitals + j) * numOrbitals + i) *
+                                      numOrbitals +
+                                  virtualPartner];
+
+                    // The Coulomb term is not scaled: c_HF weights exact
+                    // exchange, and only the two exchange integrals carry it.
+                    value += (coulomb - exchangeFraction * (directExchange + exchange)) *
+                             x[j * numVirtual + b];
                 }
             }
 

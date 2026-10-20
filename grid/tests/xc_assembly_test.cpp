@@ -291,7 +291,10 @@ TEST(XcGridEngineTest, TauExchangeKernelReproducesTheUniformGasWitness) {
         inputs.Set(excgrid::Component::TauB, tau);
 
         excgrid::PointResult result;
-        EXPECT_EQ(functional->EvaluatePoint(inputs, result), excgrid::KernelStatus::kOk);
+        // Bound before the assertion: written inline, MSVC 19.51 at /O2 discards
+        // the call's result for the tau = 0 call and the assertion reads zero.
+        const excgrid::KernelStatus status = functional->EvaluatePoint(inputs, result);
+        EXPECT_EQ(status, excgrid::KernelStatus::kOk);
 
         return result.exc;
     };

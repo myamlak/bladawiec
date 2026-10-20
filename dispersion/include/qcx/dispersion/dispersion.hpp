@@ -4,6 +4,7 @@
 #include "qcx/error.hpp"
 #include "qcx/molecule/molecule.hpp"
 
+#include <Eigen/Core>
 #include <map>
 #include <optional>
 #include <string>
@@ -90,6 +91,34 @@ qcx::Result<ResolvedDispersion> ResolveDispersion(const DispersionOptions& optio
 /// \ingroup qcx-dispersion
 qcx::Result<double> EvaluateDispersion(const molecule::Molecule& molecule,
                                        const ResolvedDispersion& resolved);
+
+/// A dispersion correction's energy and its analytic coordinate gradient.
+/// \ingroup qcx-dispersion
+struct DispersionGradient {
+    double energy = 0.0; ///< The correction's energy, Hartree (negative for attraction).
+    /// The 3N derivatives in the molecule's atom order, Hartree/Bohr:
+    /// `gradient(3 a + d)` differentiates with respect to the `d`-th
+    /// Cartesian component of atom `a`. The sum over all atoms is the net
+    /// force, which vanishes for an isolated molecule.
+    Eigen::VectorXd gradient;
+};
+
+/// Evaluates the resolved correction and its analytic coordinate gradient.
+///
+/// The D3 arm is the zero-damping energy and its analytic gradient, from the
+/// same kernel and parameter resolution as EvaluateDispersion. The D4 arm has
+/// no coordinate-gradient tier and is refused by name rather than answered
+/// with the energy alone: a gradient consumer that silently received a zero
+/// derivative would drop the term.
+/// \param molecule The molecule, its coordinates in Bohr.
+/// \param resolved The resolved form and values.
+/// \returns The energy in Hartree and the 3N gradient in Hartree/Bohr, or an
+/// Error: the D4 arm is kUnimplemented naming the missing gradient tier, and
+/// an element the form does not cover or a kernel-level refusal is reported
+/// as in EvaluateDispersion.
+/// \ingroup qcx-dispersion
+qcx::Result<DispersionGradient> EvaluateDispersionGradient(const molecule::Molecule& molecule,
+                                                           const ResolvedDispersion& resolved);
 
 /// The resolved values under the form's own key names.
 ///

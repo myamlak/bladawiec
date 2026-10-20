@@ -313,6 +313,24 @@ qcx::Result<OrbitalResponse> SolveNuclearDisplacementResponse(
     std::span<const double> moOverlapDerivative,
     const ResponseReferenceIdentity& reference,
     ResponseSolver<OrbitalHessianOperator>& solver) {
+    auto report = SolveNuclearDisplacementResponseWithReport(
+        hessian, rightHandSide, request, moOverlapDerivative, reference, solver);
+
+    if (!report.has_value())
+    {
+        return std::unexpected(report.error());
+    }
+
+    return std::move(report->response);
+}
+
+qcx::Result<OrbitalResponseReport> SolveNuclearDisplacementResponseWithReport(
+    const OrbitalHessianOperator& hessian,
+    const NuclearDisplacementRightHandSide& rightHandSide,
+    const FockDerivativeRequest& request,
+    std::span<const double> moOverlapDerivative,
+    const ResponseReferenceIdentity& reference,
+    ResponseSolver<OrbitalHessianOperator>& solver) {
     const ResponseLayout& layout = rightHandSide.Layout();
     const std::size_t dimension = layout.Dimension();
     const std::size_t numOccupied = layout.numOccupied;
@@ -473,7 +491,9 @@ qcx::Result<OrbitalResponse> SolveNuclearDisplacementResponse(
         }
     }
 
-    return response;
+    // The solver's report is kept, not dropped: it is the only observable that
+    // says whether the previous displacement's answer was reused.
+    return OrbitalResponseReport{std::move(response), *solved};
 }
 
 } // namespace qcx::response

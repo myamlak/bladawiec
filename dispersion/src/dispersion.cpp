@@ -392,6 +392,61 @@ qcx::Result<double> EvaluateDispersion(const molecule::Molecule& molecule,
     return *energy;
 }
 
+qcx::Result<DispersionGradient> EvaluateDispersionGradient(const molecule::Molecule& molecule,
+                                                           const ResolvedDispersion& resolved) {
+    // The energy entry refuses D4 only for the charge and element reasons; it
+    // has no gradient to refuse. Here the missing tier is the primary refusal,
+    // and naming it keeps the consumer from reading the energy as a complete
+    // answer.
+    if (resolved.form == DispersionForm::kD4)
+    {
+        return std::unexpected(qcx::Error{
+            qcx::ErrorCode::kUnimplemented,
+            "dispersion: form \"d4\" has no coordinate-gradient tier (only its energy is "
+            "implemented; use form \"d3\" for a gradient, or request the energy alone)"});
+    }
+
+    auto geometry = qcx::grid::ToExcgridGeometry(molecule);
+
+    if (!geometry.has_value())
+    {
+        return std::unexpected(geometry.error());
+    }
+
+    const auto* values = std::get_if<D3ParameterValues>(&resolved.parameters);
+
+    if (values == nullptr)
+    {
+        return std::unexpected(
+            MakeError("dispersion: the resolved values do not match form \"d3\""));
+    }
+
+    const excgrid::D3Parameters parameters{
+        values->s6, values->s8, values->rs6, values->alpha6, values->rs8, values->alpha8};
+    auto result = excgrid::GrimmeD3(*geometry, parameters);
+
+    if (!result.has_value())
+    {
+        return std::unexpected(
+            qcx::grid::TranslateExcgridError(result.error(), "dispersion: the d3 kernel"));
+    }
+
+    DispersionGradient output;
+    output.energy = result->energy;
+    output.gradient.resize(static_cast<Eigen::Index>(result->gradient.size() * 3));
+
+    for (std::size_t atom = 0; atom < result->gradient.size(); ++atom)
+    {
+        for (std::size_t direction = 0; direction < 3; ++direction)
+        {
+            output.gradient(static_cast<Eigen::Index>(3 * atom + direction)) =
+                result->gradient[atom][direction];
+        }
+    }
+
+    return output;
+}
+
 std::map<std::string, double> ParameterMap(const ResolvedDispersion& resolved) {
     std::map<std::string, double> values;
 

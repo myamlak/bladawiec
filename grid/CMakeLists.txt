@@ -17,6 +17,8 @@ add_library(qcx-grid
   src/geometry_translation.cpp
   src/xc_grid_engine.cpp
   src/xc_gradient.cpp
+  src/xc_kernel_action.cpp
+  src/xc_kernel_gradient.cpp
 )
 target_include_directories(qcx-grid PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(qcx-grid PUBLIC cxx_std_23)
@@ -42,6 +44,8 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/ao_evaluator_test.cpp
         tests/xc_assembly_test.cpp
         tests/xc_gradient_test.cpp
+        tests/xc_kernel_action_test.cpp
+        tests/xc_kernel_gradient_test.cpp
         tests/tau_reference_test.cpp
         tests/quadrature_cross_validation_test.cpp
         tests/synthetic_fixture.cpp
@@ -74,7 +78,9 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     # calls, so the per-test fast-mode gate was wired (grid/CMakeLists.txt calls
     # qcx_apply_fast_test_mode below) and inert in the one file that needed
     # it. A per-test opt-in cannot be made to fail safe; a manifest can, and
-    # that is what this is.
+    # that is what this is. footprint_test.cpp itself took the gate later
+    # (2026-10-20, when CI began building the shipped integral ceiling), which
+    # is why its two slow cases no longer pin any CI leg to a reduced matrix.
     #
     # This is a manifest rather than a directory move because
     # xc_screening_test.cpp carries 9 cases of which only these 2 are long;
