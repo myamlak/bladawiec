@@ -23,8 +23,10 @@
 #include <qcx/storage/disk_ri_fock_build.hpp>
 #endif
 
-#include <charconv>
+#include <cerrno>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <optional>
@@ -33,7 +35,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <vector>
 
 namespace {
@@ -893,10 +894,22 @@ const EngineDefaultClaim kEngineDefaultClaims[] = {
 };
 
 std::optional<double> ShownNumber(std::string_view shown) {
-    double value = 0.0;
-    const auto result = std::from_chars(shown.data(), shown.data() + shown.size(), value);
+    // Apple's libc++ has no floating-point std::from_chars, so the test parses
+    // with strtod under the same strictness: the whole token consumed, no range
+    // error, a finite value. The leading-plus and hexadecimal forms strtod alone
+    // accepts are refused, so the help reads the same on every platform.
+    if (shown.empty() || shown.front() == '+' ||
+        (shown.size() >= 2 && shown[0] == '0' && (shown[1] == 'x' || shown[1] == 'X')))
+    {
+        return std::nullopt;
+    }
 
-    if (result.ec != std::errc{} || result.ptr != shown.data() + shown.size())
+    const std::string token(shown);
+    errno = 0;
+    char* parsedEnd = nullptr;
+    const double value = std::strtod(token.c_str(), &parsedEnd);
+
+    if (parsedEnd != token.c_str() + token.size() || errno == ERANGE || !std::isfinite(value))
     {
         return std::nullopt;
     }
