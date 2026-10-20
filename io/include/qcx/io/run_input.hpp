@@ -747,6 +747,25 @@ struct RunPropertiesInput {
     /// rule). Appended last so the aggregate's earlier fields keep their
     /// positions.
     bool xcGradient = false;
+    /// The `total_gradient` request: true makes an RHF run assemble the total
+    /// analytic nuclear gradient at its converged reference, with the
+    /// electronic terms, the nuclear repulsion and any requested dispersion
+    /// correction kept apart in the record.
+    ///
+    /// It is RHF-only, and the key is REFUSED by name on `uhf`, `rks` and
+    /// `uks` rather than ignored (validate_input.cpp). The assembly
+    /// differentiates a converged closed-shell RHF reference: the Kohn-Sham
+    /// lanes' response machinery carries no exchange-fraction or kernel seam,
+    /// so an RHF number under a Kohn-Sham label would be a different energy's
+    /// derivative, and the closed-shell density the reference is validated
+    /// against is the RHF convention. A non-converged SCF is refused at run
+    /// time as well: a last iterate's gradient differentiates an energy the
+    /// density is not the minimum of.
+    ///
+    /// False (the default) keeps the zero-cost path: no reference is
+    /// extracted, no dense tensor is built, and the record carries no
+    /// `total_gradient` block - absent, never null and never zero-filled.
+    bool totalGradient = false;
 };
 
 /// The initial-guess selection. kGwh serves RHF and UHF (the RHF gwh

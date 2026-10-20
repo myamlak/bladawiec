@@ -260,7 +260,27 @@ type is a parse error). The population/moment block has no switch
 | `[properties] qtaim` | bool; the Bader QTAIM bond critical points: the (3,-1) critical points of rho with their bond paths, ellipticity and laplacian; failed searches are reported in the output, never a run failure |
 | `[properties] molden` | string; the path of the Molden-format F-file written from the SCF result: the [Molden Format] [Atoms] (AU) [5D] [7F] [GTO] [MO] sections, RHF one spin block, UHF alpha then beta; an empty string counts as absent, and a file that cannot be written fails the run |
 | `[properties] xc_gradient` | bool; the fixed-density exchange-correlation contribution to the nuclear gradient, differentiated at the converged density on the grid the run integrated. A Kohn-Sham key: refused on `rhf`/`uhf` with the `functional` key and the `[grid]` block (see §2.3) |
+| `[properties] total_gradient` | bool; schema 45. The total analytic nuclear gradient at the converged closed-shell reference: the electronic terms (one-electron, Coulomb, exchange, orbital response), the nuclear repulsion and any `[dispersion]` correction, kept apart in the `total_gradient` record block (§3.4). `rhf` only: refused by name on `uhf`, `rks` and `uks`; refused when the SCF did not converge, when the reference is not stationary, and when a `[dispersion]` block of form `d4` asks for a coordinate gradient the module has no tier for |
 | `[properties] nocv_fragments` | array of non-empty arrays of non-negative atom indices (0-based, file row order); ETS-NOCV, closed-shell only (see §5) |
+
+`total_gradient` is the one key in this block that differentiates the run's
+**total** energy: it hands the converged RHF reference to
+`qcx::properties::ComputeTotalGradient` and records every term separately, so
+the decomposition and the total cannot disagree. Its refusals name the key
+rather than dropping the request: a non-converged SCF (a last iterate is not
+the energy's stationary point), a reference whose `max|2 F_ai|` exceeds the
+assembly's stationarity gate (`1e-6`), a reference whose derivative walks do
+not reproduce its electronic energy (`1e-8`), and a `[dispersion]` block of
+form `d4`, whose coordinate-gradient tier is not implemented. A `d4` run may
+still request the energy alone (§2.4). The stationarity gate compares the
+reference against the exact Roothaan Fock the assembly rebuilds: an SCF
+converged against that same exact Fock lands far inside the gate, while a
+reference converged against an approximate one - the RI-J family fits the
+Coulomb term - is refused by name, because the orbitals diagonalize a matrix
+the gradient does not differentiate. Tightening the `[scf]` tolerances does
+not move an approximate builder's reference. A missing `[dispersion]` block
+leaves the dispersion term **absent** in the record, never zero-filled
+(§3.4).
 
 ### 2.3 Validation and combination rules
 
@@ -410,7 +430,7 @@ bumped whenever a consumer must notice a change (§7).
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | The schema version; currently 44 (`RunResult::kSchemaVersion`) |
+| `schema_version` | int | The schema version; currently 45 (`RunResult::kSchemaVersion`) |
 | `molecule_units` | string | Schema 28. The unit the run's geometry was **read under** — the RESOLVED `[molecule] units` value, `"angstrom"` or `"bohr"`, never a request left for a consumer to apply. **Always present**, and `"angstrom"` is the value an absent key resolves to (the parser's default is a judgement, and the disclosure rule makes a judgement stateable). It exists so a record is self-describing on the one convention that has produced a wasted hunt twice in this project (2026-08-26, pyscf's Ångström default; 2026-09-15, Bohr numbers in an Ångström input file): a reader holding the JSON alone can now tell at what scale the geometry was read without consulting the input file. It describes the INPUT, not the numbers — the internal geometry is Bohr under either value |
 | `converged` | bool | True when a convergence criterion fired |
 | `iterations` | int | Iterations spent; the budget when not converged |
@@ -495,6 +515,7 @@ which are always present and use null.
 | `qtaim` | `bond_critical_points` (each: `atom_a`, `atom_b`, `position_bohr`, `density`, `laplacian`, `ellipticity`, `eigenvalues` ascending, `bond_path` — the two gradient rays BCP -> nucleus), `other_critical_points` (`position_bohr`, `rank`, `signature_sum`), `unconverged_seeds` (3 each) | electrons/bohr³; electrons/bohr⁵ |
 | `molden` | `file` — the path of the written Molden-format F-file | path |
 | `xc_gradient` | `gradient` — dE_xc/dR at the converged density, 3 per atom in the molecule's canonical atom order; `energy_hartree` — the exchange-correlation energy the walk integrated. **Fixed density**: this is the exchange-correlation contribution to the nuclear gradient and never a total gradient | hartree/bohr; hartree |
+| `total_gradient` | Schema 45. The total analytic nuclear gradient at a converged closed-shell RHF reference: `gradient` (the terms summed, in the documented order), `terms`, `energies`, `sizes`, `counts`, `response`, `stationarity_residual`, `energy_residual_hartree`, `right_hand_side_terms` — the key table below | hartree/bohr for every gradient vector; hartree for the energies and residuals |
 | `dispersion` | `form` (`"d3"` \| `"d4"`), `parameter_source` (`"method"` \| `"preset"` \| `"explicit"`), `parameter_set` (the preset name for `"preset"`, the method family for `"method"`; **absent** for `"explicit"`), `parameters` (the form's own key names: `s6, s8, rs6, alpha6, rs8, alpha8` for d3; `s6, s8, a1, a2` for d4), `energy_hartree` (the correction's own contribution to `total_energy_hartree`) | hartree; parameters are the form's published values |
 
 `dispersion` is present exactly when the input wrote a `[dispersion]` block,
@@ -502,6 +523,43 @@ and absent otherwise — never a zero-filled block standing in for a correction
 that was never evaluated. It carries the **resolved** values rather than the
 input's words, so the number is reproducible from the document alone even when
 the source was a preset lookup or the method family (§2.4).
+
+`total_gradient` is present exactly when the input wrote
+`[properties] total_gradient = true`, and absent otherwise — never a
+zero-filled block standing in for a gradient that was never computed. It is
+written on the `rhf` lane only; a request on another method word is refused
+before serialization (§2.2), and a request the assembly refuses (a
+non-converged SCF, a non-stationary reference, a D4 dispersion gradient)
+fails the run by name rather than being recorded as an absent block.
+
+| `total_gradient` key | Type | Meaning |
+|---|---|---|
+| `gradient` | array of 3N numbers | The total gradient, atom-major, in the molecule's canonical atom order |
+| `terms.one_electron` | array of 3N | `d Tr(D h)/dR` at the fixed reference density |
+| `terms.nuclear_repulsion` | array of 3N | `dE_nuc/dR`, the analytic pair sum |
+| `terms.coulomb` | array of 3N | `dE_J/dR` |
+| `terms.exchange` | array of 3N | `-(1/2) dE_K/dR`, the exchange as the closed-shell energy subtracts it |
+| `terms.response` | array of 3N | `Tr(F D(1))` per displacement, the orbital response |
+| `terms.dispersion` | array of 3N | `dE_disp/dR`. **Present** exactly when the input wrote `[dispersion]`; **absent** otherwise — a term nobody requested is absent, never a zero vector |
+| `energies.electronic_hartree` | number | The reference SCF's electronic energy |
+| `energies.reconstructed_electronic_hartree` | number | The derivative walks' own reconstruction of that energy; `energy_residual_hartree` is the difference |
+| `energies.nuclear_repulsion_hartree` | number | The nuclear repulsion at the reference geometry |
+| `energies.dispersion_hartree` | number | The correction's energy. **Present** under the same rule as `terms.dispersion` |
+| `energies.total_hartree` | number | `electronic + nuclear_repulsion + dispersion` |
+| `sizes` | object | `atom_count`, `num_basis_functions`, `num_occupied`, `num_virtual` |
+| `counts.one_electron` | object | `orbital_pairs`, `overlap_tuples`, `kinetic_tuples`, `nuclear_tuples` — the one-electron derivative walk's counted cost |
+| `counts.two_electron` | object | `bra_pairs`, `ket_pairs`, `quartets`, `screened_quartets` — the two-electron derivative Fock-block walk's counted cost |
+| `response` | object | `solves` (one cold solve per coordinate), `warm_started`, `iterations` — what the response solves cost |
+| `stationarity_residual` | number | `max\|2 F_ai\|` at the emitted reference, hartree; at or below the assembly's `1e-6` gate on every emitted block |
+| `energy_residual_hartree` | number | `\|E_reconstructed - E_electronic\|`, hartree; at or below `1e-8` on every emitted block |
+| `right_hand_side_terms` | array of strings | The right-hand-side contributions the response solved against, in wiring order: `["one-electron", "coulomb", "exchange"]` |
+
+The `response` object deliberately carries those three members and no others:
+the response state's report has no matvec count and no worst-residual member,
+and the schema does not invent what the state does not keep.
+`right_hand_side_terms` is the honesty key for the response assembly — a
+contribution silently dropped from the wiring is invisible in the total, and
+this list is what makes its absence visible.
 
 ### 3.5 Null vs absent — stated precisely
 
@@ -514,11 +572,13 @@ A JSON consumer must distinguish three cases:
    requested). The key exists; the value is null.
 3. **Key absent** — applies to the opt-in analysis blocks (`charges`, `esp`,
    `eddb`, `fukui`, `nalewajski`, `nocv`, `density_at_nuclei`, `qtaim`,
-   `molden`, `xc_gradient`) when the run did not request the analysis, to
-   `dispersion` when the input wrote no `[dispersion]` block, to
-   `certified_bound` (§3.9) when no Fock build reported the quantity, and to
-   `qfmm_model` (§3.10) when the run wired no composed-QFMM builder.
-   The key does not exist at all.
+   `molden`, `xc_gradient`, `total_gradient`) when the run did not request the
+   analysis, to the inner `terms.dispersion`/`energies.dispersion_hartree`
+   members of a present `total_gradient` block when the input wrote no
+   `[dispersion]` block, to `dispersion` when the input wrote no
+   `[dispersion]` block, to `certified_bound` (§3.9) when no Fock build
+   reported the quantity, and to `qfmm_model` (§3.10) when the run wired no
+   composed-QFMM builder. The key does not exist at all.
 
 The serializer never emits a placeholder number for an unset value — null
 (or absence) means "not computed", never "zero".
@@ -1264,7 +1324,7 @@ What to notice in this output:
 - No opt-in analysis key (`charges`, `esp`, `eddb`, `fukui`, `nalewajski`,
   `nocv`, `density_at_nuclei`, `qtaim`) appears anywhere — none was
   requested (§3.4).
-- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 44.
+- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 45.
 
 ### Other pin fixtures
 
@@ -1923,6 +1983,30 @@ an alias by construction cannot.
   conflates "the key was not set" with "the key was set and this route could
   not carry it", and before this schema a reader had no way to tell them
   apart.
+- 44 → 45 (the total analytic gradient reaches the driver): the
+  `[properties] total_gradient` input key (§2.2) and the `total_gradient`
+  output block (§3.4) added together. The block carries the total nuclear
+  gradient of a converged closed-shell RHF reference with every contribution
+  kept apart — one-electron, nuclear repulsion, Coulomb, exchange, orbital
+  response and the requested dispersion correction — plus the energies the
+  terms belong to, the dimensions, the derivative walks' counted cost, the
+  response solve report, both assembly gate residuals and the wired
+  right-hand-side contribution names. Keys added, so the number moves with
+  them. It is the first record member that is the **full** derivative of the
+  run's total energy (schema 40's `xc_gradient` is one fixed-density
+  contribution), so a consumer comparing records across this boundary
+  compares a document carrying a total nuclear gradient against one that
+  could carry none. Presence rules a consumer must not assume away: the block
+  is absent unless the run asked; it is written on the `rhf` lane only, and a
+  request on `uhf`/`rks`/`uks` is refused by name before serialization rather
+  than recorded as absent; the dispersion term and its energy are absent
+  inside a present block unless the input wrote a `[dispersion]` block, never
+  zero-filled; and a request the assembly refuses — a non-converged SCF, a
+  non-stationary reference, a D4 dispersion gradient — fails the run by name,
+  so a present block is always a converged, stationary reference's gradient.
+  The `response` object carries `solves`, `warm_started` and `iterations`
+  only: the response state keeps no matvec count and no worst residual, and
+  the schema does not invent what the state does not keep.
 
 ## 8. The builder-selection axes (schema 35)
 

@@ -227,6 +227,141 @@ struct RunXcGradient {
     double energyHartree = 0.0;
 };
 
+/// The terms of a total analytic nuclear gradient (schema 45), each a 3N
+/// vector in Hartree/Bohr, atom-major, in the molecule's canonical atom
+/// order.
+///
+/// One vector per term rather than a sum and a note, because the failure a
+/// gradient assembly can hide is a term that is silently absent: a term a
+/// consumer can read on its own is one it can check on its own.
+/// \ingroup qcx-io
+struct RunTotalGradientTerms {
+    /// `d Tr(D h)/dR` at the fixed reference density, `h = T + V`.
+    std::vector<double> oneElectron;
+    /// `dE_nuc/dR`, the analytic pair sum.
+    std::vector<double> nuclearRepulsion;
+    /// `dE_J/dR`.
+    std::vector<double> coulomb;
+    /// `-(1/2) dE_K/dR`, the exchange as the closed-shell energy subtracts it.
+    std::vector<double> exchange;
+    /// `Tr(F D(1))`, the orbital response's energy-weighted term.
+    std::vector<double> response;
+    /// `dE_disp/dR`. PRESENT exactly when the input wrote a `[dispersion]`
+    /// block and ABSENT otherwise: a term nobody requested is absent, never a
+    /// zero vector a consumer could read as a computed contribution.
+    std::optional<std::vector<double>> dispersion;
+};
+
+/// The energies a total gradient's terms belong to, in Hartree.
+/// \ingroup qcx-io
+struct RunTotalGradientEnergies {
+    /// The reference SCF's electronic energy, `1/2 Tr[D (H + F[D])]`.
+    double electronic = 0.0;
+    /// The electronic energy the derivative walks' own contractions rebuild.
+    /// It exists to be compared with `electronic`: `energy_residual_hartree`
+    /// is their difference.
+    double reconstructedElectronic = 0.0;
+    /// The nuclear repulsion at the reference geometry.
+    double nuclearRepulsion = 0.0;
+    /// The dispersion correction's own energy. PRESENT under the same rule as
+    /// `RunTotalGradientTerms::dispersion`.
+    std::optional<double> dispersion;
+    /// `electronic + nuclearRepulsion + dispersion`.
+    double total = 0.0;
+};
+
+/// The dimensions a total gradient was computed at.
+/// \ingroup qcx-io
+struct RunTotalGradientSizes {
+    std::size_t atomCount = 0; ///< Atoms in the reference molecule.
+    std::size_t numBasisFunctions = 0; ///< The AO dimension n.
+    std::size_t numOccupied = 0; ///< Occupied spatial orbitals.
+    std::size_t numVirtual = 0; ///< Virtual spatial orbitals.
+};
+
+/// The one-electron derivative walk's counted cost.
+/// \ingroup qcx-io
+struct RunTotalGradientOneElectronCounts {
+    std::size_t orbitalPairs = 0; ///< Canonical orbital pairs visited.
+    std::size_t overlapTuples = 0; ///< Overlap derivative tuples differentiated.
+    std::size_t kineticTuples = 0; ///< Kinetic derivative tuples differentiated.
+    std::size_t nuclearTuples = 0; ///< Nuclear-attraction tuples differentiated.
+};
+
+/// The two-electron derivative Fock-block walk's counted cost.
+/// \ingroup qcx-io
+struct RunTotalGradientTwoElectronCounts {
+    std::size_t braPairs = 0; ///< Canonical bra pairs walked.
+    std::size_t ketPairs = 0; ///< Canonical ket pairs walked.
+    std::size_t quartets = 0; ///< Quartets differentiated.
+    std::size_t screenedQuartets = 0; ///< Quartets every predicate discarded.
+};
+
+/// The walks' counted cost, kept so the price of a gradient stays readable.
+/// \ingroup qcx-io
+struct RunTotalGradientCounts {
+    RunTotalGradientOneElectronCounts oneElectron; ///< The one-electron walk.
+    RunTotalGradientTwoElectronCounts twoElectron; ///< The two-electron walk.
+};
+
+/// What the response solves cost. The state's own report carries these three
+/// members and no others; the schema must not invent a matvec count or a
+/// worst residual the state does not keep.
+/// \ingroup qcx-io
+struct RunTotalGradientResponse {
+    std::size_t solves = 0; ///< Right-hand sides solved (one per coordinate).
+    std::size_t warmStarted = 0; ///< Solves that began from a stored answer.
+    std::size_t iterations = 0; ///< Conjugate-gradient iterations in total.
+};
+
+/// The total analytic nuclear gradient at a converged closed-shell RHF
+/// reference (schema 45), serialized as `total_gradient`.
+///
+/// **What the block is.** `gradient` is `dE/dR` for the run's own total
+/// energy, with each contribution kept apart under `terms` in the order the
+/// total accumulates them: the one-electron skeleton, the nuclear repulsion,
+/// the Coulomb and exchange skeletons, the orbital response, and the
+/// dispersion correction when one was requested. The total is the terms
+/// summed, not an independently assembled number, so the decomposition and
+/// the total cannot disagree.
+///
+/// **Presence.** Absent unless the run asked (`[properties] total_gradient`),
+/// so a record without the block states that no gradient was computed and not
+/// that it was zero - the null-honesty rule the opt-in blocks beside it
+/// follow. The block is written on the `rhf` lane only, because the assembly
+/// differentiates a closed-shell RHF reference; a request on any other method
+/// word is refused by the validator rather than recorded as absent, and a
+/// non-converged SCF is refused at run time.
+/// \ingroup qcx-io
+struct RunTotalGradient {
+    /// The total gradient, 3N entries in Hartree/Bohr, atom-major, in the
+    /// molecule's canonical atom order.
+    std::vector<double> gradient;
+    /// The decomposition.
+    RunTotalGradientTerms terms;
+    /// The energies the terms belong to.
+    RunTotalGradientEnergies energies;
+    /// The dimensions the gradient was computed at.
+    RunTotalGradientSizes sizes;
+    /// The walks' counted cost.
+    RunTotalGradientCounts counts;
+    /// What the response solves cost.
+    RunTotalGradientResponse response;
+    /// `max|2 F_ai|` at the emitted reference, Hartree - the stationarity
+    /// gate's own measure. The run is refused when it exceeds the assembly's
+    /// tolerance, so a present block is a stationary-reference block and this
+    /// value is at or below the gate.
+    double stationarityResidual = 0.0;
+    /// `|reconstructed_electronic - electronic|`, Hartree - the second gate's
+    /// measure, at or below its tolerance on every emitted block.
+    double energyResidualHartree = 0.0;
+    /// The right-hand-side contributions the response solved against, in the
+    /// order they were wired. A contribution silently dropped from the wiring
+    /// is invisible in the total; this list is what makes its absence visible.
+    /// The shipped assembly wires `["one-electron", "coulomb", "exchange"]`.
+    std::vector<std::string> rightHandSideTerms;
+};
+
 /// The properties of one run, plain data so io stays free of Eigen (the
 /// driver converts from the properties module's matrix types). The
 /// population/moment block is always computed; the charge blocks
@@ -245,6 +380,7 @@ struct RunProperties {
     std::optional<RunQtaim> qtaim; ///< Bader QTAIM, opt-in.
     std::optional<RunMolden> molden; ///< Molden export, opt-in.
     std::optional<RunXcGradient> xcGradient; ///< XC gradient contribution, opt-in.
+    std::optional<RunTotalGradient> totalGradient; ///< Total analytic gradient, opt-in.
 };
 
 /// One score row of the coefficients record: a candidate's MAD score
@@ -1781,7 +1917,27 @@ struct RunResult {
     /// say whether the comparison was skipped rather than leave `enforced: false` to mean both "not
     /// requested" and "requested, route could not carry it". Keys added, so the number moved with
     /// them.
-    static constexpr int kSchemaVersion = 44;
+    ///
+    /// Schema 45 ADDS the `properties.total_gradient` input key and the
+    /// `total_gradient` record member (RunTotalGradient): the total analytic
+    /// nuclear gradient at a converged closed-shell RHF reference, with each
+    /// contribution kept apart - the one-electron skeleton, the nuclear
+    /// repulsion, the Coulomb and exchange skeletons, the orbital response and
+    /// the requested dispersion correction - plus the energies the terms
+    /// belong to, the dimensions, the walks' counted cost, the response solve
+    /// report, both gate residuals and the wired right-hand-side contribution
+    /// names. Keys added, so the number moves with them. It is the first
+    /// record member that is the FULL derivative of the run's total energy
+    /// (schema 40's `xc_gradient` is one fixed-density contribution), so a
+    /// consumer comparing records across this boundary compares a document
+    /// carrying a total nuclear gradient against one that could carry none.
+    /// The block is absent unless the run asked and is written on the `rhf`
+    /// lane only; a request the assembly refuses - a non-converged SCF, a
+    /// non-stationary reference, a D4 dispersion gradient - fails the run by
+    /// name rather than being recorded as an absent block, and a term nobody
+    /// requested (the dispersion correction without a `[dispersion]` block)
+    /// is absent inside the block, never a zero-filled vector.
+    static constexpr int kSchemaVersion = 45;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.

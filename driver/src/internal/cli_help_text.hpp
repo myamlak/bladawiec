@@ -308,6 +308,15 @@ input file keys (a key marked required must be written):
                                     exchange-correlation term of the gradient
                                     only: the density is held fixed, so this is
                                     not a total nuclear gradient (Kohn-Sham only)
+    total_gradient = false          bool; the total analytic nuclear gradient of
+                                    a converged closed-shell reference, in
+                                    Hartree/Bohr per atom and direction, with
+                                    the electronic terms, the nuclear repulsion
+                                    and any dispersion correction kept apart.
+                                    rhf only: refused on uhf and the Kohn-Sham
+                                    lanes, when the SCF did not converge, when
+                                    the reference is not stationary, and for a
+                                    d4 dispersion gradient
     nocv_fragments = [[0, 1]]       optional; one atom-index array per fragment
                                     (the indices count the atom rows as
                                     written). ETS-NOCV, closed-shell only

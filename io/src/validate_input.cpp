@@ -391,6 +391,26 @@ ValidationReport ValidateInput(const RunInput& input) {
             "differentiated; the Kohn-Sham methods rks and uks do)");
     }
 
+    // `[properties] total_gradient` is the closed-shell RHF assembly's key and
+    // not a Kohn-Sham one, so it follows its own rule rather than the
+    // XcKeyPolicy above: it differentiates a CONVERGED RHF reference's energy.
+    // The Kohn-Sham lanes have no Roothaan-Kohn-Sham gradient entry and their
+    // response machinery carries neither an exchange-fraction nor a kernel
+    // seam, so an RHF number under a Kohn-Sham label would be a different
+    // energy's derivative; UHF is closed out for the same reason in the other
+    // direction - the assembly is closed-shell by construction. Refused, never
+    // ignored: an absent `total_gradient` block in the record would read as
+    // "no gradient was computed", which is true, while the file's own request
+    // vanished without a word.
+    if (input.properties.totalGradient && input.method.method != MethodType::kRhf)
+    {
+        report.issues.push_back(
+            "properties.total_gradient: " + std::string(MethodWord(input.method.method)) +
+            " does not take the total analytic gradient (the assembly differentiates a "
+            "converged closed-shell RHF reference; the rhf method is the only lane that "
+            "runs one)");
+    }
+
     // The `[dispersion]` block's cross-key rules. The module resolves a
     // request to numbers; the questions here are about the block's SHAPE,
     // which only this layer can see (it holds the parsed key presence).

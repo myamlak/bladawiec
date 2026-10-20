@@ -788,6 +788,11 @@ const DefaultClaim kDefaultClaims[] = {
      [](const DefaultPair& documents) {
          return documents.written.properties.xcGradient == documents.omitted.properties.xcGradient;
      }},
+    {"properties.total_gradient",
+     [](const DefaultPair& documents) {
+         return documents.written.properties.totalGradient ==
+                documents.omitted.properties.totalGradient;
+     }},
     // The [grid] keys' defaults live in RunGridInput (mirrored field for field
     // by the engine's own settings), so they are compared against a
     // default-constructed one rather than against RunInput - whose `grid` is an

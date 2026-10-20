@@ -2503,6 +2503,15 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
 
         input.properties.xcGradient = xcGradient->value_or(false);
 
+        auto totalGradient = ReadBool(properties, "properties.total_gradient");
+
+        if (!totalGradient.has_value())
+        {
+            return std::unexpected(totalGradient.error());
+        }
+
+        input.properties.totalGradient = totalGradient->value_or(false);
+
         auto espName = ReadString(properties, "properties.esp");
 
         if (!espName.has_value())

@@ -45,11 +45,13 @@
 #include "qcx/properties/eddb.hpp"
 #include "qcx/properties/esp.hpp"
 #include "qcx/properties/fukui.hpp"
+#include "qcx/properties/gradient.hpp"
 #include "qcx/properties/multipoles.hpp"
 #include "qcx/properties/nalewajski.hpp"
 #include "qcx/properties/nocv.hpp"
 #include "qcx/properties/populations.hpp"
 #include "qcx/properties/qtaim.hpp"
+#include "qcx/scf/gradient_reference.hpp"
 #include "qcx/scf/rhf.hpp"
 #include "qcx/scf/symmetry_reduction.hpp"
 #include "qcx/scf/uhf.hpp"
@@ -769,6 +771,15 @@ qcx::Result<std::optional<qcx::io::RunXcGradient>> BuildXcGradientBlock(
     const qcx::basisset::BasisSet& basis,
     const Eigen::MatrixXd& alphaDensity,
     const Eigen::MatrixXd& betaDensity,
+    const qcx::io::RunInput& input);
+// The opt-in total analytic gradient block: the converged RHF reference's
+// total nuclear gradient, every contribution kept apart. It takes the SCF
+// result rather than the densities the other builders take, because the
+// reference Extracts only from a converged HfResult.
+qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basis,
+    const qcx::scf::HfResult& scf,
     const qcx::io::RunInput& input);
 
 // The Molden export: writes the [Molden Format]
@@ -6404,6 +6415,136 @@ qcx::Result<std::optional<qcx::io::RunXcGradient>> BuildXcGradientBlock(
     return block;
 }
 
+// The opt-in total analytic gradient block: the converged RHF reference's
+// total nuclear gradient, every contribution kept apart, plus the energies,
+// dimensions, counts and solve report the properties entry carries.
+//
+// The properties entry is the whole assembly: this builder extracts the
+// reference through the one gate in front of it (a non-converged result is
+// refused, and the refusal names this key), resolves the dispersion correction
+// through the same seam the energy path uses, and converts the result to io's
+// plain data. It deliberately adds nothing of its own: no matvec count, no
+// worst residual, no re-derived term.
+//
+// Driver-internal helper of the RHF arm (the forward declaration above). It
+// sits on the RHF arm rather than in FillProperties because the reference
+// Extracts from the converged HfResult, which the shared properties builder
+// does not receive.
+qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basis,
+    const qcx::scf::HfResult& scf,
+    const qcx::io::RunInput& input) {
+    if (!input.properties.totalGradient)
+    {
+        return std::nullopt;
+    }
+
+    // The validator refuses this key on every method word but rhf, so a
+    // non-rhf value here is a programmatic caller that never passed through
+    // validation. Refused rather than assembled, for the validator's reason:
+    // the assembly differentiates a converged closed-shell RHF reference.
+    if (input.method.method != qcx::io::MethodType::kRhf)
+    {
+        return std::unexpected(Err(
+            qcx::ErrorCode::kInvalidArgument,
+            "properties.total_gradient: " + std::string(qcx::io::ToString(input.method.method)) +
+                " has no total-gradient assembly (the closed-shell rhf lane is the only one "
+                "with a converged RHF reference to differentiate)"));
+    }
+
+    const std::size_t numOccupied = static_cast<std::size_t>(molecule.ElectronCount()) / 2;
+    auto reference = qcx::scf::ExtractGradientReference(scf, numOccupied);
+
+    if (!reference.has_value())
+    {
+        return std::unexpected(
+            Err(reference.error().code, "properties.total_gradient: " + reference.error().message));
+    }
+
+    qcx::properties::TotalGradientOptions options;
+
+    // The run's one accuracy preset, carried into the assembly. The gradient
+    // belongs to the energy the run computed, so its dense ERI build and its
+    // two-electron derivative walk screen at the same preset the SCF did; the
+    // default (kNormal) would silently compute a kLoose run's gradient at a
+    // tighter preset than the reference it differentiates, and the mismatch
+    // shows up as a spurious stationarity refusal at the screening floor.
+    options.eri.accuracy = input.method.accuracy;
+
+    // The dispersion correction the run requested, resolved by the energy
+    // path's own seam. An absent block adds no term and leaves the
+    // dispersion term empty - never a zero-filled vector. A D4 request is
+    // refused by the dispersion module's gradient entry (there is no
+    // coordinate-gradient tier for that form), and the named refusal is
+    // propagated: a D4 run may still request the energy alone, as schema 41
+    // allows.
+    if (input.dispersion.has_value())
+    {
+        auto resolved = qcx::dispersion::ResolveDispersion(
+            *input.dispersion, qcx::driver::internal::DispersionMethodFamily(input));
+
+        if (!resolved.has_value())
+        {
+            return std::unexpected(Err(resolved.error().code,
+                                       "properties.total_gradient: " + resolved.error().message));
+        }
+
+        options.dispersion = std::move(*resolved);
+    }
+
+    auto total = qcx::properties::ComputeTotalGradient(molecule, basis, *reference, options);
+
+    if (!total.has_value())
+    {
+        return std::unexpected(
+            Err(total.error().code, "properties.total_gradient: " + total.error().message));
+    }
+
+    qcx::io::RunTotalGradient block;
+    block.gradient = ToStdVector(total->gradient);
+    block.terms.oneElectron = ToStdVector(total->terms.oneElectron);
+    block.terms.nuclearRepulsion = ToStdVector(total->terms.nuclearRepulsion);
+    block.terms.coulomb = ToStdVector(total->terms.coulomb);
+    block.terms.exchange = ToStdVector(total->terms.exchange);
+    block.terms.response = ToStdVector(total->terms.response);
+
+    // The dispersion term is present exactly when the input wrote a
+    // [dispersion] block: the presence rule is the REQUEST's, not the
+    // vector's length, so a term nobody asked for stays absent rather than
+    // becoming an empty array a consumer would have to tell apart from a
+    // computed zero.
+    if (input.dispersion.has_value())
+    {
+        block.terms.dispersion = ToStdVector(total->terms.dispersion);
+        block.energies.dispersion = total->energies.dispersion;
+    }
+
+    block.energies.electronic = total->energies.electronic;
+    block.energies.reconstructedElectronic = total->energies.reconstructedElectronic;
+    block.energies.nuclearRepulsion = total->energies.nuclearRepulsion;
+    block.energies.total = total->energies.total;
+    block.sizes.atomCount = total->atomCount;
+    block.sizes.numBasisFunctions = total->numBasisFunctions;
+    block.sizes.numOccupied = total->numOccupied;
+    block.sizes.numVirtual = total->numVirtual;
+    block.counts.oneElectron.orbitalPairs = total->counts.oneElectron.orbitalPairs;
+    block.counts.oneElectron.overlapTuples = total->counts.oneElectron.overlapTuples;
+    block.counts.oneElectron.kineticTuples = total->counts.oneElectron.kineticTuples;
+    block.counts.oneElectron.nuclearTuples = total->counts.oneElectron.nuclearTuples;
+    block.counts.twoElectron.braPairs = total->counts.twoElectron.braPairs;
+    block.counts.twoElectron.ketPairs = total->counts.twoElectron.ketPairs;
+    block.counts.twoElectron.quartets = total->counts.twoElectron.quartets;
+    block.counts.twoElectron.screenedQuartets = total->counts.twoElectron.screenedQuartets;
+    block.response.solves = total->response.solves;
+    block.response.warmStarted = total->response.warmStarted;
+    block.response.iterations = total->response.iterations;
+    block.stationarityResidual = total->stationarityResidual;
+    block.energyResidualHartree = total->energyResidual;
+    block.rightHandSideTerms = std::move(total->rightHandSideTerms);
+    return block;
+}
+
 // The opt-in Bader QTAIM block (second increment): the (3,-1)
 // bond critical points of the spin-summed density with their bond paths,
 // plus the reported non-bond and unconverged critical points (the failed-
@@ -11293,6 +11434,21 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         {
             return refuse(properties.error());
         }
+
+        // The opt-in total analytic gradient (schema 45): assembled from the
+        // converged reference and attached to the properties block the run
+        // just filled. A request the assembly refuses - a non-converged SCF,
+        // a non-stationary reference, a D4 dispersion gradient - fails the
+        // whole run by name: a requested gradient is never silently dropped
+        // from the record.
+        auto totalGradient = BuildTotalGradientBlock(*molecule, *basis, *scf, input);
+
+        if (!totalGradient.has_value())
+        {
+            return refuse(totalGradient.error());
+        }
+
+        result.properties->totalGradient = std::move(*totalGradient);
 
         // The Molden export of the converged or
         // last-iterate result; one closed-shell channel with aufbau

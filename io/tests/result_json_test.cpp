@@ -38,7 +38,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsFortyFour) {
+TEST(ResultJsonTest, SchemaVersionIsFortyFive) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -153,7 +153,22 @@ TEST(ResultJsonTest, SchemaVersionIsFortyFour) {
     // notice for a reason beyond presence: `enforced: false` alone would
     // conflate "the key was not set" with "the key was set and this route
     // could not carry it".
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 44);
+    //
+    // v44 -> v45: the `properties` block GAINS `total_gradient`
+    // (RunTotalGradient), the total analytic nuclear gradient at a converged
+    // closed-shell RHF reference: the total vector, the term-by-term
+    // decomposition, the energies, the dimensions, the derivative walks'
+    // counts, the response solve report, both assembly gate residuals and the
+    // wired right-hand-side contribution names. Keys added, so the number
+    // moves with them - and it is the first record member that is the FULL
+    // derivative of the run's total energy (v40's `xc_gradient` is one
+    // fixed-density contribution), so a consumer comparing records across
+    // this change compares a document carrying a total nuclear gradient
+    // against one that could carry none. The block follows the opt-in rule
+    // (absent unless the run asked, never a zero-filled block), and a term
+    // nobody requested - the dispersion correction without a `[dispersion]`
+    // block - is absent inside a present block.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 45);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -681,6 +696,125 @@ TEST(ResultJsonTest, XcGradientBlockAbsentWhenNotRequested) {
     qcx::io::RunResult result;
     const std::string json = qcx::io::SerializeRunResultJson(result);
     EXPECT_EQ(json.find("xc_gradient"), std::string::npos);
+}
+
+TEST(ResultJsonTest, TotalGradientBlockEmittedWithEveryReportedMember) {
+    // The total analytic gradient (schema 45): every term is its own key, the
+    // energies, dimensions, counts, solve report and both gate residuals are
+    // written, and the dispersion pair is ABSENT - the run wrote no
+    // [dispersion] block, so the term is not a zero vector and the energy is
+    // not a fabricated 0.0 (the null-honesty rule, one level down).
+    qcx::io::RunResult result;
+    qcx::io::RunProperties properties;
+
+    qcx::io::RunTotalGradient total;
+    total.gradient = {0.125, -0.375};
+    total.terms.oneElectron = {0.25, -0.5};
+    total.terms.nuclearRepulsion = {0.75, -1.25};
+    total.terms.coulomb = {1.5, -2.5};
+    total.terms.exchange = {-3.5, 4.5};
+    total.terms.response = {5.5, -6.5};
+    total.energies.electronic = -8.125;
+    total.energies.reconstructedElectronic = -8.0625;
+    total.energies.nuclearRepulsion = 0.875;
+    total.energies.total = -7.25;
+    total.sizes.atomCount = 2;
+    total.sizes.numBasisFunctions = 3;
+    total.sizes.numOccupied = 1;
+    total.sizes.numVirtual = 2;
+    total.counts.oneElectron.orbitalPairs = 4;
+    total.counts.oneElectron.overlapTuples = 5;
+    total.counts.oneElectron.kineticTuples = 6;
+    total.counts.oneElectron.nuclearTuples = 7;
+    total.counts.twoElectron.braPairs = 8;
+    total.counts.twoElectron.ketPairs = 9;
+    total.counts.twoElectron.quartets = 10;
+    total.counts.twoElectron.screenedQuartets = 11;
+    total.response.solves = 6;
+    total.response.warmStarted = 0;
+    total.response.iterations = 42;
+    total.stationarityResidual = 1e-9;
+    total.energyResidualHartree = 2e-10;
+    total.rightHandSideTerms = {"one-electron", "coulomb", "exchange"};
+    properties.totalGradient = total;
+    result.properties = std::move(properties);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"total_gradient\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"gradient\": ["), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"one_electron\""), 2); // the term and the counts
+    EXPECT_EQ(CountOccurrences(json, "\"nuclear_repulsion\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"coulomb\""), 2); // the term and the RHS name
+    EXPECT_EQ(CountOccurrences(json, "\"exchange\""), 2);
+    EXPECT_EQ(CountOccurrences(json, "\"response\""), 2); // the term and the solve report
+    EXPECT_EQ(CountOccurrences(json, "\"electronic_hartree\": -8.125"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"reconstructed_electronic_hartree\": -8.0625"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"nuclear_repulsion_hartree\": 0.875"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"total_hartree\": -7.25"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"atom_count\": 2"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"num_basis_functions\": 3"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"num_occupied\": 1"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"num_virtual\": 2"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"orbital_pairs\": 4"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"overlap_tuples\": 5"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"kinetic_tuples\": 6"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"nuclear_tuples\": 7"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"bra_pairs\": 8"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"ket_pairs\": 9"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"quartets\": 10"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"screened_quartets\": 11"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"solves\": 6"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"warm_started\": 0"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"iterations\": 42"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"stationarity_residual\":"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"energy_residual_hartree\":"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"right_hand_side_terms\""), 1);
+    EXPECT_NE(json.find("\"one-electron\""), std::string::npos);
+
+    // The dispersion pair inside the block: absent, not zero.
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 0);
+    EXPECT_EQ(json.find("dispersion_hartree"), std::string::npos);
+}
+
+TEST(ResultJsonTest, TotalGradientDispersionTermIsPresentOnlyWhenRequested) {
+    // The same block with a [dispersion] block behind it: the term vector and
+    // its energy appear, under their own keys, and the totals still sum the
+    // documented way. Presence is the request's, so this is the only shape in
+    // which the pair is written.
+    qcx::io::RunResult result;
+    qcx::io::RunProperties properties;
+
+    qcx::io::RunTotalGradient total;
+    total.gradient = {0.125, -0.375};
+    total.terms.oneElectron = {0.25, -0.5};
+    total.terms.nuclearRepulsion = {0.75, -1.25};
+    total.terms.coulomb = {1.5, -2.5};
+    total.terms.exchange = {-3.5, 4.5};
+    total.terms.response = {5.5, -6.5};
+    total.terms.dispersion = std::vector<double>{-7.5, 8.5};
+    total.energies.electronic = -8.125;
+    total.energies.reconstructedElectronic = -8.0625;
+    total.energies.nuclearRepulsion = 0.875;
+    total.energies.dispersion = -0.03125;
+    total.energies.total = -7.28125;
+    total.rightHandSideTerms = {"one-electron", "coulomb", "exchange"};
+    properties.totalGradient = total;
+    result.properties = std::move(properties);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion_hartree\": -0.03125"), 1);
+    EXPECT_EQ(CountOccurrences(json, "-7.5"), 1);
+    EXPECT_EQ(CountOccurrences(json, "8.5"), 1);
+}
+
+TEST(ResultJsonTest, TotalGradientBlockAbsentWhenNotRequested) {
+    // Absent, never a zero-filled block: a record without the key states that
+    // no gradient was computed, which a block of zeros would misstate as a
+    // computed zero.
+    qcx::io::RunResult result;
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(json.find("total_gradient"), std::string::npos);
 }
 
 TEST(ResultJsonTest, SelectionBlockEmittedWhenPresent) {
