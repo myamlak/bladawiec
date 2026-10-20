@@ -1301,7 +1301,7 @@ TEST(ResultJsonTest, EriCacheBlockPairsTheRequestWithTheFiredBudget) {
     cache.grantedBytes = 1073741824;
     cache.effectiveBytes = 1073741824;
     cache.clamped = false;
-    fired.resourcesResolved.eriCache = std::move(cache);
+    fired.resourcesResolved.eriCache = cache;
 
     const std::string firedJson = qcx::io::SerializeRunResultJson(fired);
     EXPECT_NE(firedJson.find("\"eri_cache\""), std::string::npos);
@@ -1320,7 +1320,7 @@ TEST(ResultJsonTest, EriCacheBlockPairsTheRequestWithTheFiredBudget) {
     shrank.grantedBytes = 8589934592;
     shrank.effectiveBytes = 0;
     shrank.clamped = true;
-    clamped.resourcesResolved.eriCache = std::move(shrank);
+    clamped.resourcesResolved.eriCache = shrank;
 
     const std::string clampedJson = qcx::io::SerializeRunResultJson(clamped);
     EXPECT_NE(clampedJson.find("\"requested_bytes\": 8589934592"), std::string::npos);
@@ -1334,7 +1334,7 @@ TEST(ResultJsonTest, EriCacheBlockPairsTheRequestWithTheFiredBudget) {
     qcx::io::RunEriCache noDecision;
     noDecision.requestedBytes = 1024;
     noDecision.grantedBytes = 1024;
-    undecided.resourcesResolved.eriCache = std::move(noDecision);
+    undecided.resourcesResolved.eriCache = noDecision;
 
     const std::string undecidedJson = qcx::io::SerializeRunResultJson(undecided);
     EXPECT_EQ(undecidedJson.find("effective_bytes"), std::string::npos);

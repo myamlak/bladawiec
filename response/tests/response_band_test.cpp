@@ -421,18 +421,22 @@ TEST(ResponseBandTest, TheSameSmallGapPhysicsIsSolvedThroughAllThreeBands) {
     forcedMatrixFree.csrMaxNonzeros = 159'999;
 
     const std::vector<Case> cases = {
-        {64, ResponseBandLimits{}, SolverBand::kDense, ResponseBandProblem{64, 64 * 64}, Seed{1u}},
+        {64,
+         ResponseBandLimits{},
+         SolverBand::kDense,
+         ResponseBandProblem{64, std::size_t{64} * 64},
+         Seed{1u}},
         {400,
          ResponseBandLimits{},
          SolverBand::kExplicitCsr,
-         ResponseBandProblem{400, 400 * 400},
+         ResponseBandProblem{400, std::size_t{400} * 400},
          Seed{2u}},
         // The same 400-unknown problem, pushed off the explicit band by the
         // nonzero gate.
         {400,
          forcedMatrixFree,
          SolverBand::kMatrixFree,
-         ResponseBandProblem{400, 400 * 400},
+         ResponseBandProblem{400, std::size_t{400} * 400},
          Seed{2u}},
     };
 
