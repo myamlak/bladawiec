@@ -128,7 +128,7 @@ TEST(KsTauTest, WaterSto3gRksTauXConvergesAndCarriesTheXcBlock) {
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
-                        "(CI lmax=2)";
+                        "(a reduced-size build; CI builds 6)";
     }
 
     auto outcome = RunFile(TempInputPath("tau-x"), WaterToml(R"(type = "rks"
@@ -170,7 +170,7 @@ TEST(KsTauTest, TheFunctionalNameReachesThePhysics) {
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
-                        "(CI lmax=2)";
+                        "(a reduced-size build; CI builds 6)";
     }
 
     auto tau = RunFile(TempInputPath("tau-x-physics"), WaterToml(R"(type = "rks"

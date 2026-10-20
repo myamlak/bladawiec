@@ -32,6 +32,7 @@
 
 #include "alkane_sto3g.hpp"
 #include "fast_test_mode.hpp"
+#include "h2o_sto3g.hpp"
 #include "qcx/backend/tags.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/error.hpp"
@@ -39,6 +40,7 @@
 #include "qcx/integrals/fock_build.hpp"
 #include "qcx/integrals/one_electron.hpp"
 #include "qcx/integrals/precision_policy.hpp"
+#include "qcx/memory/workspace_budget.hpp"
 #include "tensor_conversions.hpp"
 
 #include <Eigen/Dense>
@@ -47,6 +49,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <gtest/gtest.h>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -55,6 +58,8 @@ namespace {
 using CpuTensor2 = qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>;
 using qcx::testing::IsFastOnlyMode;
 using qcx::testing::MakeAlkaneSto3g;
+using qcx::testing::MakeH2oSto3g;
+using qcx::testing::MakeH2oSto3gBasis;
 using qcx::testing::ToMatrix;
 using qcx::testing::ToTensor;
 
@@ -63,6 +68,14 @@ using qcx::testing::ToTensor;
 /// def2-SVP (the driver's STO-3G fixture needs only four carbons because
 /// its basis is smaller).
 constexpr std::size_t kFixtureCarbons = 4;
+
+/// The LightPath probe's workspace budget. Non-zero is the knob's
+/// precondition: fock_build.hpp documents lightPathChunkPairs as
+/// meaningful only together with a workspaceBudget (the legacy null-budget
+/// path ignores it so its bit-identity is not perturbed). 64 MiB covers
+/// the tiny fixture's light terms; the arena clamp shrinks the scratch term
+/// into what remains.
+constexpr std::size_t kLightPathBudgetBytes = std::size_t{64} * 1024 * 1024;
 
 /// The enforcement fixture: molecule, basis, H = T + V and S - the same
 /// construction the sibling harnesses use, minus everything this file does
@@ -191,6 +204,50 @@ qcx::Result<EnforcementFixture> MakeFixture() {
                               (6 * kFixtureCarbons + (2 * kFixtureCarbons + 2)) / 2};
 }
 
+/// Builds the small route fixture: H2O/STO-3G (7 basis functions). The
+/// demotion tests read the route's RECORD and the build it produces, not
+/// the routing numbers the alkane fixture exists to measure, so the cheap
+/// molecule is the right one there - the LightPath and the engaged ladder
+/// are forced by their own knobs, which work at any size.
+/// \returns The fixture, or the first Error of the chain.
+qcx::Result<EnforcementFixture> MakeSmallFixture() {
+    auto molecule = MakeH2oSto3g();
+
+    if (!molecule.has_value())
+    {
+        return std::unexpected(molecule.error());
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+
+    if (!basis.has_value())
+    {
+        return std::unexpected(basis.error());
+    }
+
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+
+    if (!core.has_value())
+    {
+        return std::unexpected(core.error());
+    }
+
+    auto overlap = qcx::integrals::BuildOverlapMatrix(*molecule, *basis);
+
+    if (!overlap.has_value())
+    {
+        return std::unexpected(overlap.error());
+    }
+
+    const Eigen::MatrixXd coreH = ToMatrix(*core);
+    return EnforcementFixture{std::move(*molecule),
+                              std::move(*basis),
+                              std::move(*core),
+                              coreH,
+                              ToMatrix(*overlap),
+                              5}; // O 1s/2s/2p + two H 1s: five occupied spatial orbitals.
+}
+
 /// The build options of one probe: the given preset with the two switches
 /// under test spelled explicitly.
 /// \param preset The accuracy preset.
@@ -232,12 +289,35 @@ struct ProbeOutcome {
 /// \param fixture The fixture.
 /// \param density The (fixed) density to contract.
 /// \param options The build options.
+/// \param ladderInputs The precision ladder's inputs, or null for the
+/// pre-ladder build (the existing probes).
+/// \param workspaceBudgetBytes A non-zero workspace budget for the build's
+/// Create-time mode decision (the LightPath knob's precondition), or zero
+/// for the legacy null-budget path.
 /// \returns The probe's outcome, or an Error.
 qcx::Result<ProbeOutcome> Probe(const EnforcementFixture& fixture,
                                 const Eigen::MatrixXd& density,
-                                const qcx::integrals::FockBuildOptions& options) {
+                                const qcx::integrals::FockBuildOptions& options,
+                                const qcx::integrals::PrecisionLadderInputs* ladderInputs = nullptr,
+                                std::size_t workspaceBudgetBytes = 0) {
+    qcx::integrals::FockBuildOptions createOptions = options;
+    std::optional<qcx::memory::WorkspaceBudget> workspaceBudget;
+
+    if (workspaceBudgetBytes != 0)
+    {
+        auto created = qcx::memory::WorkspaceBudget::Create(workspaceBudgetBytes);
+
+        if (!created.has_value())
+        {
+            return std::unexpected(created.error());
+        }
+
+        workspaceBudget.emplace(std::move(*created));
+        createOptions.workspaceBudget = &*workspaceBudget;
+    }
+
     auto builder = qcx::integrals::DirectJkFockBuilder::Create(
-        fixture.molecule, fixture.basis, fixture.core, options);
+        fixture.molecule, fixture.basis, fixture.core, createOptions);
 
     if (!builder.has_value())
     {
@@ -254,7 +334,7 @@ qcx::Result<ProbeOutcome> Probe(const EnforcementFixture& fixture,
     qcx::integrals::FockBuildStats stats;
     double deliveredBound = 0.0;
     qcx::integrals::CertifiedBudgetOutcome budget;
-    auto built = builder->BuildFock(*densityTensor, &deliveredBound, &stats, nullptr, &budget);
+    auto built = builder->BuildFock(*densityTensor, &deliveredBound, &stats, ladderInputs, &budget);
 
     if (!built.has_value())
     {
@@ -502,6 +582,104 @@ TEST(CertifiedBudgetTest, TheBudgetIsThePresetsOwnArithmetic) {
     // kTight keeps the lane off and the budget arithmetic never runs; the
     // helper stays total for the presets it is asked about.
     EXPECT_DOUBLE_EQ(CertifiedBoundBudget(AccuracyPreset::kTight, 0.0), 0.9 * 1e-12);
+}
+
+// The two rungs that cannot carry the comparison are DEMOTIONS, not
+// refusals (the disclosure rule's demote-with-disclosure arm): the build
+// skips the comparison, records why, and runs EXACTLY as the option's
+// absence would produce. Each test forces its rung by the knob that exists
+// for it - the LightPath chunk loop by lightPathChunkPairs, which
+// fock_build.hpp documents as meaningful only together with a
+// workspaceBudget (the legacy null-budget path ignores it), and the
+// precision ladder by the schedule - and pins both halves: the record says
+// the comparison was skipped, and the Fock matrix is the enforcement-off
+// build's, bit for bit (the fixed-order join makes that identity exact).
+//
+// FALSIFIABILITY: the demoted build differs from the enforcement-off build
+// if the comparison still runs (it would revoke the lane on a routed sum
+// over budget, and the two matrices would separate by the fp32 lane's own
+// deviation); the record half goes red if `demoted` is left to the zero
+// default or `enforced` keeps its old true.
+TEST(CertifiedBudgetTest, TheLightPathDemotesTheEnforcementAndRunsTheEnforcementOffBuild) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    auto fixtureResult = MakeSmallFixture();
+    ASSERT_TRUE(fixtureResult.has_value()) << fixtureResult.error().message;
+    const EnforcementFixture& fixture = *fixtureResult;
+    auto xResult = InverseSquareRoot(fixture.overlap);
+    ASSERT_TRUE(xResult.has_value());
+    const Eigen::MatrixXd density = OccupiedDensity(fixture.coreH, *xResult, fixture.occupiedCount);
+
+    qcx::integrals::FockBuildOptions enforcedOptions = ProbeOptions(true, true);
+    enforcedOptions.lightPathChunkPairs = 5;
+    // The knob needs a workspace budget to reach the Create-time mode
+    // decision that selects the LightPath; without one the builder stays
+    // on the legacy FastPath and the option is correctly ignored.
+    auto demoted = Probe(fixture, density, enforcedOptions, nullptr, kLightPathBudgetBytes);
+    ASSERT_TRUE(demoted.has_value()) << demoted.error().message;
+
+    // The record: the option was set, the route could not carry it, the
+    // comparison was skipped.
+    EXPECT_TRUE(demoted->budget.demoted);
+    EXPECT_FALSE(demoted->budget.enforced);
+    EXPECT_FALSE(demoted->budget.demotedReason.empty());
+    EXPECT_NE(demoted->budget.demotedReason.find("LightPath"), std::string::npos)
+        << demoted->budget.demotedReason;
+    EXPECT_FALSE(demoted->budget.fellBackToFp64);
+
+    // The build: the same route with only the option under test changed.
+    qcx::integrals::FockBuildOptions offOptions = ProbeOptions(true, false);
+    offOptions.lightPathChunkPairs = 5;
+    auto plain = Probe(fixture, density, offOptions, nullptr, kLightPathBudgetBytes);
+    ASSERT_TRUE(plain.has_value()) << plain.error().message;
+    EXPECT_FALSE(plain->budget.demoted);
+    EXPECT_FALSE(plain->budget.enforced);
+    EXPECT_TRUE(plain->fock == demoted->fock)
+        << "the demoted build must BE the enforcement-off build";
+    EXPECT_DOUBLE_EQ(demoted->deliveredBoundHa, plain->deliveredBoundHa);
+    EXPECT_EQ(demoted->fp32Quartets, plain->fp32Quartets);
+    EXPECT_EQ(demoted->fp64Quartets, plain->fp64Quartets);
+}
+
+TEST(CertifiedBudgetTest, TheEngagedLadderDemotesTheEnforcementAndRunsTheEnforcementOffBuild) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    auto fixtureResult = MakeSmallFixture();
+    ASSERT_TRUE(fixtureResult.has_value()) << fixtureResult.error().message;
+    const EnforcementFixture& fixture = *fixtureResult;
+    auto xResult = InverseSquareRoot(fixture.overlap);
+    ASSERT_TRUE(xResult.has_value());
+    const Eigen::MatrixXd density = OccupiedDensity(fixture.coreH, *xResult, fixture.occupiedCount);
+
+    qcx::integrals::PrecisionBandProfile profile; // No tensor cores: the CPU profile.
+    qcx::integrals::EscalationSchedule schedule(
+        qcx::integrals::AccuracyPreset::kNormal, profile, qcx::integrals::PrecisionCap::kFp64);
+    const qcx::integrals::PrecisionLadderInputs inputs{0.0, 0.0, &schedule};
+
+    auto demoted = Probe(fixture, density, ProbeOptions(true, true), &inputs);
+    ASSERT_TRUE(demoted.has_value()) << demoted.error().message;
+    EXPECT_TRUE(demoted->budget.demoted);
+    EXPECT_FALSE(demoted->budget.enforced);
+    EXPECT_FALSE(demoted->budget.demotedReason.empty());
+    EXPECT_NE(demoted->budget.demotedReason.find("precision ladder"), std::string::npos)
+        << demoted->budget.demotedReason;
+    EXPECT_FALSE(demoted->budget.fellBackToFp64);
+
+    auto plain = Probe(fixture, density, ProbeOptions(true, false), &inputs);
+    ASSERT_TRUE(plain.has_value()) << plain.error().message;
+    EXPECT_FALSE(plain->budget.demoted);
+    EXPECT_FALSE(plain->budget.enforced);
+    EXPECT_TRUE(plain->fock == demoted->fock)
+        << "the demoted build must BE the enforcement-off build";
+    EXPECT_DOUBLE_EQ(demoted->deliveredBoundHa, plain->deliveredBoundHa);
+    EXPECT_EQ(demoted->fp32Quartets, plain->fp32Quartets);
+    EXPECT_EQ(demoted->fp64Quartets, plain->fp64Quartets);
 }
 
 } // namespace

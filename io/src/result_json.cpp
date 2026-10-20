@@ -132,6 +132,28 @@ std::string SerializeRunResultJson(const RunResult& result) {
     // never a block of defaults standing in for a grid that never existed).
     document["method"] = ToString(result.method);
 
+    // The initial guess (schema 42): the requested word when the file wrote
+    // one, the word the run actually ran, and the checkpoint a restart read.
+    // `ran` is always present (every SCF started from a guess); `type` only
+    // when [guess] type was written (an absent key is not a request), and
+    // `restart_path` only when the run seeded from one - the null-honesty
+    // rule, never an empty string standing in for "none".
+    {
+        nlohmann::json block{{"ran", result.guess.ran}};
+
+        if (result.guess.type.has_value())
+        {
+            block["type"] = *result.guess.type;
+        }
+
+        if (result.guess.restartPath.has_value())
+        {
+            block["restart_path"] = *result.guess.restartPath;
+        }
+
+        document["guess"] = block;
+    }
+
     if (result.functional.has_value())
     {
         document["functional"] = *result.functional;
@@ -403,10 +425,19 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                                      {"last_call_ha", bound.lastCallHa},
                                                      {"max_call_ha", bound.maxCallHa},
                                                      {"enforced", bound.enforced},
+                                                     {"demoted", bound.demoted},
                                                      {"budget_ha", bound.budgetHa},
                                                      {"routed_ha", bound.routedHa},
                                                      {"routed_quartets", bound.routedQuartets},
                                                      {"fell_back_to_fp64", bound.fellBackToFp64}};
+
+        // The reason rides the verdict, never on its own (the eri_store
+        // block's rule): a reason on a call that was not demoted would be a
+        // sentence with nothing to explain.
+        if (bound.demoted)
+        {
+            document["certified_bound"]["demoted_reason"] = bound.demotedReason;
+        }
     }
 
     // The QFMM model block (schema 29): what the composed-QFMM builder's
@@ -648,6 +679,29 @@ std::string SerializeRunResultJson(const RunResult& result) {
         }
 
         resourcesBlock["eri_store"] = std::move(storeBlock);
+    }
+
+    // The eri_cache request record (schema 43): written exactly when the
+    // input wrote method.eri_cache_bytes. The requested and granted budgets
+    // are always written (a request record that did not say what was asked
+    // for could not pair it with what ran); `effective_bytes` is written
+    // when the engine made a mode decision, 0 included - a fired budget of
+    // 0 is the true "the cache did not engage" reading, never an absence;
+    // `clamped` is always written so the comparison is readable without
+    // re-deriving it.
+    if (resources.eriCache.has_value())
+    {
+        const RunEriCache& cache = *resources.eriCache;
+        nlohmann::json cacheBlock = {{"requested_bytes", cache.requestedBytes},
+                                     {"granted_bytes", cache.grantedBytes},
+                                     {"clamped", cache.clamped}};
+
+        if (cache.effectiveBytes.has_value())
+        {
+            cacheBlock["effective_bytes"] = *cache.effectiveBytes;
+        }
+
+        resourcesBlock["eri_cache"] = std::move(cacheBlock);
     }
 
     // The compute-profile block (schema 20): the hardware input the

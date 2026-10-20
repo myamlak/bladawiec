@@ -93,6 +93,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/ks_input_file_test.cpp
         tests/ri_chunk_bytes_record_test.cpp
         tests/eri_store_record_test.cpp
+        tests/eri_cache_record_test.cpp
         tests/run_input_help_test.cpp
         tests/dispersion_input_test.cpp)
     # src PRIVATE: ks_composition_test.cpp includes the driver-internal

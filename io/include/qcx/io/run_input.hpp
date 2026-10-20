@@ -500,6 +500,25 @@ struct RunMethodInput {
     /// ran, so a request that was demoted is disclosed rather than silently
     /// substituted.
     std::string eriCacheStore;
+    /// The in-memory ERI cache budget request (schema 43): the per-lane
+    /// payload budget the direct family's batch engine may hold, in BYTES
+    /// (the FockBuildOptions::maxCacheBytes passthrough). Absent preserves
+    /// the run's existing disposition - on the unrestricted legs the
+    /// cap-derived grant DirectFamilyCacheBytes computes, on the restricted
+    /// legs no cache at all - so no run that does not write the key moves.
+    /// Present must be >= 1 and OVERRIDES the cap-derived grant on the
+    /// routes that own the knob: the direct family's machinery member on
+    /// both the restricted and the unrestricted legs (and the Kohn-Sham
+    /// composition built from the same options). Every other route - the
+    /// lean member, ri_j_link, ri_jk, qfmm, gpu - has no maxCacheBytes at
+    /// all, so the driver REFUSES the key there by name rather than
+    /// dropping it; it also refuses it at memory_cap_gib = 0, where the
+    /// workspace-budget path (and with it the engine's Create-time
+    /// sure-fit clamp) does not exist. The run record's
+    /// resources_resolved.eri_cache pairs the request with the budget the
+    /// engine actually fired. Appended last so the aggregate's earlier
+    /// fields keep their positions.
+    std::optional<std::size_t> eriCacheBytes;
 };
 
 /// The [scf] block; every field optional with the SCF defaults.
@@ -750,6 +769,16 @@ enum class GuessKind {
     kSad, ///< Superposition of atomic densities (UHF).
     kRestart, ///< Seed from a saved SCF state (RHF; checkpoint file).
 };
+
+/// The guess word for one GuessKind (schema 42); the inverse of the parser
+/// mapping (parse_input.cpp ParseGuess), so `[guess] type` and the record's
+/// `guess.type` key are one vocabulary. It names the REQUEST only: kCore is
+/// recorded as "core" even though the default start RUNS the GWH guess on
+/// RHF - the word `ran` in the record is the separate run fact.
+/// \param kind The guess selection.
+/// \returns "core" | "gwh" | "sad" | "restart".
+/// \ingroup qcx-io
+std::string_view ToString(GuessKind kind) noexcept;
 
 // ---------------------------------------------------------------------------
 // THE BUILDER SELECTION'S ORTHOGONAL AXES.
@@ -1115,6 +1144,13 @@ struct RunInput {
     /// Appended after builder so the aggregate's earlier fields keep their
     /// positions.
     std::optional<qcx::dispersion::DispersionOptions> dispersion;
+    /// True when the file WROTE `[guess] type` (schema 42). The guess itself
+    /// always resolves (`guess`, defaulting to kCore), so the resolved enum
+    /// cannot say whether "core" was asked for or merely defaulted - and the
+    /// run record's `guess.type` key follows the request, present exactly when
+    /// one was written (the schema-19 null-honesty rule). Appended last so the
+    /// aggregate's earlier fields keep their positions.
+    bool guessExplicit = false;
 };
 
 /// \}

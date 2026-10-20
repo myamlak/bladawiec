@@ -171,7 +171,7 @@ TEST(KsInputFileTest, TheSameFileOnTheHartreeFockWordIsADifferentEnergy) {
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
-                        "(CI lmax=2)";
+                        "(a reduced-size build; CI builds 6)";
     }
 
     auto ks = RunFile(TempInputPath("rks-slater"), WaterToml(R"(type = "rks"
@@ -213,7 +213,7 @@ TEST(KsInputFileTest, ChangingTheFunctionalNameMovesTheEnergy) {
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
-                        "(CI lmax=2)";
+                        "(a reduced-size build; CI builds 6)";
     }
 
     auto b3lyp = RunFile(TempInputPath("byp"), WaterToml(R"(type = "rks"
@@ -266,7 +266,7 @@ TEST(KsInputFileTest, TheGradientKeyAsksForTheExchangeCorrelationWalk) {
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "the universal-J aux f and g shells exceed this build's kMaxEngineL "
-                        "(CI lmax=2)";
+                        "(a reduced-size build; CI builds 6)";
     }
 
     const std::string ksBody = R"(type = "rks"

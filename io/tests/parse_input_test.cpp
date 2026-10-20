@@ -31,6 +31,7 @@ using qcx::io::RunInput;
 using qcx::io::RunProperties;
 using qcx::io::RunResult;
 using qcx::io::SerializeRunResultJson;
+using qcx::io::ToString;
 
 const char* kExampleH2Toml = R"(
 [molecule]
@@ -130,6 +131,7 @@ restart_path = "partial.h5"
 
     EXPECT_EQ(input->guess, GuessKind::kRestart);
     EXPECT_EQ(input->guessRestartPath, "partial.h5");
+    EXPECT_TRUE(input->guessExplicit);
     EXPECT_EQ(input->scf.checkpointFile, "partial.h5");
     EXPECT_TRUE(input->scf.checkpointConverged);
 }
@@ -154,7 +156,48 @@ TEST(RunInputParseTest, NonRestartGuessToleratesAnInertRestartPath) {
         "[guess]\ntype = \"gwh\"\nrestart_path = \"stray.h5\"\n");
     ASSERT_TRUE(input.has_value());
     EXPECT_EQ(input->guess, GuessKind::kGwh);
+    EXPECT_TRUE(input->guessExplicit);
     EXPECT_EQ(input->guessRestartPath, "stray.h5");
+}
+
+TEST(RunInputParseTest, GuessExplicitFollowsTheWrittenKeyAndToStringInvertsParseGuess) {
+    // Schema 42: the record's `guess.type` follows the REQUEST, so the parser
+    // must keep "was [guess] type written" as a fact of its own - the
+    // resolved enum cannot answer it, because the default is kCore and a
+    // written "core" resolves to the same value.
+    const auto absent = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\n");
+    ASSERT_TRUE(absent.has_value());
+    EXPECT_EQ(absent->guess, GuessKind::kCore);
+    EXPECT_FALSE(absent->guessExplicit);
+
+    // An empty [guess] block writes no type either: the table's presence is
+    // not the request, the key is.
+    const auto emptyBlock = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\n"
+        "[guess]\n");
+    ASSERT_TRUE(emptyBlock.has_value());
+    EXPECT_EQ(emptyBlock->guess, GuessKind::kCore);
+    EXPECT_FALSE(emptyBlock->guessExplicit);
+
+    // A written "core" is a request even though it resolves to the same enum
+    // value as the default.
+    const auto written = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\n"
+        "[guess]\ntype = \"core\"\n");
+    ASSERT_TRUE(written.has_value());
+    EXPECT_EQ(written->guess, GuessKind::kCore);
+    EXPECT_TRUE(written->guessExplicit);
+
+    // ToString is ParseGuess's inverse: the record's `type` vocabulary is the
+    // input's own, so every accepted word round-trips.
+    EXPECT_EQ(ToString(GuessKind::kCore), "core");
+    EXPECT_EQ(ToString(GuessKind::kGwh), "gwh");
+    EXPECT_EQ(ToString(GuessKind::kSad), "sad");
+    EXPECT_EQ(ToString(GuessKind::kRestart), "restart");
 }
 
 TEST(RunInputParseTest, AppliesDefaultsWhenBlocksAreOmitted) {
@@ -1232,6 +1275,67 @@ TEST(RunInputParseTest, ParsesTheRiTensorSchemaKnobs) {
     EXPECT_FALSE(plain->method.riTensorMode.has_value());
     EXPECT_FALSE(plain->method.riChunkBytes.has_value());
     EXPECT_FALSE(plain->diagnostics.forceDiskRi);
+}
+
+TEST(RunInputParseTest, ParsesTheInMemoryEriCacheBudget) {
+    // The in-memory ERI cache budget (schema 43): a byte count with no
+    // default of its own, because the two legs resolve an absent key
+    // differently (the unrestricted legs derive a grant from the memory cap,
+    // the restricted legs run with the cache off). The parser stores
+    // `nullopt` for an omitted key and the value for a written one; the
+    // route judgement and the leg defaults are the driver's, not the
+    // parser's.
+    const auto written = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\naccuracy = \"kNormal\"\neri_cache_bytes = 536870912\n");
+    ASSERT_TRUE(written.has_value()) << written.error().message;
+    ASSERT_TRUE(written->method.eriCacheBytes.has_value());
+    EXPECT_EQ(*written->method.eriCacheBytes, 536870912u);
+
+    // The floor edge: 1 is a legal budget.
+    const auto floorEdge = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\naccuracy = \"kNormal\"\neri_cache_bytes = 1\n");
+    ASSERT_TRUE(floorEdge.has_value()) << floorEdge.error().message;
+    ASSERT_TRUE(floorEdge->method.eriCacheBytes.has_value());
+    EXPECT_EQ(*floorEdge->method.eriCacheBytes, 1u);
+
+    // Beyond int's range, and this is the realistic size: the grant the key
+    // overrides is held at 8 GiB. A budget read into an int would come back
+    // empty and be mistaken for an omitted key; the parser reads this one at
+    // 64 bits.
+    const auto eightGib = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\naccuracy = \"kNormal\"\neri_cache_bytes = 8589934592\n");
+    ASSERT_TRUE(eightGib.has_value()) << eightGib.error().message;
+    ASSERT_TRUE(eightGib->method.eriCacheBytes.has_value());
+    EXPECT_EQ(*eightGib->method.eriCacheBytes, 8589934592u);
+
+    // An omitted key is not a request.
+    const auto absent = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\naccuracy = \"kNormal\"\n");
+    ASSERT_TRUE(absent.has_value()) << absent.error().message;
+    EXPECT_FALSE(absent->method.eriCacheBytes.has_value());
+
+    // Zero is refused by name: a written zero would be neither a request nor
+    // an absence, and the leg defaults already carry the "cache off" state.
+    const auto zero = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\naccuracy = \"kNormal\"\neri_cache_bytes = 0\n");
+    ASSERT_FALSE(zero.has_value());
+    EXPECT_EQ(zero.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(zero.error().message.find("method.eri_cache_bytes must be >= 1"), std::string::npos)
+        << "message: " << zero.error().message;
+
+    // Type-strict: a non-integer budget is a typo, not a byte count.
+    const auto mistyped = ParseRunInput(
+        "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+        "[method]\ntype = \"rhf\"\naccuracy = \"kNormal\"\neri_cache_bytes = \"1 GiB\"\n");
+    ASSERT_FALSE(mistyped.has_value());
+    EXPECT_NE(mistyped.error().message.find("\"method.eri_cache_bytes\" must be an integer"),
+              std::string::npos)
+        << "message: " << mistyped.error().message;
 }
 
 TEST(RunInputParseTest, RetiredForcedDiskWordNamesTheKeyThatReplacedIt) {

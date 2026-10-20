@@ -18,6 +18,7 @@
 #include "qcx/driver/selection_resolution.hpp"
 
 #include <string>
+#include <utility>
 
 namespace qcx::driver {
 namespace {
@@ -55,12 +56,16 @@ constexpr const char* kNoBuilderOpener = "no fock_builder given: ";
 
 // The standing explicit reasoning (a record for an opt-in request never
 // pretends a model ranked it). An explicit request leaves the ladder
-// entirely: it is honored by name, demotion and all.
+// entirely: it is honored by name, demotion and all - with the one
+// exception the closing clause names (the enforcement key's demotion, whose
+// own text ApplyCertifiedBoundDemotion appends when it fires).
 std::string ExplicitReasoning(qcx::io::BuilderKind kind) {
     return "explicit fock_builder " + NameOf(kind) +
            " honored (the ladder governs the absent case only - an explicit request is never "
-           "demoted, and the record's pick names the tier the ladder would have wired for this "
-           "run without the key)";
+           "demoted, except by [method] enforce_certified_bound's own demotion, the one key "
+           "that overrides the builder choice and states the override in the warning, and the "
+           "record's pick names the tier the ladder would have wired for this run without the "
+           "key)";
 }
 
 // The explicit lean request's reasoning: the request IS the opener (the
@@ -262,6 +267,74 @@ LadderPick PickFromLadder(const SelectionResolutionInput& input) {
     return pick;
 }
 
+// The enforce_certified_bound resolution's own demotion (see this header's
+// file note): a restricted run whose builder resolution landed on a route
+// that cannot carry the enforcement is rewritten onto the direct family's
+// MACHINERY member, and the rewrite is disclosed in the warning (stderr and
+// the record) and in the reasoning (the record's own why) - never silent.
+// Unrestricted runs are left exactly as resolved: their wiring carries no
+// enforcement field on any builder, so no rewrite could honour the key, and
+// the driver refuses it by name there.
+//
+// The route is named as the resolution reached it, and the request in the
+// input's own spelling, because "the run was demoted" is only actionable
+// beside the request that caused it. The keys the demotion invalidates are
+// named with them: the builder request no longer selects the builder that
+// runs, and every builder-bound key the input also wrote is re-resolved
+// against the machinery member the rewrite wires.
+ResolvedBuilderSelection ApplyCertifiedBoundDemotion(const SelectionResolutionInput& input,
+                                                     ResolvedBuilderSelection resolved) {
+    if (!input.input.method.enforceCertifiedBound || input.unrestricted)
+    {
+        return resolved;
+    }
+
+    // The machinery member already: nothing to rewrite, and the resolution's
+    // own reasoning and warning stand.
+    if (resolved.kind == qcx::io::BuilderKind::kDirect && !resolved.leanMember)
+    {
+        return resolved;
+    }
+
+    const std::string route =
+        resolved.leanMember ? std::string(TierName(Tier::kLean)) : NameOf(resolved.kind);
+
+    // The request the rewrite invalidates. An explicit fock_builder (the
+    // family word or its "in_memory" tier alias) and the explicit "lean"
+    // spelling are keys; a run that named nothing reaches the demotion
+    // through the ladder's own tier, which is a resolution, not a key.
+    std::string request;
+
+    if (input.input.method.builder.has_value())
+    {
+        request = "fock_builder = \"" + NameOf(*input.input.method.builder) + "\"";
+    } else if (input.input.method.leanDirect)
+    {
+        request = "fock_builder = \"lean\"";
+    } else
+    {
+        request = "the no-fock_builder size ladder";
+    }
+
+    const std::string demotion =
+        "method.enforce_certified_bound = true is a claim the run must not drop, and the "
+        "builder resolution's answer - " +
+        route + " (from " + request +
+        ") - cannot carry it: the certified-bound budget enforcement is implemented by the "
+        "direct family's machinery member alone (the lean member's options struct has no "
+        "enforcement field, and no other family's carries one). The run is DEMOTED to that "
+        "member, which is the builder that runs and the one the record's builder and "
+        "builder_member name; the builder request above is invalidated with the demotion "
+        "(explicit_builder still names the word the file wrote), and every builder-bound key "
+        "the input also wrote is resolved against the machinery member's options from here on";
+
+    resolved.kind = qcx::io::BuilderKind::kDirect;
+    resolved.leanMember = false;
+    resolved.reasoning += "; " + demotion;
+    resolved.warning = resolved.warning.empty() ? demotion : resolved.warning + "; " + demotion;
+    return resolved;
+}
+
 } // namespace
 
 qcx::Result<ResolvedBuilderSelection> ResolveBuilderSelection(
@@ -305,7 +378,7 @@ qcx::Result<ResolvedBuilderSelection> ResolveBuilderSelection(
             resolved.reasoning = std::string(kNoBuilderOpener) + ladder.reasoning;
         }
 
-        return resolved;
+        return ApplyCertifiedBoundDemotion(input, std::move(resolved));
     }
 
     // The device-less fallback GPU auto-fallback, retargeted to the ladder: an explicit
@@ -342,7 +415,7 @@ qcx::Result<ResolvedBuilderSelection> ResolveBuilderSelection(
             " - gpu is an explicit opt-in, and the model auto-selection that used to name the "
             "fallback is retired)" +
             (ladder.warning.empty() ? std::string() : std::string("; " + ladder.warning));
-        return resolved;
+        return ApplyCertifiedBoundDemotion(input, std::move(resolved));
     }
 
     // An explicit opt-in is honored as requested. The UHF-unsafe kinds
@@ -368,7 +441,7 @@ qcx::Result<ResolvedBuilderSelection> ResolveBuilderSelection(
     // never steered - the same speaker-neutrality rule the no-key opener
     // follows in the other direction.
     resolved.warning.clear();
-    return resolved;
+    return ApplyCertifiedBoundDemotion(input, std::move(resolved));
 }
 
 } // namespace qcx::driver

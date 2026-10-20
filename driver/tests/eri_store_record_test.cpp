@@ -26,8 +26,9 @@
 //     engine pair names that family; and a molecule whose symmetry reduction
 //     engages the class-aware path names the disengagement, because there the
 //     decorator is installed and the engine never calls it.
-//   - REFUSED BY NAME: the unrestricted legs, which the key's own increment
-//     boundary leaves unwired.
+//   - REFUSED BY NAME: an unrestricted run of a family other than the direct
+//     one. The direct family's per-spin halves install the same seam, so only
+//     the families that carry no batch engine pair refuse the key.
 //   - NEVER ASKED: no block at all, so "dropped" can never be read as
 //     "never asked".
 //

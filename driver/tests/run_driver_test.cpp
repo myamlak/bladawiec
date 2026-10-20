@@ -626,6 +626,36 @@ std::optional<double> JsonNumber(const std::string& json,
     return std::stod(json.substr(valuePos + 1));
 }
 
+// The `guess` block's own text (schema 42): from its opening brace to the
+// matching close. The block's members are flat (ran, an optional type, an
+// optional restart_path), so the first '}' after the '{' closes it, and a
+// search inside this substring cannot spill into the rest of the document.
+// Returns nullopt when the block is absent.
+std::optional<std::string> GuessBlock(const std::string& json) {
+    const auto keyPos = json.find("\"guess\":");
+
+    if (keyPos == std::string::npos)
+    {
+        return std::nullopt;
+    }
+
+    const auto open = json.find('{', keyPos);
+
+    if (open == std::string::npos)
+    {
+        return std::nullopt;
+    }
+
+    const auto close = json.find('}', open);
+
+    if (close == std::string::npos)
+    {
+        return std::nullopt;
+    }
+
+    return json.substr(open, close - open + 1);
+}
+
 // The doubles of the first one-level JSON array following \p pattern (e.g.
 // "\"total\":" — the trailing colon disambiguates "total_energy_hartree")
 // at or after \p from, plus the position after the array so callers can
@@ -1073,6 +1103,15 @@ TEST(DriverPinTest, H2DirectRhfReproducesThePin) {
     EXPECT_NE(
         result->find("\"schema_version\": " + std::to_string(qcx::io::RunResult::kSchemaVersion)),
         std::string::npos);
+
+    // The guess record (schema 42): kH2Toml writes no [guess] block, so the
+    // REQUEST member is absent while `ran` names the default start the loop
+    // actually used - the GWH guess, never the request word "core".
+    const auto guessBlock = GuessBlock(*result);
+    ASSERT_TRUE(guessBlock.has_value());
+    EXPECT_NE(guessBlock->find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(guessBlock->find("\"type\""), std::string::npos);
+    EXPECT_EQ(guessBlock->find("\"restart_path\""), std::string::npos);
 
     // Every driver run resolves the [resources] block into
     // resources_resolved, even a defaulted one. The defaults must
@@ -2300,6 +2339,64 @@ type = "gwh"
     ASSERT_TRUE(iterations.has_value());
     EXPECT_GT(static_cast<int>(*iterations), 0);
     EXPECT_NE(result->find("\"converged\": true"), std::string::npos);
+
+    // The guess record (schema 42): the written word and the start the run
+    // used agree here, because "gwh" IS the start GWH names.
+    const auto guessBlock = GuessBlock(*result);
+    ASSERT_TRUE(guessBlock.has_value());
+    EXPECT_NE(guessBlock->find("\"type\": \"gwh\""), std::string::npos);
+    EXPECT_NE(guessBlock->find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(guessBlock->find("\"restart_path\""), std::string::npos);
+}
+
+TEST(DriverPinTest, H2ExplicitCoreGuessRecordsTheRequestAndTheStartSeparately) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    // `core` names the METHOD'S DEFAULT START, which RHF runs as the GWH
+    // guess - so the record's request word is "core" while its run word is
+    // "gwh". Publishing either alone would lose a fact: the request word
+    // alone would claim a zero start the run never built, and the run word
+    // alone could not tell a defaulted run from an explicit request.
+    auto result = RunInputText(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["H", 0.0, 0.0, 0.0],
+    ["H", 0.74084809526419992, 0.0, 0.0],
+]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kTight"
+
+[scf]
+max_iterations = 100
+energy_tolerance = 1e-8
+density_tolerance = 1e-6
+use_diis = true
+
+[guess]
+type = "core"
+)");
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+
+    const auto total = JsonNumber(*result, "\"total_energy_hartree\"");
+    ASSERT_TRUE(total.has_value());
+    EXPECT_NEAR(*total, -1.1167143252, 1e-8);
+
+    const auto guessBlock = GuessBlock(*result);
+    ASSERT_TRUE(guessBlock.has_value());
+    EXPECT_NE(guessBlock->find("\"type\": \"core\""), std::string::npos);
+    EXPECT_NE(guessBlock->find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(guessBlock->find("\"restart_path\""), std::string::npos);
 }
 
 TEST(DriverPinTest, H2oDirectRhfReproducesThePin) {
@@ -2549,7 +2646,7 @@ TEST(DriverPinTest, CertifiedBoundIsAbsentOnTheLeanMember) {
     auto result = RunInputText(kH2TomlAutoLean);
     ASSERT_TRUE(result.has_value()) << result.error().message;
     EXPECT_NE(result->find("\"converged\": true"), std::string::npos);
-    EXPECT_EQ(result->find("certified_bound"), std::string::npos);
+    EXPECT_EQ(result->find("\"certified_bound\""), std::string::npos);
 }
 
 // The fourth case of the block's truth table: the ri_j_link route. Its
@@ -2569,14 +2666,14 @@ TEST(DriverPinTest, CertifiedBoundIsAbsentOnTheRiJLink) {
     if (!qcx::integrals::SupportsL(3))
     {
         GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL "
-                        "(CI lmax=2)";
+                        "(a reduced-size build; CI builds 6)";
     }
 
     auto link = RunInputText(H2oDef2SvpToml("ri_j_link").c_str());
     ASSERT_TRUE(link.has_value()) << link.error().message;
     EXPECT_NE(link->find("\"converged\": true"), std::string::npos);
     EXPECT_NE(link->find("\"builder\": \"ri_j_link\""), std::string::npos);
-    EXPECT_EQ(link->find("certified_bound"), std::string::npos);
+    EXPECT_EQ(link->find("\"certified_bound\""), std::string::npos);
 
     auto machinery = RunInputText(H2oDef2SvpToml("direct").c_str());
     ASSERT_TRUE(machinery.has_value()) << machinery.error().message;
@@ -2605,7 +2702,8 @@ TEST(DriverPinTest, CertifiedBoundIsAbsentOnTheRiJLink) {
 TEST(DriverPinTest, RiJKWiresTheComposedFullRiBuilderEndToEnd) {
     if (!qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "the JK-fit aux f shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP() << "the JK-fit aux f shells exceed this build's kMaxEngineL (a reduced-size "
+                        "build; CI builds 6)";
     }
 
     const auto riJk = RunInputText(H2oDef2SvpToml("ri_jk").c_str());
@@ -2910,7 +3008,8 @@ accuracy = "kLoose"
     // hold at every lmax - the run below does not, and is gated on the engine's
     // coverage (the pattern the sibling RiJKWiresTheComposedFullRiBuilderEnd-
     // ToEnd takes a cell up, and the sibling control inside RiJkCarriesThe-
-    // ReductionRequest takes a leg). CI lmax=2 cannot host it.
+    // ReductionRequest takes a leg). A reduced-size build cannot host it; CI
+    // builds the shipped 6, so the run contributes coverage there.
     if (qcx::integrals::SupportsL(3))
     {
         const auto control = RunInputText(R"(
@@ -3333,6 +3432,14 @@ TEST(DriverPinTest, O2UhfSadDirectReproducesThePins) {
     // of a UHF run that named "direct" must still say so.
     EXPECT_NE(result->find("\"builder\": \"direct\""), std::string::npos);
     EXPECT_NE(result->find("\"builder_member\": \"direct\""), std::string::npos);
+
+    // The guess record (schema 42): the SAD request and the SAD start agree -
+    // one of the words whose request and run are the same fact.
+    const auto guessBlock = GuessBlock(*result);
+    ASSERT_TRUE(guessBlock.has_value());
+    EXPECT_NE(guessBlock->find("\"type\": \"sad\""), std::string::npos);
+    EXPECT_NE(guessBlock->find("\"ran\": \"sad\""), std::string::npos);
+    EXPECT_EQ(guessBlock->find("\"restart_path\""), std::string::npos);
 }
 
 // The OH doublet of STO-3G: R = 1.8326 Bohr on the z axis (0.9697701567008378
@@ -3669,7 +3776,7 @@ TEST(DriverPinTest, O2UhfRiJLinkWiresThePerSpinAdapterEndToEnd) {
     if (qcx::testing::IsFastOnlyMode() || !qcx::integrals::SupportsL(3))
     {
         GTEST_SKIP() << "heavy numerical test: Release-only; the universal-J aux f shells "
-                        "exceed this build's kMaxEngineL (CI lmax=2)";
+                        "exceed this build's kMaxEngineL (a reduced-size build; CI builds 6)";
     }
 
     auto result = RunInputText(kO2RiJLinkToml);
@@ -3746,7 +3853,7 @@ TEST(DriverPinTest, O2UhfRiJLinkWiresThePerSpinAdapterEndToEnd) {
     // runs): the key must be ABSENT, never a fabricated zero. The instrument
     // check is the sibling pin CertifiedBoundIsAbsentOnTheRiJLink, which
     // finds the key on the SAME fixture's machinery leg.
-    EXPECT_EQ(result->find("certified_bound"), std::string::npos) << *result;
+    EXPECT_EQ(result->find("\"certified_bound\""), std::string::npos) << *result;
 
     // The memory audit block records the RI family's own (n, nAux) terms -
     // the same ones the restricted leg records: this leg's cap was weighed
@@ -3787,7 +3894,7 @@ TEST(DriverPinTest, UhfRiJLinkMatchesTheRestrictedLegOnAClosedShellDeck) {
     if (qcx::testing::IsFastOnlyMode() || !qcx::integrals::SupportsL(3))
     {
         GTEST_SKIP() << "heavy numerical test: Release-only; the universal-J aux f shells "
-                        "exceed this build's kMaxEngineL (CI lmax=2)";
+                        "exceed this build's kMaxEngineL (a reduced-size build; CI builds 6)";
     }
 
     auto restricted = RunInputText(H2oDef2SvpToml("ri_j_link").c_str());
@@ -3838,7 +3945,7 @@ TEST(DriverPinTest, UhfRiJkWiresThePerSpinAdapterEndToEnd) {
     if (qcx::testing::IsFastOnlyMode() || !qcx::integrals::SupportsL(3))
     {
         GTEST_SKIP() << "heavy numerical test: Release-only; the JK-fit aux f shells exceed "
-                        "this build's kMaxEngineL (CI lmax=2)";
+                        "this build's kMaxEngineL (a reduced-size build; CI builds 6)";
     }
 
     auto result = RunInputText(kO2RiJkToml);
@@ -3958,7 +4065,7 @@ TEST(DriverPinTest, UhfRiJkWiresThePerSpinAdapterEndToEnd) {
     // The certified bound takes the shorter BuildFock path it takes on every
     // other RI leg: the pair's seam hands no bound pointer to the fp32 lane,
     // so the key must be ABSENT, never a fabricated zero.
-    EXPECT_EQ(result->find("certified_bound"), std::string::npos) << *result;
+    EXPECT_EQ(result->find("\"certified_bound\""), std::string::npos) << *result;
 
     // The memory audit block records THIS family's (n, nAux) terms - the same
     // terms the restricted ri_jk leg records, not the direct family's.
@@ -3998,7 +4105,7 @@ TEST(DriverPinTest, UhfRiJkMatchesTheRestrictedLegOnAClosedShellDeck) {
     if (qcx::testing::IsFastOnlyMode() || !qcx::integrals::SupportsL(3))
     {
         GTEST_SKIP() << "heavy numerical test: Release-only; the JK-fit aux f shells exceed "
-                        "this build's kMaxEngineL (CI lmax=2)";
+                        "this build's kMaxEngineL (a reduced-size build; CI builds 6)";
     }
 
     auto restricted = RunInputText(H2oDef2SvpToml("ri_jk").c_str());
@@ -4055,7 +4162,7 @@ TEST(DriverPinTest, UhfRiJkRunsASpinChannelWithNoElectrons) {
     if (qcx::testing::IsFastOnlyMode() || !qcx::integrals::SupportsL(3))
     {
         GTEST_SKIP() << "heavy numerical test: Release-only; the JK-fit aux f shells exceed "
-                        "this build's kMaxEngineL (CI lmax=2)";
+                        "this build's kMaxEngineL (a reduced-size build; CI builds 6)";
     }
 
     auto result = RunInputText(R"(
@@ -4300,7 +4407,8 @@ TEST(DriverErrorTest, RksRiJkRunsTheComposedFullRiCompositionAndDisclosesIt) {
     // energy under this record's label, and that number is ~0.01 Ha away.
     if (!qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "the JK-fit aux f shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP() << "the JK-fit aux f shells exceed this build's kMaxEngineL (a reduced-size "
+                        "build; CI builds 6)";
     }
 
     const auto rks = RunInputText(R"(
@@ -4676,11 +4784,29 @@ TEST(DriverErrorTest, LeanWordAdmitsTheLeanMemberAboveTheCeiling) {
     std::filesystem::remove(marker);
 
     constexpr double kAboveCeilingCapGib = 1.0;
-    const int exitCode =
-        qcx::testing::RunCapChild(kAboveCeilingCapGib, marker, "lean_above_ceiling");
+
+    // The child is BOUNDED. Each leg's expected outcome is a refusal at the
+    // pre-gate setup admission - a DECISION, measured at 0.31 s on the GCC
+    // Release limb (CI run 35451596080) - so a child still running after two
+    // minutes is not slow: it is a leg the admission ADMITTED, and the work
+    // behind it is an SCF at 1210 basis functions with no bound of its own.
+    // The v0.1.0 large run learned that the hard way: it spent forty minutes
+    // (2400.02 s, the per-test limit) on this case and was cut off rather
+    // than finished. The wait stops the child instead, and the sentinel
+    // assertion below reports the stall with whatever the marker flushed.
+    constexpr int kChildWaitMilliseconds = 120000;
+    const int exitCode = qcx::testing::RunCapChild(
+        kAboveCeilingCapGib, marker, "lean_above_ceiling", kChildWaitMilliseconds);
 
     const std::string contents = qcx::testing::ReadCapChildMarker(marker);
     std::filesystem::remove(marker);
+
+    ASSERT_NE(exitCode, qcx::testing::kCapChildWaitExpired)
+        << "the capped child did not finish inside its " << kChildWaitMilliseconds
+        << " ms bound: a leg was admitted into real work (or this platform is far slower "
+           "than every recorded run), and the bound exists to turn the old 2400 s per-test "
+           "stall into this failure: "
+        << contents;
 
     // The marker's line for one leg, its trailing newline stripped.
     const auto legLine = [&contents](const char* legName) {
@@ -5700,15 +5826,30 @@ TEST(DriverPinTest, C24ChainQfmmRhfMatchesDirectInsideThePresetBudgets) {
 
     // The kLoose row's rung, from the run's own record: the far field must be
     // LIVE. The run states that as its own geometry - the kLoose rung's angle
-    // (0.45) and the far-pair count it admitted (73785 on this fixture,
-    // measured 2026-09-20) - and a count of 0 here is the degenerate gate the
-    // kTight row runs, whatever word the record carries. The discriminated
-    // rows below are read as a statement about the composed path's far field,
-    // so a degenerate run must fail this rather than quietly pass them.
+    // (0.45) and the far-pair count it admitted - and a count of 0 here is the
+    // degenerate gate the kTight row runs, whatever word the record carries.
+    // The discriminated rows below are read as a statement about the composed
+    // path's far field, so a degenerate run must fail this rather than quietly
+    // pass them.
+    //
+    // The COUNT is read, not pinned, and the model word beside it is what
+    // makes the reading honest: the count is a function of the model the
+    // record states (the extent model and the separation test are engine
+    // defaults, not input keys, schema section 3.10), and two defaults have
+    // moved it already. Stage 12 recorded 65,803 at the surface-ball form
+    // (the 2026-09-15 to 2026-09-20 default), and the centre-to-width form
+    // since 2026-09-20 admits 73,785 (measured 2026-09-20, MSVC Release).
+    // Both are right for the model they were measured under; a pinned number
+    // is a statement about a default, while the row's claim is that the far
+    // field is live under the model the run itself reports.
     EXPECT_NE(qfmmKlooseResult->find("\"theta\": 0.45"), std::string::npos)
         << "the kLoose rung's own angle";
-    EXPECT_NE(qfmmKlooseResult->find("\"geometric_far_pair_count\": 73785,"), std::string::npos)
-        << "the kLoose composed run must record a live far field";
+    EXPECT_NE(qfmmKlooseResult->find("\"separation_mode\": \"kWidthTheta\""), std::string::npos)
+        << "the far-pair count must be read under the separation test it belongs to";
+    const auto qfmmKlooseFarPairs = JsonNumber(*qfmmKlooseResult, "\"geometric_far_pair_count\"");
+    ASSERT_TRUE(qfmmKlooseFarPairs.has_value())
+        << "the composed run's record carries no geometric_far_pair_count";
+    EXPECT_GT(*qfmmKlooseFarPairs, 0.0) << "the kLoose composed run must record a live far field";
 
     const double directLooseDeviation = std::abs(*klooseDirectTotal - *ktightDirectTotal);
     const double klooseNearExactDeviation = std::abs(*qfmmKlooseTotal - *ktightDirectTotal);
@@ -5967,8 +6108,9 @@ accuracy = "kTight"
 TEST(DriverRunTest, RiJLinkAutoSelectsTheAuxBasis) {
     if (qcx::testing::IsFastOnlyMode() || !qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "heavy numerical test: Release-only; the universal-J aux f "
-                        "shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP()
+            << "heavy numerical test: Release-only; the universal-J aux f "
+               "shells exceed this build's kMaxEngineL (a reduced-size build; CI builds 6)";
     }
 
     // def2-svp has a bundled universal-J aux; omitting [basis].aux
@@ -7030,13 +7172,15 @@ use_diis = true
 // The input is the neighbor test's shape with the switch flipped; where
 // the default-true run emits a block, this run emits none.
 TEST(DriverRunTest, FullGroupOffOmitsTheSymmetryBlock) {
-    // The ri_j_link fixture needs the universal-J aux f shells (L = 3); the
-    // lmax=2 CI configs (wsl-gcc/wsl-clang) cannot build them - skip there,
-    // like the RiJLinkAutoSelectsTheAuxBasis neighbor. Small run, so no
-    // fast-mode guard: MSVC Debug keeps exercising the switch.
+    // The ri_j_link fixture needs the universal-J aux f shells (L = 3); a
+    // reduced-size build (QCX_INTEGRALS_LMAX below 3) cannot build them - skip
+    // there, like the RiJLinkAutoSelectsTheAuxBasis neighbor. CI builds 6, so
+    // it runs there. Small run, so no fast-mode guard: MSVC Debug keeps
+    // exercising the switch.
     if (!qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL (a "
+                        "reduced-size build; CI builds 6)";
     }
 
     auto result = RunInputText(R"(
@@ -7152,7 +7296,8 @@ TEST(DriverErrorTest, RiJProceedsWhenTheCapDoesNotClearTheBase) {
     // NotFit, whose propane fixture carries the same shells.
     if (!qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL (a "
+                        "reduced-size build; CI builds 6)";
     }
 
     const auto marker = qcx::testing::CapChildMarkerPath(11);
@@ -7339,7 +7484,8 @@ TEST(DriverErrorTest, RiJkProceedsWhenTheCapDoesNotClearTheBase) {
     // exceeds kMaxEngineL of this build" before the cap can decide anything.
     if (!qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "the JK-fit aux f shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP() << "the JK-fit aux f shells exceed this build's kMaxEngineL (a reduced-size "
+                        "build; CI builds 6)";
     }
 
     const auto marker = qcx::testing::CapChildMarkerPath(17);
@@ -7426,7 +7572,8 @@ TEST(DriverErrorTest, RiJkProceedsWhenTheCapDoesNotClearTheBase) {
 TEST(DriverErrorTest, RiJkGrantSelectsTheBlockedRungWhenTheFastRungDoesNotFit) {
     if (!qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "the JK-fit aux f shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP() << "the JK-fit aux f shells exceed this build's kMaxEngineL (a reduced-size "
+                        "build; CI builds 6)";
     }
 
     // The band cap: the grant is cap minus the modeled base (0.2229 GiB), i.e.
@@ -7872,21 +8019,55 @@ nocv_fragments = [[0], [1]]
     EXPECT_EQ(uhfNocv.error().code, qcx::ErrorCode::kUnimplemented);
 }
 
-TEST(DriverErrorTest, CertifiedBoundEnforcementRejectedThroughThePipeline) {
+TEST(DriverErrorTest, CertifiedBoundEnforcementDemotesWhereItCannotRunAndRefusesOnThePerSpinLegs) {
     // `enforce_certified_bound` is a claim - it asserts the fp32 lane was
-    // certified against a budget - and only the RHF direct family's
-    // MACHINERY member can fold it (fock_build.cpp: the FastPath compares,
-    // the LightPath and an engaged ladder refuse by name). Every other route
-    // used to accept the key and DROP it, so the request is refused BY NAME
-    // at the resolution point instead. The judgement reads the resolved kind
-    // and the same within-family predicate the wiring reads, so it cannot
-    // disagree with the builder that actually runs.
+    // certified against a budget - and the restricted direct family's
+    // MACHINERY member alone folds it (FockBuildOptions carries the field
+    // there and nowhere else). On a restricted run the resolution therefore
+    // DEMOTES any other route onto that member and states the rewrite; on
+    // the per-spin legs (UHF, UKS) no builder carries the field at all, so
+    // no rewrite could honour the key and the driver refuses it BY NAME.
     //
     // The sharp end is the LEAN member: it is the DEFAULT at nBasis <= 1000,
-    // and LeanFockBuildOptions has no enforcement field at all, so the field
-    // is dropped by construction rather than by oversight. Both spellings of
+    // and LeanFockBuildOptions has no enforcement field at all, so refusing
+    // the key there would refuse it on every default run. Both spellings of
     // lean are covered - the absent key that resolves to it at this size, and
-    // an explicit fock_builder = "lean".
+    // an explicit fock_builder = "lean" - plus the other two families a
+    // restricted run can name.
+    //
+    // The record must show requested-vs-ran honestly: builder and
+    // builder_member name the member that RAN (the machinery), the warning
+    // and the reasoning carry the rewrite, and explicit_builder keeps the
+    // word the file wrote (absent for the two lean spellings, because
+    // "lean" is a within-family request, not a family word).
+    const auto expectDemoted = [](const qcx::Result<std::string>& result,
+                                  std::string_view explicitWord) {
+        ASSERT_TRUE(result.has_value()) << result.error().message;
+        EXPECT_NE(result->find("\"builder\": \"direct\""), std::string::npos) << *result;
+        EXPECT_NE(result->find("\"builder_member\": \"direct\""), std::string::npos) << *result;
+
+        if (explicitWord.empty())
+        {
+            EXPECT_EQ(result->find("\"explicit_builder\""), std::string::npos) << *result;
+        } else
+        {
+            EXPECT_NE(result->find("\"explicit_builder\": \"" + std::string(explicitWord) + "\""),
+                      std::string::npos)
+                << *result;
+        }
+
+        const auto warningPos = result->find("\"warning\"");
+        ASSERT_NE(warningPos, std::string::npos) << *result;
+        const std::string warning = result->substr(warningPos);
+        EXPECT_NE(warning.find("method.enforce_certified_bound = true"), std::string::npos)
+            << warning;
+        EXPECT_NE(warning.find("machinery member"), std::string::npos) << warning;
+        EXPECT_NE(warning.find("DEMOTED"), std::string::npos) << warning;
+        // The record's own reasoning carries the same rewrite, not only the
+        // stderr-facing warning.
+        EXPECT_NE(result->find("the builder resolution's answer"), std::string::npos) << *result;
+    };
+
     const auto leanByDefault = RunInputText(R"(
 [molecule]
 atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
@@ -7897,11 +8078,7 @@ type = "rhf"
 accuracy = "kNormal"
 enforce_certified_bound = true
 )");
-    ASSERT_FALSE(leanByDefault.has_value());
-    EXPECT_EQ(leanByDefault.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(leanByDefault.error().message.find("method.enforce_certified_bound"),
-              std::string::npos);
-    EXPECT_NE(leanByDefault.error().message.find("LEAN member"), std::string::npos);
+    expectDemoted(leanByDefault, "");
 
     const auto explicitLean = RunInputText(R"(
 [molecule]
@@ -7914,9 +8091,7 @@ fock_builder = "lean"
 accuracy = "kNormal"
 enforce_certified_bound = true
 )");
-    ASSERT_FALSE(explicitLean.has_value());
-    EXPECT_EQ(explicitLean.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(explicitLean.error().message.find("LEAN member"), std::string::npos);
+    expectDemoted(explicitLean, "");
 
     // The other families: RiEngineOptions carries no such field either, and
     // the option appears in no RI, QFMM or CUDA translation unit.
@@ -7932,9 +8107,7 @@ fock_builder = "ri_j_link"
 accuracy = "kNormal"
 enforce_certified_bound = true
 )");
-    ASSERT_FALSE(riJLink.has_value());
-    EXPECT_EQ(riJLink.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(riJLink.error().message.find("ri_j_link"), std::string::npos);
+    expectDemoted(riJLink, "ri_j_link");
 
     const auto qfmm = RunInputText(R"(
 [molecule]
@@ -7947,9 +8120,7 @@ fock_builder = "qfmm"
 accuracy = "kNormal"
 enforce_certified_bound = true
 )");
-    ASSERT_FALSE(qfmm.has_value());
-    EXPECT_EQ(qfmm.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(qfmm.error().message.find("qfmm"), std::string::npos);
+    expectDemoted(qfmm, "qfmm");
 
     // Both UHF legs drop it: the direct-UHF wiring never assigns
     // FockBuildOptions::enforceCertifiedBoundBudget, so no UHF route can
@@ -7992,13 +8163,10 @@ enforce_certified_bound = true
     EXPECT_EQ(uks.error().code, qcx::ErrorCode::kUnimplemented);
     EXPECT_NE(uks.error().message.find("UKS"), std::string::npos);
 
-    // And the route that CAN honour it passes this check - the refusal is
-    // not indiscriminate: an explicit fock_builder = "direct" reaches the
-    // machinery member at ANY size (the lean ceiling constrains only the
-    // absent key), so the same molecule refused above is admitted here. What
-    // is pinned is that the ENFORCEMENT did not refuse it: the run may still
-    // fail for its own reasons (this member's own rungs refuse an engaged
-    // ladder or a LightPath from inside BuildFock), and those failures are a
+    // The route that can honour it without a rewrite stays silent: an
+    // explicit fock_builder = "direct" IS the machinery member, so nothing
+    // diverged and the record carries no warning. What is pinned is that the
+    // ENFORCEMENT did not rewrite it: the run's own failures (if any) are a
     // different, already-tested contract.
     const auto machinery = RunInputText(R"(
 [molecule]
@@ -8016,6 +8184,10 @@ enforce_certified_bound = true
     {
         EXPECT_EQ(machinery.error().message.find("method.enforce_certified_bound"),
                   std::string::npos);
+    } else
+    {
+        EXPECT_NE(machinery->find("\"builder_member\": \"direct\""), std::string::npos);
+        EXPECT_EQ(machinery->find("\"warning\""), std::string::npos) << *machinery;
     }
 }
 
@@ -8679,8 +8851,11 @@ TEST(DriverMemoryInstrumentTest, InstrumentedRunRefusesWhenTheTraceCannotOpen) {
 //
 // The refusal below is the cheapest one the driver raises AFTER the window
 // opens and BEFORE any builder exists - the `enforce_certified_bound`
-// resolution point, on the auto-lean default at n = 2. No SCF runs, so this
-// test is the record's own test and not a memory experiment.
+// refusal on a per-spin (UHF) run. That leg is the one that still refuses
+// there: a restricted run resolved away from the machinery member is
+// DEMOTED instead, but no builder on the per-spin wiring carries the
+// enforcement field, so the driver refuses the key by name. No SCF runs,
+// so this test is the record's own test and not a memory experiment.
 TEST(DriverMemoryInstrumentTest, RefusedRunRecordsTheRefusalInsteadOfAZeroedTrace) {
     const std::filesystem::path tracePath =
         std::filesystem::temp_directory_path() / "qcx_instrument_refused_trace.csv";
@@ -8688,11 +8863,11 @@ TEST(DriverMemoryInstrumentTest, RefusedRunRecordsTheRefusalInsteadOfAZeroedTrac
 
     const auto toml = std::string(R"(
 [molecule]
-atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+atoms = [["O", 0.0, 0.0, 0.0], ["O", 0.0, 0.0, 1.2]]
 [basis]
 orbital = "sto-3g"
 [method]
-type = "rhf"
+type = "uhf"
 accuracy = "kNormal"
 enforce_certified_bound = true
 )") +
@@ -9375,6 +9550,15 @@ TEST(DriverRestartTest, BudgetExitCheckpointSeedsTheResumedRun) {
     const auto resumedTotal = JsonNumber(*resumed, "\"total_energy_hartree\"");
     ASSERT_TRUE(resumedTotal.has_value());
     EXPECT_NEAR(*resumedTotal, -74.96292827, 1e-5);
+
+    // The guess record (schema 42): a restart run is the one case where the
+    // request, the run word and the checkpoint are three separate facts, and
+    // the path member exists exactly because a file was read.
+    const auto resumedGuess = GuessBlock(*resumed);
+    ASSERT_TRUE(resumedGuess.has_value());
+    EXPECT_NE(resumedGuess->find("\"type\": \"restart\""), std::string::npos);
+    EXPECT_NE(resumedGuess->find("\"ran\": \"restart\""), std::string::npos);
+    EXPECT_NE(resumedGuess->find("\"restart_path\": \""), std::string::npos);
 
     auto oneShot = RunInputText(H2oScfLegToml(100, "").c_str());
     ASSERT_TRUE(oneShot.has_value()) << oneShot.error().message;

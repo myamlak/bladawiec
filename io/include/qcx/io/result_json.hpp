@@ -950,6 +950,54 @@ struct RunEriStore {
     std::vector<RunEriStoreClassHits> hitQuartetsByClass;
 };
 
+/// The `eri_cache` block of resources_resolved (schema 43): the in-memory ERI
+/// cache budget request's requested-vs-ran pairing
+/// (`method.eri_cache_bytes`, the FockBuildOptions::maxCacheBytes request
+/// surface). It exists because the key's two legs behave differently by
+/// default - the unrestricted legs compute a cap-derived grant, the
+/// restricted legs run with the cache off - so without this block a run that
+/// asked for a budget could not be told from one that inherited whichever
+/// default its leg carries.
+///
+/// Four numbers, and the distinctions they keep: `requested_bytes` is what
+/// the input wrote; `granted_bytes` is what the driver handed the engine's
+/// options; `effective_bytes` is what the engine's Create-time decision
+/// actually FIRED (the mode record's cache term divided by three, the same
+/// quantity its own sure-fit gate compared against the remaining workspace);
+/// and `clamped` says the fired budget fell below the grant. The grant can
+/// exceed the fired budget either because the Create-time clamp reduced it
+/// to fit the workspace or because the cache did not engage at all (the
+/// class-aware path and the LightPath), in which case `effective_bytes` is
+/// 0 - the true fired budget, never a fabricated grant.
+///
+/// Present exactly when the input wrote `[method] eri_cache_bytes`; absent
+/// when the key was omitted (an omitted key is not a request, and the
+/// leg-dependent default is the system's judgement rather than a request to
+/// record - the schema-19 null-honesty rule the sibling request blocks
+/// follow). A request the resolved route cannot honour is REFUSED by name
+/// before serialization, so it has no shape here.
+/// \ingroup qcx-io
+struct RunEriCache {
+    /// The input's value, verbatim, in bytes (>= 1).
+    std::size_t requestedBytes = 0;
+    /// The per-lane budget the driver handed the engine. Equals the request
+    /// on the routes that own the knob; recorded separately so a future
+    /// demotion of the grant stays visible beside what was asked.
+    std::size_t grantedBytes = 0;
+    /// The FIRED per-lane budget: the engine's Create-time mode record's
+    /// cache term divided by three (the two payload lanes plus the entry
+    /// map). 0 means no cache engaged on the route that ran (the
+    /// class-aware path, the LightPath); absent means the engine made no
+    /// mode decision to read (the legacy null-budget path, which an honoured
+    /// request never takes because the key is refused at memory_cap_gib =
+    /// 0) - never a fabricated zero.
+    std::optional<std::size_t> effectiveBytes;
+    /// True when the fired budget is below the grant (a Create-time
+    /// sure-fit clamp, or a path that disengages the cache). False when the
+    /// grant fired whole.
+    bool clamped = false;
+};
+
 /// input the certified fp32 lane's default was RESOLVED against, recorded so
 /// a reader can check the verdict against the machine that produced it. It is
 /// the lane's *decided* record; RunCertifiedBound is the same lane's
@@ -1210,6 +1258,15 @@ struct RunResourcesResolved {
     /// resolve; the driver simply had no probe to seed them with, which is
     /// the conservative interim rather than a missing measurement).
     std::optional<RunComputeProfile> computeProfile;
+    /// The in-memory ERI cache budget request record (schema 43): what
+    /// `method.eri_cache_bytes` asked for and what the engine fired. Present
+    /// exactly when the input wrote the key; absent when it was omitted.
+    /// Sibling of the request blocks above for the same reason: a new key, a
+    /// new block, so absence never means two things. Filled after the SCF
+    /// from the engine's own mode record, so it cannot disagree with the
+    /// engine about the budget that ran. Appended last so the aggregate's
+    /// earlier fields keep their positions.
+    std::optional<RunEriCache> eriCache;
 };
 
 /// The term_counters block of an instrumented ri_j run: the
@@ -1247,7 +1304,10 @@ struct RunTermCounters {
 /// kernel-bound sums (what the lane's arithmetic cost the Fock matrix),
 /// while `routedHa` is the ROUTING bound sum the preset-derived budget was
 /// compared against (the gate's own units, orders smaller per routed
-/// quartet). `enforced` says whether the comparison ran at all.
+/// quartet). `enforced` says whether the comparison ran at all; `demoted`
+/// (schema 44) says it was skipped because the final call's route cannot
+/// carry it, which `enforced: false` alone cannot distinguish from the key
+/// never being set.
 /// \ingroup qcx-io
 struct RunCertifiedBound {
     /// The number of Fock builds the block summarizes: every main-SCF
@@ -1266,6 +1326,19 @@ struct RunCertifiedBound {
     /// measured on the SAME final observed call as lastCallHa. See
     /// RunCertifiedBound::enforced.
     bool enforced = false;
+    /// The enforcement was DEMOTED on the final observed call (schema 44):
+    /// the key was set but that call's route cannot carry the comparison
+    /// (the LightPath chunk loop, an engaged precision ladder), so the
+    /// comparison was skipped and the build ran exactly as an
+    /// enforcement-off build. `enforced` is false on such a call, because
+    /// the comparison did not run - `demoted` is what separates "the key
+    /// was not set" from "the key was set and this route could not honour
+    /// it". Always written inside a present block.
+    bool demoted = false;
+    /// Why the comparison was skipped, in the engine's own words. Present
+    /// exactly when `demoted` is true (the eri_store block's rule: the
+    /// verdict is always written, the reason only when there is one).
+    std::string demotedReason;
     /// The budget the accuracy preset derived for the final observed call
     /// (Eh): PresetEnergyBudget(accuracy) less the call's screened-out
     /// bound sum less the ladder's slack. 0.0 is a real budget here (the
@@ -1532,6 +1605,37 @@ struct RunDispersion {
     double energyHartree = 0.0;
 };
 
+/// The initial-guess block of a run (schema 42), serialized as "guess": the
+/// requested word when the input wrote one, the word the run actually RAN,
+/// and the checkpoint a restart read.
+///
+/// `type` and `ran` are two facts, not one repeated: the schema's `core`
+/// word names the METHOD'S DEFAULT START, which on RHF is the GWH guess (and
+/// on UHF the loop's Step-C default tier), so a run whose file wrote
+/// `type = "core"` runs "gwh" and the record says both. A consumer reading
+/// only `type` would conclude the run built a zero start that it never
+/// built; a consumer reading only `ran` could not tell a default from a
+/// request. `type` is present exactly when `[guess] type` was written (the
+/// schema-19 null-honesty rule) - an absent key is not a request and has no
+/// word.
+/// \ingroup qcx-io
+struct RunGuess {
+    /// "core" | "gwh" | "sad" | "restart" - the input's own word, present
+    /// exactly when the file wrote `[guess] type`.
+    std::optional<std::string> type;
+    /// "gwh" | "sad" | "restart" - what the run actually ran. Always
+    /// present: every SCF started from a guess, and `core` resolves to the
+    /// method's default start, which is "gwh" on RHF (the word the record
+    /// uses for that start on both paths). The default is the input's own
+    /// default start, so a result no driver filled still names a real start
+    /// rather than an empty word.
+    std::string ran = "gwh";
+    /// The checkpoint file a restart guess read; present exactly when the
+    /// run seeded from one (`type = "restart"`), never an empty string
+    /// standing in for "none".
+    std::optional<std::string> restartPath;
+};
+
 /// The machine-readable result of one run.
 /// \ingroup qcx-io
 struct RunResult {
@@ -1650,7 +1754,34 @@ struct RunResult {
     /// with a dispersion contribution against one that could not have carried
     /// any. `electronic_energy_hartree` and the convergence residuals are
     /// unaffected: the SCF loop itself remains dispersion-free.
-    static constexpr int kSchemaVersion = 41;
+    ///
+    /// Schema 42 ADDS the top-level `guess` block (RunGuess): the requested
+    /// guess word, the word the run actually RAN, and the checkpoint a
+    /// restart read. Keys added, so the number moved with them. The
+    /// `type`-vs-`ran` split is the reason a consumer must notice the block:
+    /// `core` is the method's DEFAULT START (GWH on RHF), so the two words
+    /// legitimately differ, and before this block a record neither said what
+    /// the input asked for nor what the run started from.
+    ///
+    /// Schema 43 ADDS the `resources_resolved.eri_cache` block
+    /// (RunEriCache): the in-memory ERI cache budget request's
+    /// requested-vs-ran pairing - the bytes the input asked for, the grant
+    /// the driver handed the engine, the budget the engine's Create-time
+    /// decision actually fired, and whether that fell below the grant. Keys
+    /// added, so the number moved with them, and the key is one a consumer
+    /// must notice for a reason beyond its presence: the two legs carry
+    /// DIFFERENT defaults (the unrestricted legs compute a cap-derived
+    /// grant, the restricted legs run with the cache off), so before this
+    /// block the same budget could appear in a document with no way to tell
+    /// a request from an inherited default.
+    ///
+    /// Schema 44 ADDS the top-level `certified_bound` block's `demoted` and
+    /// `demoted_reason` members: the enforcement key's two non-composing rungs - the LightPath
+    /// chunk loop and an engaged precision ladder - no longer refuse the build, so a record must
+    /// say whether the comparison was skipped rather than leave `enforced: false` to mean both "not
+    /// requested" and "requested, route could not carry it". Keys added, so the number moved with
+    /// them.
+    static constexpr int kSchemaVersion = 44;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.
@@ -1894,6 +2025,13 @@ struct RunResult {
     /// block, never a zero-filled one). Appended last so the aggregate's
     /// earlier fields keep their positions.
     std::optional<RunDispersion> dispersion;
+
+    /// The initial-guess block (schema 42, RunGuess), serialized as "guess".
+    /// Always present: every SCF started from a guess, so `ran` is always a
+    /// run fact; `type` is present only when the file wrote `[guess] type`,
+    /// and `restart_path` only when a restart actually read a checkpoint.
+    /// Appended last so the aggregate's earlier fields keep their positions.
+    RunGuess guess;
 };
 
 /// Serializes a run result to the JSON schema (see the header note).

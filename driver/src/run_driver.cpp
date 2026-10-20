@@ -308,13 +308,17 @@ public:
     /// \param callBoundHa The call's certifiedBoundSumOut value.
     /// \param budget The call's CertifiedBudgetOutcome; an unenforced call
     /// leaves the enforcement members at their zero defaults and its
-    /// `enforced` flag false, which is what marks them not-measured.
-    void Observe(double callBoundHa,
-                 const qcx::integrals::CertifiedBudgetOutcome& budget) noexcept {
+    /// `enforced` flag false, which is what marks them not-measured. A
+    /// demoted call carries the route's reason string, which this fold
+    /// copies into the record.
+    // Not noexcept: folding the demotion's reason allocates.
+    void Observe(double callBoundHa, const qcx::integrals::CertifiedBudgetOutcome& budget) {
         ++_calls;
         _lastCallHa = callBoundHa;
         _maxCallHa = _calls == 1 ? callBoundHa : std::max(_maxCallHa, callBoundHa);
         _enforced = budget.enforced;
+        _demoted = budget.demoted;
+        _demotedReason = budget.demotedReason;
         _budgetHa = budget.budgetHa;
         _routedHa = budget.routedHa;
         _routedQuartets = static_cast<long long>(budget.routedQuartets);
@@ -349,6 +353,23 @@ public:
         return _enforced;
     }
 
+    /// True when the final observed call DEMOTED the enforcement (schema
+    /// 44): the key was set but that call's route cannot carry the
+    /// comparison, so it was skipped and the build ran as an
+    /// enforcement-off build. Enforced() stays false on that call - the
+    /// comparison did not run.
+    /// \returns The demotion state of the final observed call.
+    bool Demoted() const noexcept {
+        return _demoted;
+    }
+
+    /// Why the comparison was skipped on the final observed call, in the
+    /// engine's own words; empty unless Demoted().
+    /// \returns The demotion's reason.
+    const std::string& DemotedReason() const noexcept {
+        return _demotedReason;
+    }
+
     /// The final observed call's derived budget (hartree).
     /// \returns The budget in Eh.
     double BudgetHa() const noexcept {
@@ -379,6 +400,8 @@ private:
     double _lastCallHa = 0.0;
     double _maxCallHa = 0.0;
     bool _enforced = false;
+    bool _demoted = false;
+    std::string _demotedReason;
     double _budgetHa = 0.0;
     double _routedHa = 0.0;
     long long _routedQuartets = 0;
@@ -1543,6 +1566,24 @@ qcx::Result<void> ResolveGuess(const qcx::io::RunInput& input) {
     }
 
     return {};
+}
+
+// The word the run record's `guess.ran` key spells (schema 42): the start
+// the SCF actually used, not the request word. kCore resolves to the
+// method's default start, which both paths run as the GWH guess (RHF
+// through the loop's own default, UHF through the explicit GWH seed the
+// kCore branch builds), so the record's word for it is "gwh" - publishing
+// "core" there would name a zero start the run never built. The other
+// words are their own start and pass through the parser's vocabulary.
+// \param kind The resolved guess selection.
+// \returns "gwh" | "sad" | "restart".
+std::string RecordGuessWord(qcx::io::GuessKind kind) {
+    if (kind == qcx::io::GuessKind::kCore)
+    {
+        return "gwh";
+    }
+
+    return std::string(qcx::io::ToString(kind));
 }
 
 // The not-yet-wired combinations the schema documents; the driver rejects
@@ -4709,8 +4750,14 @@ qcx::Result<UhfRun> RunDirectUhfScf(
     exchangeOptions.useCertifiedMixedPrecision = certifiedLaneRequest;
 
     // The cap's leftover sizes the coulomb/exchange ERI caches below the
-    // cap.
-    const std::size_t cacheBytes = DirectFamilyCacheBytes(input.resources.memoryCapGiB);
+    // cap. An explicit `method.eri_cache_bytes` (schema 43) OVERRIDES that
+    // inherited grant on both halves: the key's resolution point has already
+    // admitted only the direct machinery member and only at a positive cap,
+    // so what arrives here is a grant the engine's Create-time clamp can
+    // verify, and the two halves carry the same budget so one run's Fock is
+    // not assembled on two different cache arrangements.
+    const std::size_t cacheBytes =
+        input.method.eriCacheBytes.value_or(DirectFamilyCacheBytes(input.resources.memoryCapGiB));
     coulombOptions.maxCacheBytes = cacheBytes;
     exchangeOptions.maxCacheBytes = cacheBytes;
 
@@ -7247,6 +7294,72 @@ std::optional<qcx::io::RunEriStore> MakeEriStoreRecord(const qcx::io::RunInput& 
     return record;
 }
 
+// The eri_cache request record (schema 43): the outcome of
+// `method.eri_cache_bytes`, the in-memory ERI cache budget a run asked for.
+// The request is the driver's, but WHAT RAN is the engine's: the mode record
+// the builder made at Create already carries the cache budget that fired
+// (three times its per-lane grant - the two payload lanes plus the entry
+// map), and this block divides it back down so the request and the outcome
+// sit side by side. Reading the engine's own record here, rather than
+// re-deriving the grant, keeps the block from disagreeing with the build it
+// describes.
+//
+// The request is written exactly when the input named the key: on the
+// honoured routes that is every run that reaches this point, because a key
+// the resolved route cannot honour is refused by name at the resolution
+// point, and a refusal never serializes (the schema-19 null-honesty rule).
+//
+// \param input The parsed input (the request's own number).
+// \param resources What the run resolved: the mode records to read.
+// \returns The record, or nothing when no budget was named.
+std::optional<qcx::io::RunEriCache> MakeEriCacheRecord(
+    const qcx::io::RunInput& input, const qcx::io::RunResourcesResolved& resources) {
+    if (!input.method.eriCacheBytes.has_value())
+    {
+        // An omitted key is not a request, including on the unrestricted
+        // legs where the cap derives a grant of its own: that grant is the
+        // system's judgement, not something the input asked for (the
+        // schema-19 null-honesty rule).
+        return std::nullopt;
+    }
+
+    qcx::io::RunEriCache record;
+    record.requestedBytes = *input.method.eriCacheBytes;
+    // What the driver handed the engine. The two are equal on every honoured
+    // route: nothing between the resolution point and the options assembly
+    // lowers an explicit request, and the engine's own clamp is what shows
+    // up below as `clamped` (the Create-time clamp and the two disengaging
+    // paths are the engine's answers, taken after the grant was given).
+    record.grantedBytes = *input.method.eriCacheBytes;
+
+    // The FIRED budget: the minimum across the half-builds that made a mode
+    // decision, because each half clamps its own cache against the shared
+    // workspace and the tightest one is the budget that stood on the whole
+    // run. A half with no record made no decision and contributes nothing -
+    // an absent record is not a fired zero.
+    std::optional<std::size_t> effective;
+
+    const auto fold = [&effective](const std::optional<qcx::io::RunModeRecord>& mode) {
+        if (!mode.has_value())
+        {
+            return;
+        }
+
+        const std::size_t fired = mode->cacheBytes / 3;
+        effective = effective.has_value() ? std::min(*effective, fired) : fired;
+    };
+
+    fold(resources.modeRecord);
+    fold(resources.exchangeModeRecord);
+
+    record.effectiveBytes = effective;
+    // Below the grant: a Create-time sure-fit clamp, or a path that
+    // disengages the cache (the class-aware path, the LightPath) and so
+    // fires 0. False only when the grant fired whole.
+    record.clamped = effective.has_value() && *effective < record.grantedBytes;
+    return record;
+}
+
 // The orbit-expansion request record: the outcome of
 // method.ri_orbit_expansion, the increment's only driver-side key. The
 // outcome comes from the ENGINE's own disclosure
@@ -9175,6 +9288,19 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
 
     directOptions.workspaceBudget = workspaceBudget.get();
 
+    // The in-memory ERI cache budget (`method.eri_cache_bytes`, schema 43).
+    // The restricted leg has NO cap-derived grant - maxCacheBytes stays at
+    // its default 0 (cache off) unless the key names one, the documented
+    // default asymmetry with the unrestricted legs - so an explicit request
+    // is this run's whole grant. The resolution point above has already
+    // refused the key on every route without this knob and at
+    // memory_cap_gib = 0, so the budget just installed is the workspace the
+    // engine's Create-time cache clamp verifies the grant against.
+    if (input.method.eriCacheBytes.has_value())
+    {
+        directOptions.maxCacheBytes = *input.method.eriCacheBytes;
+    }
+
     // The class-aware seam (the symmetry-blocking): the reduction extracted once - the
     // same point-group detection the blocked diagonalization uses. A
     // kUnimplemented extraction (a point group no non-identity element
@@ -9686,6 +9812,14 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     const std::size_t nPairs = CountShellPairs(*molecule, *basis);
     const LadderTierRunnability ladderRunnability = LadderRunnabilityFor(input);
     const bool nonHybridKohnSham = IsNonHybridKohnSham(input);
+    // The resolution's one METHOD fact: whether the per-spin legs run. It is
+    // the enforced-bound demotion's applicability (a restricted run is
+    // demoted onto the machinery member, an unrestricted one is left to the
+    // refusal below), and ValidateCombination above already classified the
+    // word - so this read cannot fail here, and a failure would reach the
+    // dispatch's own refusal below unchanged.
+    const auto resolutionPath = ResolveScfPath(input.method.method);
+    const bool unrestrictedLegs = resolutionPath.has_value() && IsUnrestrictedPath(*resolutionPath);
 
     const qcx::driver::SelectionResolutionInput resolutionInput{topology,
                                                                 input,
@@ -9695,7 +9829,8 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                                                                 ladderRunnability.qfmm,
                                                                 nonHybridKohnSham,
                                                                 nPairs,
-                                                                qcx::backend::DefaultOmpTeamSize()};
+                                                                qcx::backend::DefaultOmpTeamSize(),
+                                                                unrestrictedLegs};
     auto selection = qcx::driver::ResolveBuilderSelection(resolutionInput);
 
     if (!selection.has_value())
@@ -9864,72 +9999,50 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     const bool isUnrestricted = IsUnrestrictedPath(*scfPath);
     const bool isKs = IsKohnShamPath(*scfPath);
 
-    // `enforce_certified_bound` is a CLAIM, and this is its resolution point.
+    // `enforce_certified_bound` is a CLAIM, and this is its one remaining
+    // resolution point - the case the resolution itself cannot absorb.
     //
-    // The enforcement is folded into the Fock build by ONE route: the RHF
-    // direct family's machinery member, whose FastPath compares the routed
-    // bound sum against the preset-derived budget and whose other rungs (the
-    // LightPath chunk loop, an engaged precision ladder) refuse BY NAME with
-    // kUnimplemented from inside BuildFock (fock_build.cpp) - those two are
-    // honoured-or-refused and need nothing here.
+    // The enforcement is folded into the Fock build by ONE route: the direct
+    // family's machinery member, whose FastPath compares the routed bound
+    // sum against the preset-derived budget. RKS honours it through the same
+    // struct: the composition builds its halves out of the RHF direct
+    // options (directOptions), the enforcement rides that struct, and the
+    // run's certified-bound collector is folded by the halves.
     //
-    // Every other route DROPS the request, so each is refused here instead,
-    // before any builder is wired:
-    //   - the direct family's LEAN member (the auto-lean default at
-    //     nBasis <= 1000, or an explicit fock_builder = "lean"): the lean arm
-    //     builds LeanFockBuildOptions, which has no enforcement field at all
-    //     (maxBatchBytes, memoryCapGiB, maxParallelChunks, forceScalarContract,
-    //     symmetryReduction, buildCoulombOnly, buildExchangeOnly), so the field
-    //     is dropped BY CONSTRUCTION - not by oversight - and lean is the
-    //     default small-molecule route;
-    //   - ri_j_link / qfmm / gpu: RiEngineOptions has no such field either, and
-    //     the option appears in no RI, QFMM or CUDA translation unit;
-    //   - either UNRESTRICTED leg: the direct-UHF wiring never assigns
-    //     FockBuildOptions::enforceCertifiedBoundBudget, and the UKS
-    //     composition that rides it does not either - the option travels to
-    //     the direct family's options struct in the RHF wiring alone.
+    // A RESTRICTED run that resolved to any other route is DEMOTED onto
+    // that member at the resolution itself
+    // (qcx::driver::ResolveBuilderSelection -> ApplyCertifiedBoundDemotion),
+    // with the request, the route it overrode and the invalidated keys
+    // stated in the record's selection.warning and on stderr. So
+    // `selection->kind` below is already the machinery member on every
+    // restricted run that reaches here with the key set, and nothing
+    // refuses for those routes any more.
     //
-    // RKS is the one Kohn-Sham lane that CAN honour it, for the same reason
-    // the machinery member can: the composition builds its halves out of the
-    // RHF direct options (directOptions), the enforcement rides that struct,
-    // and the run's certified-bound collector is folded by the halves - so an
-    // RKS run on the machinery member reports the bound it enforced.
-    //
-    // The judgement reads the RESOLVED kind and the RESOLVED member choice
-    // the wiring reads (the resolution's leanMember), so it cannot disagree
-    // with the builder that actually runs - which is also what admits the
-    // retargeted device-less gpu fallback: it lands on this machinery
-    // member (the ladder's tier above the lean boundary), so it CAN honour
-    // the request and is not refused.
-    const bool reachesCertifiedBoundRoute = !isUnrestricted &&
-                                            selection->kind == qcx::io::BuilderKind::kDirect &&
-                                            !selection->leanMember;
-
-    if (input.method.enforceCertifiedBound && !reachesCertifiedBoundRoute)
+    // The UNRESTRICTED legs are the one case a rewrite cannot help, and
+    // this is where they are refused by name: the direct-UHF wiring never
+    // assigns FockBuildOptions::enforceCertifiedBoundBudget, and the UKS
+    // composition that rides it does not either - the option travels to the
+    // direct family's options struct in the RHF wiring alone, so NO route on
+    // these legs can report the bound the claim asserts.
+    if (input.method.enforceCertifiedBound && isUnrestricted)
     {
         // The route names the METHOD, not its shape: "an unrestricted run"
         // is true of two different words now that UKS exists, and a refusal
         // that stops naming what it refuses is a refusal an author cannot
         // act on (the same rule the dispatch's own refusals follow).
         const std::string route =
-            isUnrestricted ? (isKs ? std::string{"a UKS run (the per-spin direct wiring carries no "
-                                                 "enforcement)"}
-                                   : std::string{"a UHF run (the per-spin direct wiring carries no "
-                                                 "enforcement)"})
-                           : (selection->kind == qcx::io::BuilderKind::kDirect
-                                  ? std::string{"the direct family's LEAN member"}
-                                  : "fock_builder = \"" +
-                                        std::string(qcx::io::ToString(selection->kind)) + "\"");
+            isKs ? std::string{"a UKS run (the per-spin direct wiring carries no enforcement)"}
+                 : std::string{"a UHF run (the per-spin direct wiring carries no enforcement)"};
 
         return refuse(
             Err(qcx::ErrorCode::kUnimplemented,
                 "method.enforce_certified_bound = true resolves to " + route +
                     ", which drops the request instead of enforcing it: the certified-bound "
-                    "budget enforcement is implemented by the RHF direct family's machinery "
-                    "member only, so no other route can report the certified bound it asserts. "
-                    "The run is refused rather than computing as if the key were absent. Drop "
-                    "the key, or run it on that member - the direct family above the lean "
-                    "ceiling, or an explicit fock_builder = \"direct\" at any size"));
+                    "budget enforcement is implemented by the restricted direct family's "
+                    "machinery member alone (RHF and RKS), and the per-spin wiring never "
+                    "assigns its option. The run is refused rather than computing as if the "
+                    "key were absent. Drop the key, or run the claim on the restricted path "
+                    "(rhf or rks), where the machinery member enforces it"));
     }
 
     // The disk-tier ERI store (`method.eri_cache_store`) on the
@@ -9961,6 +10074,63 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         return refuse(Err(
             qcx::ErrorCode::kUnimplemented,
             UnrestrictedEriStoreRefusalText(input.method.eriCacheStore, selection->kind, isKs)));
+    }
+
+    // The in-memory ERI cache budget (`method.eri_cache_bytes`) and this is
+    // its resolution point (schema 43).
+    //
+    // The knob is FockBuildOptions::maxCacheBytes, which exactly one route
+    // assembles: the direct family's machinery member, on both legs (the
+    // restricted wiring sets it on directOptions; the unrestricted wiring
+    // sets it on the per-spin coulomb and exchange option structs). The lean
+    // member builds LeanFockBuildOptions (no cache field at all) and every
+    // other family's options struct has no cache either, so a request that
+    // resolved to one of those is refused BY NAME rather than dropped - a
+    // silently dropped explicit request is the substitution the disclosure
+    // rule forbids, and a refusal is a run that never serializes, so it
+    // cannot be disclosed by the `resources_resolved.eri_cache` block.
+    //
+    // The cap gate is the second half. The engine's Create-time cache clamp
+    // verifies the grant's 3x live footprint against the workspace budget's
+    // remaining bytes, and the budget exists only at memory_cap_gib > 0
+    // (the legacy null-budget path has no workspace to clamp against, and
+    // its class-aware host-RAM guard charges a different quantity). A
+    // request made there would be a grant with no sure-fit gate, so it is
+    // refused by name with the key that would re-engage the gate.
+    if (input.method.eriCacheBytes.has_value())
+    {
+        const bool ownsCacheKnob =
+            selection->kind == qcx::io::BuilderKind::kDirect && !selection->leanMember;
+
+        if (!ownsCacheKnob)
+        {
+            const std::string route =
+                selection->kind == qcx::io::BuilderKind::kDirect
+                    ? std::string{"the direct family's LEAN member"}
+                    : "fock_builder = \"" + std::string(qcx::io::ToString(selection->kind)) + "\"";
+
+            return refuse(Err(
+                qcx::ErrorCode::kUnimplemented,
+                "method.eri_cache_bytes resolves to " + route +
+                    ", which carries no in-memory ERI cache budget "
+                    "(FockBuildOptions::maxCacheBytes): the direct family's machinery member is "
+                    "the only route that assembles it. The run is refused rather than computing "
+                    "as if the key were absent. Drop the key, or run it on that member - the "
+                    "direct family above the lean ceiling, or an explicit fock_builder = "
+                    "\"direct\" at any size"));
+        }
+
+        if (input.resources.memoryCapGiB <= 0.0)
+        {
+            return refuse(
+                Err(qcx::ErrorCode::kInvalidArgument,
+                    "method.eri_cache_bytes requires a positive memory_cap_gib: the engine's "
+                    "Create-time cache clamp verifies the granted budget against the workspace "
+                    "budget's remaining bytes, and memory_cap_gib = 0 selects the legacy "
+                    "null-budget path where no such gate exists. Set memory_cap_gib, or drop the "
+                    "key - the unrestricted legs then keep their cap-derived grant and the "
+                    "restricted legs keep the cache off"));
+        }
     }
 
     // The certified fp32 lane's REQUEST (the owner's ruling 2026-09-13): the
@@ -10075,6 +10245,22 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     // RKS run and its RHF twin were indistinguishable in the artifact a user
     // keeps, differing only in their numbers.
     result.method = ScfPathMethodWord(*scfPath);
+
+    // The initial guess (schema 42): the request word when the file wrote
+    // one, the word the run actually RAN, and the checkpoint a restart read.
+    // `ran` is always a run fact; `type` follows `guessExplicit` (an absent
+    // [guess] type is not a request and is not recorded as one), and
+    // `restart_path` appears exactly when the restart branch loaded the
+    // checkpoint - the UHF refusal above keeps kRestart off every other
+    // path, so reaching result assembly with this kind means the read
+    // happened.
+    result.guess = qcx::io::RunGuess{input.guessExplicit ? std::optional<std::string>(std::string(
+                                                               qcx::io::ToString(input.guess)))
+                                                         : std::nullopt,
+                                     RecordGuessWord(input.guess),
+                                     input.guess == qcx::io::GuessKind::kRestart
+                                         ? std::optional<std::string>(input.guessRestartPath)
+                                         : std::nullopt};
 
     // The two Kohn-Sham-only disclosures, written under the SAME condition
     // that made them exist: a run whose path integrates a density functional
@@ -11063,13 +11249,20 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         // whether the comparison sent the build to the fp64 lane. A
         // fall-back is the one reading a consumer must not mistake for a
         // quiet zero: `routed_ha` exceeds `budget_ha` and the lane
-        // delivered nothing BECAUSE of it.
+        // delivered nothing BECAUSE of it. Schema 44 adds `demoted` /
+        // `demoted_reason`: the key's two non-composing rungs (the
+        // LightPath chunk loop, an engaged precision ladder) no longer
+        // refuse the build, so `enforced: false` alone would conflate "the
+        // key was not set" with "the key was set and this route could not
+        // carry it".
         if (boundAccum.Calls() > 0)
         {
             result.certifiedBound = qcx::io::RunCertifiedBound{boundAccum.Calls(),
                                                                boundAccum.LastCallHa(),
                                                                boundAccum.MaxCallHa(),
                                                                boundAccum.Enforced(),
+                                                               boundAccum.Demoted(),
+                                                               boundAccum.DemotedReason(),
                                                                boundAccum.BudgetHa(),
                                                                boundAccum.RoutedHa(),
                                                                boundAccum.RoutedQuartets(),
@@ -11120,6 +11313,13 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
             return refuse(molden.error());
         }
     }
+
+    // The in-memory ERI cache request record (schema 43), filled once both
+    // arms have written their mode records: what the input asked for and
+    // what the engine's own Create-time decision fired, side by side. It is
+    // filled here rather than on each arm so no arm can publish a request
+    // without the outcome that belongs beside it.
+    result.resourcesResolved.eriCache = MakeEriCacheRecord(input, result.resourcesResolved);
 
     const auto stopped = std::chrono::steady_clock::now();
     result.timingsMs.totalMs = std::chrono::duration<double, std::milli>(stopped - started).count();

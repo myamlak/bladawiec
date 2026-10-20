@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -390,6 +391,30 @@ qcx::Result<std::optional<int>> ReadInt(const toml::node_view<toml::node>& table
     return node->value<int>();
 }
 
+// The 64-bit twin of ReadInt, for a value that can legitimately exceed int's
+// range: a byte budget is held at 8 GiB on the unrestricted legs, and a
+// budget read into an int would either overflow or - worse - come back empty
+// from the conversion, which this parser treats as an OMITTED key. An
+// absence that means two things is the exact defect the null-honesty rule
+// forbids, so the key that can reach the range is read at the range's width.
+qcx::Result<std::optional<std::int64_t>> ReadInt64(const toml::node_view<toml::node>& table,
+                                                   std::string_view key) {
+    const auto* node = table[key.substr(key.rfind('.') + 1)].node();
+
+    if (node == nullptr)
+    {
+        return std::optional<std::int64_t>{};
+    }
+
+    if (!node->is_integer())
+    {
+        return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                                   "\"" + std::string(key) + "\" must be an integer"));
+    }
+
+    return node->value<std::int64_t>();
+}
+
 qcx::Result<std::optional<double>> ReadDouble(const toml::node_view<toml::node>& table,
                                               std::string_view key) {
     const auto* node = table[key.substr(key.rfind('.') + 1)].node();
@@ -519,6 +544,25 @@ std::string_view ToString(MethodType method) noexcept {
         return "rks";
     case MethodType::kUks:
         return "uks";
+    }
+
+    return "unknown";
+}
+
+// The inverse of ParseGuess; see run_input.hpp ToString(GuessKind). The word
+// is the REQUEST's spelling: kCore stays "core" even though the default start
+// runs GWH on RHF - the record's separate `ran` fact says what ran.
+std::string_view ToString(GuessKind kind) noexcept {
+    switch (kind)
+    {
+    case GuessKind::kCore:
+        return "core";
+    case GuessKind::kGwh:
+        return "gwh";
+    case GuessKind::kSad:
+        return "sad";
+    case GuessKind::kRestart:
+        return "restart";
     }
 
     return "unknown";
@@ -1717,6 +1761,29 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
 
     input.method.eriCacheStore = eriCacheStore->value_or("");
 
+    // The in-memory ERI cache budget (the FockBuildOptions::maxCacheBytes
+    // passthrough): the io layer validates the >= 1 floor by name, the
+    // size_t conversion happens after the check - the ri_chunk_bytes rule.
+    // Read at 64 bits: the grant this key overrides is held at 8 GiB, which
+    // is beyond int's range (ReadInt64's own note).
+    auto eriCacheBytes = ReadInt64(method, "method.eri_cache_bytes");
+
+    if (!eriCacheBytes.has_value())
+    {
+        return std::unexpected(eriCacheBytes.error());
+    }
+
+    if (eriCacheBytes->has_value() && **eriCacheBytes < 1)
+    {
+        return std::unexpected(
+            Err(qcx::ErrorCode::kInvalidArgument, "method.eri_cache_bytes must be >= 1"));
+    }
+
+    if (eriCacheBytes->has_value())
+    {
+        input.method.eriCacheBytes = static_cast<std::size_t>(**eriCacheBytes);
+    }
+
     // The disk rung's chunk-size override (the DiskRiFockOptions.chunkBytes
     // passthrough): mirrors max_leaf_size - the io layer validates the
     // >= 1 floor by name, the size_t conversion happens after the check.
@@ -2168,7 +2235,7 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
 
         if (preset->has_value())
         {
-            options.preset = **preset;
+            options.preset = *preset;
         }
 
         auto s6 = ReadFiniteDouble(dispersion, "dispersion.s6");
@@ -2235,12 +2302,12 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
 
             if (options.form != qcx::dispersion::DispersionForm::kD4)
             {
-                options.d3.s6 = **s6;
+                options.d3.s6 = *s6;
             }
 
             if (options.form != qcx::dispersion::DispersionForm::kD3)
             {
-                options.d4.s6 = **s6;
+                options.d4.s6 = *s6;
             }
         }
 
@@ -2250,49 +2317,49 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
 
             if (options.form != qcx::dispersion::DispersionForm::kD4)
             {
-                options.d3.s8 = **s8;
+                options.d3.s8 = *s8;
             }
 
             if (options.form != qcx::dispersion::DispersionForm::kD3)
             {
-                options.d4.s8 = **s8;
+                options.d4.s8 = *s8;
             }
         }
 
         if (rs6->has_value())
         {
             written = true;
-            options.d3.rs6 = **rs6;
+            options.d3.rs6 = *rs6;
         }
 
         if (alpha6->has_value())
         {
             written = true;
-            options.d3.alpha6 = **alpha6;
+            options.d3.alpha6 = *alpha6;
         }
 
         if (rs8->has_value())
         {
             written = true;
-            options.d3.rs8 = **rs8;
+            options.d3.rs8 = *rs8;
         }
 
         if (alpha8->has_value())
         {
             written = true;
-            options.d3.alpha8 = **alpha8;
+            options.d3.alpha8 = *alpha8;
         }
 
         if (a1->has_value())
         {
             written = true;
-            options.d4.a1 = **a1;
+            options.d4.a1 = *a1;
         }
 
         if (a2->has_value())
         {
             written = true;
-            options.d4.a2 = **a2;
+            options.d4.a2 = *a2;
         }
 
         if (written)
@@ -2317,6 +2384,10 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
     }
 
     input.guess = *guessKind;
+    // The record's `guess.type` follows the REQUEST: a written key is a
+    // request, an absent one is the default and is not recorded as one
+    // (schema 42, the null-honesty rule).
+    input.guessExplicit = guessName->has_value();
 
     // The kRestart checkpoint path (guess.type = "restart"): restart_path
     // is the checkpoint file the driver loads and seeds the RHF

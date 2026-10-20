@@ -38,7 +38,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsFortyOne) {
+TEST(ResultJsonTest, SchemaVersionIsFortyFour) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -121,7 +121,39 @@ TEST(ResultJsonTest, SchemaVersionIsFortyOne) {
     // and the SCF residuals do not. Absent unless the input wrote a
     // `[dispersion]` block; a request that cannot be honoured is refused
     // before serialization, never recorded as absent.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 41);
+    //
+    // v41 -> v42: the top-level `guess` block (RunGuess) is added: the
+    // requested word (`type`, present exactly when the file wrote
+    // `[guess] type`), the word the run actually RAN (`ran`, always present),
+    // and the checkpoint a restart read (`restart_path`, present exactly when
+    // one was read). Keys added, so the number moves with them. The
+    // type-vs-ran split is the reason a consumer must notice: `core` names the
+    // method's DEFAULT START, which both paths run as the GWH guess, so the
+    // two words legitimately differ on a `type = "core"` run.
+    //
+    // v42 -> v43: the `resources_resolved.eri_cache` block (RunEriCache) is
+    // added: the bytes the input asked for (`method.eri_cache_bytes`), the
+    // per-lane budget the driver handed the engine, the budget the engine's
+    // Create-time decision actually fired (the mode record's cache term
+    // divided by three; absent when no mode decision was made, 0 when the
+    // cache did not engage), and whether the fired budget fell below the
+    // grant. Keys added, so the number moves with them - and the block is
+    // one a consumer must notice for a reason beyond its presence: the two
+    // legs carry DIFFERENT defaults (the unrestricted legs compute a
+    // cap-derived grant, the restricted legs run with the cache off), so
+    // before this block the same budget could appear in a document with no
+    // way to tell a request from an inherited default.
+    //
+    // v43 -> v44: the top-level `certified_bound` block gains `demoted` and
+    // `demoted_reason`. The enforcement key's two non-composing rungs - the
+    // LightPath chunk loop and an engaged precision ladder - no longer
+    // refuse the build; they skip the comparison and record the demotion,
+    // so the build runs exactly as an enforcement-off build. Keys added, so
+    // the number moves with them, and the pair is one a consumer must
+    // notice for a reason beyond presence: `enforced: false` alone would
+    // conflate "the key was not set" with "the key was set and this route
+    // could not carry it".
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 44);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -249,6 +281,56 @@ TEST(ResultJsonTest, DispersionBlockIsAbsentWhenNotRequested) {
     EXPECT_EQ(json.find("\"dispersion\""), std::string::npos);
 }
 
+TEST(ResultJsonTest, GuessBlockPublishesRequestAndRunSeparately) {
+    // Schema 42: `type` is the request and `ran` is the run fact, and they
+    // legitimately differ - `core` names the method's default start, which
+    // both paths run as the GWH guess. A record that published only one of
+    // the two could not be read for both.
+    qcx::io::RunResult core;
+    core.guess = qcx::io::RunGuess{"core", "gwh", std::nullopt};
+
+    const std::string coreJson = qcx::io::SerializeRunResultJson(core);
+    EXPECT_EQ(CountOccurrences(coreJson, "\"guess\""), 1);
+    EXPECT_NE(coreJson.find("\"type\": \"core\""), std::string::npos);
+    EXPECT_NE(coreJson.find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(coreJson.find("\"restart_path\""), std::string::npos);
+
+    // No [guess] type in the file: the request member is ABSENT, never a
+    // fabricated default word, while `ran` still says what the run did.
+    qcx::io::RunResult defaulted;
+    defaulted.guess = qcx::io::RunGuess{std::nullopt, "gwh", std::nullopt};
+
+    const std::string defaultedJson = qcx::io::SerializeRunResultJson(defaulted);
+    EXPECT_NE(defaultedJson.find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(defaultedJson.find("\"type\""), std::string::npos);
+    EXPECT_EQ(defaultedJson.find("\"restart_path\""), std::string::npos);
+
+    // A written `gwh` request: both members name the same start.
+    qcx::io::RunResult gwh;
+    gwh.guess = qcx::io::RunGuess{"gwh", "gwh", std::nullopt};
+
+    const std::string gwhJson = qcx::io::SerializeRunResultJson(gwh);
+    EXPECT_NE(gwhJson.find("\"type\": \"gwh\""), std::string::npos);
+    EXPECT_NE(gwhJson.find("\"ran\": \"gwh\""), std::string::npos);
+
+    // A restart run names the checkpoint it read; the member is present
+    // exactly when a file was read, never as an empty string.
+    qcx::io::RunResult restart;
+    restart.guess = qcx::io::RunGuess{"restart", "restart", std::string("h2.chk")};
+
+    const std::string restartJson = qcx::io::SerializeRunResultJson(restart);
+    EXPECT_NE(restartJson.find("\"type\": \"restart\""), std::string::npos);
+    EXPECT_NE(restartJson.find("\"ran\": \"restart\""), std::string::npos);
+    EXPECT_NE(restartJson.find("\"restart_path\": \"h2.chk\""), std::string::npos);
+
+    // The struct's own default is the input's default start (kCore -> the
+    // GWH guess), so a result no driver filled still names a real start.
+    qcx::io::RunResult bare;
+    const std::string bareJson = qcx::io::SerializeRunResultJson(bare);
+    EXPECT_NE(bareJson.find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(bareJson.find("\"type\""), std::string::npos);
+}
+
 TEST(ResultJsonTest, MoleculeUnitsDisclosesTheInterpretedUnit) {
     // The record is self-describing about the one convention that has bitten
     // this project twice. Both words are published as such, and the default
@@ -373,7 +455,7 @@ TEST(ResultJsonTest, CertifiedBoundEnforcementMembersEmitted) {
     // budget, the delivered sum is what the lane's arithmetic cost.
     qcx::io::RunResult result;
     result.certifiedBound =
-        qcx::io::RunCertifiedBound{20, 0.0, 5.96, true, 7.69e-11, 7.51e-5, 0, true};
+        qcx::io::RunCertifiedBound{20, 0.0, 5.96, true, false, "", 7.69e-11, 7.51e-5, 0, true};
 
     const std::string json = qcx::io::SerializeRunResultJson(result);
     EXPECT_NE(json.find("\"enforced\": true"), std::string::npos);
@@ -381,6 +463,40 @@ TEST(ResultJsonTest, CertifiedBoundEnforcementMembersEmitted) {
     EXPECT_NE(json.find("\"routed_ha\""), std::string::npos);
     EXPECT_NE(json.find("\"routed_quartets\": 0"), std::string::npos);
     EXPECT_NE(json.find("\"fell_back_to_fp64\": true"), std::string::npos);
+    // Schema 44: the comparison ran, so nothing was demoted - the verdict
+    // is written and the reason is not.
+    EXPECT_NE(json.find("\"demoted\": false"), std::string::npos);
+    EXPECT_EQ(json.find("demoted_reason"), std::string::npos);
+}
+
+TEST(ResultJsonTest, CertifiedBoundDemotionRecordsTheVerdictAndTheReason) {
+    // Schema 44: the LightPath chunk loop (and an engaged precision ladder)
+    // cannot carry the comparison, so the build is NOT refused - it skips
+    // the comparison and records why. `enforced` stays false because the
+    // comparison did not run; `demoted` is what separates that from the key
+    // never having been set.
+    qcx::io::RunResult result;
+    result.certifiedBound = qcx::io::RunCertifiedBound{
+        20,
+        0.0,
+        0.0,
+        false,
+        true,
+        "the certified-bound budget enforcement does not compose with the LightPath chunk loop",
+        0.0,
+        0.0,
+        0,
+        false};
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(json.find("\"enforced\": false"), std::string::npos);
+    EXPECT_NE(json.find("\"demoted\": true"), std::string::npos);
+    EXPECT_NE(json.find("\"demoted_reason\": \"the certified-bound budget enforcement"),
+              std::string::npos);
+    // The measured members are the enforcement's zero defaults, not
+    // measurements: the comparison was skipped.
+    EXPECT_NE(json.find("\"budget_ha\": 0.0"), std::string::npos);
+    EXPECT_NE(json.find("\"routed_ha\": 0.0"), std::string::npos);
 }
 
 TEST(ResultJsonTest, CertifiedBoundEnforcementMembersDefaultToOff) {
@@ -1034,6 +1150,67 @@ TEST(ResultJsonTest, EriStoreBlockDisclosesWhatRanNotWhatWasAsked) {
     qcx::io::RunResult omitted;
     const std::string omittedJson = qcx::io::SerializeRunResultJson(omitted);
     EXPECT_EQ(omittedJson.find("eri_store"), std::string::npos);
+}
+
+TEST(ResultJsonTest, EriCacheBlockPairsTheRequestWithTheFiredBudget) {
+    // The requested-vs-ran pairing of the in-memory ERI cache budget (schema
+    // 43). The request is the input's, but what FIRED is the engine's
+    // Create-time decision, so the block writes both and never presents one
+    // as the other: a run that asked for a budget the workspace could not
+    // hold is the substitution this block makes unreportable.
+    //
+    // Three states on the EMITTED text: the grant fired whole, the grant was
+    // clamped, and the key was never named.
+    qcx::io::RunResult fired;
+    qcx::io::RunEriCache cache;
+    cache.requestedBytes = 1073741824;
+    cache.grantedBytes = 1073741824;
+    cache.effectiveBytes = 1073741824;
+    cache.clamped = false;
+    fired.resourcesResolved.eriCache = std::move(cache);
+
+    const std::string firedJson = qcx::io::SerializeRunResultJson(fired);
+    EXPECT_NE(firedJson.find("\"eri_cache\""), std::string::npos);
+    EXPECT_NE(firedJson.find("\"requested_bytes\": 1073741824"), std::string::npos);
+    EXPECT_NE(firedJson.find("\"granted_bytes\": 1073741824"), std::string::npos);
+    EXPECT_NE(firedJson.find("\"effective_bytes\": 1073741824"), std::string::npos);
+    EXPECT_NE(firedJson.find("\"clamped\": false"), std::string::npos);
+
+    // The clamped arm: the engine's sure-fit gate shrank the grant (or a path
+    // that cannot serve the cache fired 0), and the record says so rather
+    // than letting the requested number stand as the ran one. `effective_bytes`
+    // is 0 here - the true fired budget - never omitted.
+    qcx::io::RunResult clamped;
+    qcx::io::RunEriCache shrank;
+    shrank.requestedBytes = 8589934592;
+    shrank.grantedBytes = 8589934592;
+    shrank.effectiveBytes = 0;
+    shrank.clamped = true;
+    clamped.resourcesResolved.eriCache = std::move(shrank);
+
+    const std::string clampedJson = qcx::io::SerializeRunResultJson(clamped);
+    EXPECT_NE(clampedJson.find("\"requested_bytes\": 8589934592"), std::string::npos);
+    EXPECT_NE(clampedJson.find("\"effective_bytes\": 0"), std::string::npos);
+    EXPECT_NE(clampedJson.find("\"clamped\": true"), std::string::npos);
+
+    // The no-mode-decision arm (a state an honoured request cannot reach, and
+    // one the serializer must still shape honestly): the effective budget is
+    // absent, never a fabricated zero.
+    qcx::io::RunResult undecided;
+    qcx::io::RunEriCache noDecision;
+    noDecision.requestedBytes = 1024;
+    noDecision.grantedBytes = 1024;
+    undecided.resourcesResolved.eriCache = std::move(noDecision);
+
+    const std::string undecidedJson = qcx::io::SerializeRunResultJson(undecided);
+    EXPECT_EQ(undecidedJson.find("effective_bytes"), std::string::npos);
+    EXPECT_NE(undecidedJson.find("\"clamped\": false"), std::string::npos);
+
+    // And the omitted key: no block at all, so an inherited default cannot
+    // read as a request.
+    qcx::io::RunResult omitted;
+    const std::string omittedJson = qcx::io::SerializeRunResultJson(omitted);
+    EXPECT_EQ(omittedJson.find("eri_cache"), std::string::npos);
 }
 
 TEST(ResultJsonTest, SymmetryBlockEmittedWhenPresent) {

@@ -106,8 +106,12 @@ input file keys (a key marked required must be written):
     accuracy = "kNormal"            required; kLoose | kNormal | kTight
     enforce_certified_bound = false  optional; enforce the memory-budget bound
                                     over the certified fp32 lane's routing.
-                                    Honoured by the direct family's machinery
-                                    member only, refused on every other route
+                                    Honoured by the restricted direct family's
+                                    machinery member: a restricted run resolved
+                                    to any other builder is demoted to that
+                                    member, and the divergence is reported.
+                                    Refused on uhf and uks, whose wiring
+                                    carries no enforcement on any route
     force_certified_lane = false    optional; ask for the certified fp32 lane
                                     itself. Honoured by the direct family's
                                     machinery member only, and refused at
@@ -133,20 +137,37 @@ input file keys (a key marked required must be written):
                                     = the built-in threshold. Read by
                                     fock_builder = "qfmm"; refused elsewhere
     ri_tensor_mode = "auto"         optional; auto | disk; the RI-J ladder's
-                                    rung: "disk" selects the disk rung, wired
-                                    on the restricted ri_j_link leg, and an
-                                    absent key leaves the rung to the engine's
-                                    own estimate. The retired word "forced_disk"
-                                    is refused here, with [diagnostics]
-                                    force_disk_ri as its remedy
+                                    disk-rung selector, wired on the restricted
+                                    ri_j_link leg. Disk is entered ONLY when a
+                                    run asks for it: an absent key (or "auto")
+                                    never selects it - the engine's own
+                                    estimate chooses between the in-memory
+                                    rungs alone - and force_disk_ri below is
+                                    the other entrance. The retired word
+                                    "forced_disk" is refused here, with
+                                    [diagnostics] force_disk_ri as its remedy
     ri_orbit_expansion = false      optional; the RI-J symmetry orbit expansion
                                     (its 3-center task grid). Read by the
                                     ri_j_link family
     eri_cache_store = ""            optional; a path; the disk-tier ERI store -
                                     a non-empty path stores the run's ERI
-                                    batches there. Read on the restricted lanes'
-                                    direct machinery member; refused on uhf and
-                                    uks
+                                    batches there. Read by the direct family's
+                                    machinery member, restricted and
+                                    unrestricted; demoted, with the reason
+                                    recorded, where that member is not wired;
+                                    refused on an unrestricted run of another
+                                    family
+    eri_cache_bytes = 1073741824    optional; >= 1; the in-memory ERI cache
+                                    budget in bytes. Read by the direct
+                                    family's machinery member, restricted and
+                                    unrestricted: it overrides the grant the
+                                    memory cap derives on the unrestricted
+                                    legs, and turns the cache on for the
+                                    restricted legs, whose default is off.
+                                    Absent = those legs' own defaults.
+                                    Refused on other routes and at
+                                    memory_cap_gib = 0, where no workspace
+                                    budget exists to clamp the grant against
     ri_chunk_bytes = 268435456      optional; >= 1; the disk rung's chunk size
                                     in bytes; absent = 268435456 (256 MiB), the
                                     engine's own target. Dropped, with no
