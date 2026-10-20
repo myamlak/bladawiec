@@ -40,9 +40,11 @@ qcx::Result<SparseSolveReport> SolveSparseSystemMultipleRhs(
     const std::vector<std::size_t>& rowOffsets,
     const std::vector<std::size_t>& columnIndices,
     const std::vector<double>& values,
-    std::span<const double> rhs,
-    std::size_t rhsCount,
+    RightHandSides rhs,
     double tolerance) {
+    const std::span<const double> rightHandSides = rhs.values;
+    const std::size_t rhsCount = rhs.count;
+
     if (rhsCount == 0)
     {
         return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
@@ -69,7 +71,7 @@ qcx::Result<SparseSolveReport> SolveSparseSystemMultipleRhs(
                        "rhsCount times the system size overflows the size type"});
     }
 
-    if (rhs.size() != rhsCount * n)
+    if (rightHandSides.size() != rhsCount * n)
     {
         return std::unexpected(
             qcx::Error{qcx::ErrorCode::kInvalidArgument, "rhs must hold rhsCount * n values"});
@@ -150,8 +152,8 @@ qcx::Result<SparseSolveReport> SolveSparseSystemMultipleRhs(
 
         for (std::size_t k = 0; k < rhsCount; ++k)
         {
-            std::copy(rhs.begin() + static_cast<std::ptrdiff_t>(k * n),
-                      rhs.begin() + static_cast<std::ptrdiff_t>((k + 1) * n),
+            std::copy(rightHandSides.begin() + static_cast<std::ptrdiff_t>(k * n),
+                      rightHandSides.begin() + static_cast<std::ptrdiff_t>((k + 1) * n),
                       side.begin());
             std::fill(answer.begin(), answer.end(), 0.0);
 
@@ -198,8 +200,8 @@ qcx::Result<std::vector<double>> SolveSparseSystem(const std::vector<std::size_t
                                                    const std::vector<double>& values,
                                                    const std::vector<double>& rhs,
                                                    double tolerance) {
-    auto solved =
-        SolveSparseSystemMultipleRhs(rowOffsets, columnIndices, values, rhs, 1, tolerance);
+    auto solved = SolveSparseSystemMultipleRhs(
+        rowOffsets, columnIndices, values, RightHandSides{rhs, 1}, tolerance);
 
     if (!solved.has_value())
     {

@@ -276,8 +276,12 @@ TEST(SparseSolverTest, MultipleRightHandSidesMatchTheirManufacturedSolutions) {
 
     // 1e-9 is the requested residual; the true residual is asserted at 1e-8
     // below, so the request keeps a decade of margin.
-    const auto result = qcx::linalg::SolveSparseSystemMultipleRhs(
-        system.rowOffsets, system.columnIndices, system.values, rhs, 3, 1e-9);
+    const auto result =
+        qcx::linalg::SolveSparseSystemMultipleRhs(system.rowOffsets,
+                                                  system.columnIndices,
+                                                  system.values,
+                                                  qcx::linalg::RightHandSides{rhs, 3},
+                                                  1e-9);
     ASSERT_TRUE(result.has_value()) << result.error().message;
 
     ASSERT_EQ(result->solution.size(), 3 * kUnknownCount);
@@ -323,8 +327,12 @@ TEST(SparseSolverTest, TheSingleRhsEntryMatchesTheMultiRhsEntry) {
     const PoissonSystem system = MakePoissonSystem();
     const auto single = qcx::linalg::SolveSparseSystem(
         system.rowOffsets, system.columnIndices, system.values, system.rhs, 1e-9);
-    const auto multiple = qcx::linalg::SolveSparseSystemMultipleRhs(
-        system.rowOffsets, system.columnIndices, system.values, system.rhs, 1, 1e-9);
+    const auto multiple =
+        qcx::linalg::SolveSparseSystemMultipleRhs(system.rowOffsets,
+                                                  system.columnIndices,
+                                                  system.values,
+                                                  qcx::linalg::RightHandSides{system.rhs, 1},
+                                                  1e-9);
 
     ASSERT_TRUE(single.has_value()) << single.error().message;
     ASSERT_TRUE(multiple.has_value()) << multiple.error().message;
@@ -340,22 +348,35 @@ TEST(SparseSolverTest, MultipleRightHandSidesRejectShapeMismatches) {
     const PoissonSystem system = MakePoissonSystem();
     const std::vector<double> rhs = MakeMultipleRhs(system);
 
-    const auto noSides = qcx::linalg::SolveSparseSystemMultipleRhs(
-        system.rowOffsets, system.columnIndices, system.values, rhs, 0, 1e-8);
+    const auto noSides =
+        qcx::linalg::SolveSparseSystemMultipleRhs(system.rowOffsets,
+                                                  system.columnIndices,
+                                                  system.values,
+                                                  qcx::linalg::RightHandSides{rhs, 0},
+                                                  1e-8);
     ASSERT_FALSE(noSides.has_value());
     EXPECT_EQ(noSides.error().code, qcx::ErrorCode::kInvalidArgument);
 
-    const auto shortRhs = qcx::linalg::SolveSparseSystemMultipleRhs(
-        system.rowOffsets, system.columnIndices, system.values, rhs, 4, 1e-8);
+    const auto shortRhs =
+        qcx::linalg::SolveSparseSystemMultipleRhs(system.rowOffsets,
+                                                  system.columnIndices,
+                                                  system.values,
+                                                  qcx::linalg::RightHandSides{rhs, 4},
+                                                  1e-8);
     ASSERT_FALSE(shortRhs.has_value());
     EXPECT_EQ(shortRhs.error().code, qcx::ErrorCode::kInvalidArgument);
 
-    const auto badTolerance = qcx::linalg::SolveSparseSystemMultipleRhs(
-        system.rowOffsets, system.columnIndices, system.values, rhs, 3, 0.0);
+    const auto badTolerance =
+        qcx::linalg::SolveSparseSystemMultipleRhs(system.rowOffsets,
+                                                  system.columnIndices,
+                                                  system.values,
+                                                  qcx::linalg::RightHandSides{rhs, 3},
+                                                  0.0);
     ASSERT_FALSE(badTolerance.has_value());
     EXPECT_EQ(badTolerance.error().code, qcx::ErrorCode::kInvalidArgument);
 
-    const auto emptyOffsets = qcx::linalg::SolveSparseSystemMultipleRhs({}, {}, {}, rhs, 3, 1e-8);
+    const auto emptyOffsets = qcx::linalg::SolveSparseSystemMultipleRhs(
+        {}, {}, {}, qcx::linalg::RightHandSides{rhs, 3}, 1e-8);
     ASSERT_FALSE(emptyOffsets.has_value());
     EXPECT_EQ(emptyOffsets.error().code, qcx::ErrorCode::kInvalidArgument);
 }

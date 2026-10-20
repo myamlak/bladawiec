@@ -279,8 +279,7 @@ qcx::Result<ResponseBandSolveReport> SolveResponseByBand(
             qcx::linalg::SolveSparseSystemMultipleRhs(assembled->rowOffsets,
                                                       assembled->columnIndices,
                                                       assembled->values,
-                                                      rhs,
-                                                      rhsCount,
+                                                      qcx::linalg::RightHandSides{rhs, rhsCount},
                                                       matrixFreeSolver.Options().tolerance);
 
         if (!solved.has_value())

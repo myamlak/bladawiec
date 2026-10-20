@@ -23,6 +23,13 @@ struct SparseSolveReport {
     double worstResidual = 0.0;
 };
 
+/// Concatenated right-hand sides for one solve: side k occupies
+/// [k * n, (k + 1) * n), n being the system size.
+struct RightHandSides {
+    std::span<const double> values; ///< The concatenated values, side-major.
+    std::size_t count = 0; ///< Number of right-hand sides; positive.
+};
+
 /// Solves A x = b for one or more real square sparse systems given in CSR
 /// form, via AMGCL's smoothed-aggregation AMG preconditioner with a
 /// conjugate-gradient solver [Demidov2019], building ONE hierarchy for every
@@ -39,9 +46,7 @@ struct SparseSolveReport {
 /// last element equal to the packed size.
 /// \param columnIndices Packed column indices, same size as \p values.
 /// \param values Packed values, same size as \p columnIndices.
-/// \param rhs Concatenated right-hand sides, right-hand-side-major: side k
-/// occupies [k * n, (k + 1) * n).
-/// \param rhsCount Number of right-hand sides; must be positive.
+/// \param rhs The concatenated right-hand sides and their count.
 /// \param tolerance Relative residual tolerance for convergence; must be
 /// positive.
 /// \returns The concatenated solution and the solve's cost, or an Error
@@ -58,8 +63,7 @@ qcx::Result<SparseSolveReport> SolveSparseSystemMultipleRhs(
     const std::vector<std::size_t>& rowOffsets,
     const std::vector<std::size_t>& columnIndices,
     const std::vector<double>& values,
-    std::span<const double> rhs,
-    std::size_t rhsCount,
+    RightHandSides rhs,
     double tolerance = 1e-8);
 
 /// Solves A x = b for one real square sparse system given in CSR form, via
