@@ -58,7 +58,7 @@ The options that matter when configuring:
 | `QCX_ENABLE_LARGE_TESTS` | `OFF` | registers the long-running test targets (see §3) |
 | `QCX_REFERENCE_REGENERATION_CHECK` | `OFF` | the local-only regeneration checks |
 | `QCX_TEST_TIMEOUT_SECONDS` | `2400` | the per-test timeout |
-| `QCX_INTEGRALS_LMAX` | `6` | the highest angular momentum the integral engine builds for |
+| `QCX_INTEGRALS_LMAX` | `6` | the instantiation ceiling for the MD 2e/3c class matrix (6 is the supported bound and what CI builds; lower values build a reduced matrix for local compile-time experiments) |
 
 ## 2. Test selection
 

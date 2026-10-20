@@ -2,7 +2,7 @@
 // The per-{L_bra, L_ket}-class function-pointer table; entries whose
 // class lies outside the instantiation matrix (the 2e triangle UNION
 // the RI rectangle at the configured QcxIntegralsLMax) are nullptr -
-// no CI configuration ever links the full class matrix.
+// a reduced-size build never links the full class matrix.
 #pragma once
 #include "md_engine.hpp"
 

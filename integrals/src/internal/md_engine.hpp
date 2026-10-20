@@ -6,8 +6,9 @@
 // re-instantiate the hot templates. The table itself is generated
 // (md_dispatch_gen.hpp, tools/gen_md_tables.py) and gated on the
 // QcxIntegralsLMax/QcxIntegralsF32 compile definitions - classes above the
-// configured Lmax are nullptr (kUnimplemented), and no CI configuration
-// ever links the full class matrix.
+// configured build ceiling are nullptr (kUnimplemented). The shipped ceiling,
+// and the one CI builds, is 6, which links the full class matrix; a reduced-
+// size build links less.
 
 #include "md_batch.hpp"
 

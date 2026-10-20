@@ -22,9 +22,10 @@ Grids written:
     the published STO-3G F/O/H contractions at the fixture geometries - S/T/V
     blocks per canonical pair and 2e blocks per canonical quartet.
   - integrals/tests/data/md_high_l_reference.csv: canonical-quartet spot
-    checks of the f/g/h shells (l = 3..6 classes, fixed function-index
-    pattern per quartet - spot checks, not full tensors), gated on max_l >= 3
-    (the CI lanes cannot instantiate the f shell and skip the grid).
+    checks of the f/g/h shells (l = 3..5, classes up to (10,10); fixed
+    function-index pattern per quartet - spot checks, not full tensors), gated
+    on max_l >= 3 (a reduced-size build below the f shell skips the grid; CI
+    builds the shipped ceiling of 6).
   - integrals/tests/data/md_3c_reference.csv: the (uv|P) blocks of every
     canonical H2O/STO-3G orbital pair against the tiny s/p auxiliary set
     (one function triple per task plus the corners of the (p,p) x O-p
@@ -840,20 +841,21 @@ def build_all_rows(max_l=None):
                                  mp.nstr(block[row_i][col_i], 22)])
     grids["md_shellset_reference.csv"] = rows
 
-    # The high-l spot grid: canonical quartets of the f/g/h/i shells (the
-    # l = 3..6 classes, including (6,6)) with a fixed pattern of function
-    # indices per quartet - spot checks, not full tensors (the full (i,i|i,i)
-    # tensor alone is 13^4 rows). ERI rows only. Gated on max_l: builds that
-    # cannot instantiate the f shell (Lmax < 3,
-    # the CI lanes) skip the whole grid - the regeneration check runs on
-    # every CI job and this section is the expensive one (2026-08-18).
+    # The high-l spot grid: canonical quartets of the f/g/h shells (the
+    # l = 3..5 functions, classes up to (10,10)) with a fixed pattern of
+    # function indices per quartet - spot checks, not full tensors (the full
+    # (i,i|i,i) tensor alone is 13^4 rows). ERI rows only. Gated on max_l:
+    # reduced-size builds below the f shell skip the whole grid - this section
+    # is the expensive one (2026-08-18).
     if max_l is None or max_l >= 3:
         hl_shells = high_l_shells()
-        # Classes 6..10 (f/g/h): the l = 6-shell quartets (classes up to (12,12))
-        # are deliberately out - a full i,i|i,i block is ~13M mpmath inner
-        # operations (~30x the whole f/g/h set) and the regeneration check runs
-        # on every CI job; the (6,6) shell class is validated by the unfolded
-        # reference path and the mixed-precision sweep instead.
+        # Classes 6..10 (f/g/h): the l = 6-shell quartets (classes up to
+        # (12,12)) are deliberately out - a full i,i|i,i block is ~13M mpmath
+        # inner operations (~30x the whole f/g/h set) and the regeneration
+        # check runs on every CI job. The i-shell classes therefore have no
+        # independent reference here; the engine's own finiteness, block-
+        # symmetry and reproducibility checks in integrals/tests/eri_batch_test.cpp
+        # cover them, which is a weaker claim than a numerical reference.
         hl_quartets = [(0, 0, 0, 0), (0, 1, 0, 1), (0, 2, 0, 2), (1, 1, 1, 1), (1, 2, 1, 2),
                        (2, 2, 2, 2)]
         spot_patterns = [(0, 0, 0, 0), (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1),
@@ -977,8 +979,9 @@ def main():
                         help="verify the committed CSVs are byte-identical to a "
                              "fresh generation (exits nonzero on drift)")
     parser.add_argument("--max-l", type=int, default=None,
-                        help="skip grids whose shells exceed this l (the CI lanes "
-                             "pass their QCX_INTEGRALS_LMAX)")
+                        help="skip grids whose shells exceed this l (a reduced-size "
+                             "build passes its QCX_INTEGRALS_LMAX; CI builds the "
+                             "shipped 6)")
     args = parser.parse_args()
 
     # Resolve the relative outdir against the repo root (the script's
