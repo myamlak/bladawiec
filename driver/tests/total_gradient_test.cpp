@@ -2,7 +2,7 @@
 // one .toml on disk, the way `qcx run <file.toml>` starts a run, and the block
 // read back both from the structured record and from its JSON text.
 //
-// The acceptance is four claims. First, an rhf run that asks for the gradient
+// The acceptance is five claims. First, an rhf run that asks for the gradient
 // records every term of the decomposition, and the terms sum to the total -
 // the block cannot disagree with itself. Second, the block is ABSENT when the
 // key was not written (the null-honesty rule: absent, never a zero-filled
@@ -12,7 +12,10 @@
 // key inside the block. Fourth, every refusal the properties entry states is
 // refused by name through the driver: a non-converged SCF, a non-stationary
 // reference, and a D4 dispersion gradient (while a D4 run that asks for the
-// energy alone still runs).
+// energy alone still runs). Fifth, the run's [method] accuracy reaches the
+// assembly: the two-electron derivative walk's screening counts in the block
+// move with the preset, so a kLoose run's block carries the kLoose-derived
+// figure rather than the kNormal default.
 
 #include "qcx/driver/run_driver.hpp"
 #include "qcx/io/parse_input.hpp"
@@ -123,6 +126,30 @@ orbital = "sto-3g"
 )") + std::string(methodBody) +
            R"(accuracy = "kNormal"
 )" + std::string(trailing);
+}
+
+// Stretched H2 at 5.75 Angstrom: the one off-diagonal canonical quartet's
+// density-weighted Schwarz bound sits between the kLoose and kNormal screen
+// thresholds, so the two presets' derivative walks count it differently (the
+// measured crossings are ~5.2 and ~6.3 Angstrom). The accuracy word is the
+// only thing that differs between the two runs this fixture is used for.
+std::string StretchedHydrogenToml(std::string_view accuracy) {
+    return std::string(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 5.75]]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+fock_builder = "direct"
+)") + "accuracy = \"" +
+           std::string(accuracy) + "\"\n\n" + R"([properties]
+total_gradient = true
+)";
 }
 
 constexpr std::string_view kRhfBody = R"(type = "rhf"
@@ -255,6 +282,55 @@ TEST(TotalGradientTest, TheBlockIsAbsentWhenTheKeyWasNotWritten) {
     ASSERT_TRUE(outcome->result.properties.has_value());
     EXPECT_FALSE(outcome->result.properties->totalGradient.has_value());
     EXPECT_EQ(outcome->json.find("total_gradient"), std::string::npos);
+}
+
+TEST(TotalGradientTest, TheMethodAccuracyPresetScreensTheGradientWalk) {
+    // The [method] accuracy is the assembly's ONE screening preset, and the
+    // driver must hand it to TotalGradientOptions::eri.accuracy, which the
+    // two-electron derivative walk reads. The walk's own screened count is
+    // therefore the block's evidence of the preset the gradient ran at: the
+    // same fixture at the same geometry must report a kLoose-derived split on
+    // the kLoose run and a kNormal-derived split on the kNormal one. If the
+    // driver dropped the preset (the kNormal default), the kLoose block would
+    // carry kNormal's counts and this row would fail.
+    const auto loosePath = TempInputPath("accuracy-kloose");
+    auto loose = RunFile(loosePath, StretchedHydrogenToml("kLoose"));
+    ASSERT_TRUE(loose.has_value()) << loose.error().message;
+
+    const auto normalPath = TempInputPath("accuracy-knormal");
+    auto normal = RunFile(normalPath, StretchedHydrogenToml("kNormal"));
+    ASSERT_TRUE(normal.has_value()) << normal.error().message;
+
+    ASSERT_TRUE(loose->result.properties.has_value());
+    ASSERT_TRUE(normal->result.properties.has_value());
+    ASSERT_TRUE(loose->result.properties->totalGradient.has_value());
+    ASSERT_TRUE(normal->result.properties->totalGradient.has_value());
+
+    const qcx::io::RunTotalGradientTwoElectronCounts& looseCounts =
+        loose->result.properties->totalGradient->counts.twoElectron;
+    const qcx::io::RunTotalGradientTwoElectronCounts& normalCounts =
+        normal->result.properties->totalGradient->counts.twoElectron;
+
+    // Same walk, different screen: both runs visit the same canonical
+    // quartets, and the preset decides which side of the screen each falls on.
+    EXPECT_EQ(looseCounts.quartets + looseCounts.screenedQuartets,
+              normalCounts.quartets + normalCounts.screenedQuartets);
+
+    // The kLoose block carries the kLoose-derived figure - one quartet
+    // screened - and not the kNormal one (none screened).
+    EXPECT_EQ(looseCounts.quartets, 5u);
+    EXPECT_EQ(looseCounts.screenedQuartets, 1u);
+    EXPECT_EQ(normalCounts.quartets, 6u);
+    EXPECT_EQ(normalCounts.screenedQuartets, 0u);
+    EXPECT_GT(looseCounts.screenedQuartets, normalCounts.screenedQuartets);
+    EXPECT_LT(looseCounts.quartets, normalCounts.quartets);
+
+    // The document carries the same kLoose-derived figures.
+    const nlohmann::json document = nlohmann::json::parse(loose->json);
+    const nlohmann::json& counted = document.at("total_gradient").at("counts").at("two_electron");
+
+    EXPECT_EQ(counted.at("quartets").get<std::size_t>(), 5u);
+    EXPECT_EQ(counted.at("screened_quartets").get<std::size_t>(), 1u);
 }
 
 TEST(TotalGradientTest, AD3RequestAddsTheTermAndTheEnergyTheRecordReports) {
