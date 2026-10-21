@@ -175,7 +175,7 @@ TEST(TotalGradientTest, InputFileRunRecordsEveryTermAndTheTotal) {
         << "the requested total_gradient block is absent from the record";
 
     const qcx::io::RunTotalGradient& total = *result.properties->totalGradient;
-    const std::size_t expected = 3 * 2;
+    const std::size_t expected = std::size_t{3} * 2;
 
     EXPECT_EQ(total.gradient.size(), expected);
 
@@ -347,7 +347,7 @@ TEST(TotalGradientTest, AD3RequestAddsTheTermAndTheEnergyTheRecordReports) {
     ASSERT_TRUE(result.dispersion.has_value());
 
     const qcx::io::RunTotalGradient& total = *result.properties->totalGradient;
-    const std::size_t expected = 3 * 2;
+    const std::size_t expected = std::size_t{3} * 2;
 
     ASSERT_TRUE(total.terms.dispersion.has_value());
     ASSERT_TRUE(total.energies.dispersion.has_value());
