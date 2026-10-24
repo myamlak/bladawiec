@@ -1,9 +1,10 @@
 // The dispersion module's acceptance: the request resolution's refusals and
 // the two evaluation arms against excgrid's own numbers.
 //
-// The D3 arm is pinned as EQUALITY WITH THE LIBRARY on excgrid's water
-// fixture: excgrid carries no independently published D3 energy, so the
-// consumer claim is the wiring, and the physics is the kernel suite's. The
+// The D3 arm is checked against the published dftd3 V3.2 Rev 1 reference
+// energy for the water fixture (-6.34e-6 Ha, transcribed with its sources in
+// excgrid's D3_DATA_PROVENANCE.md) as well as against equality with the
+// library: the reference pins the physics, the equality pins the wiring. The
 // D4 arm carries excgrid's published-reference ratio for caffeine - the
 // model's two-body energy is 0.997913 of the published number with the
 // shipped neutral baseline - so a run that reached the kernel with different
@@ -277,6 +278,8 @@ TEST(DispersionTest, D3EnergyEqualsTheLibraryOnTheWaterFixture) {
     ASSERT_TRUE(direct.has_value());
 
     EXPECT_NEAR(*energy, *direct, 1e-12);
+    // dftd3 V3.2 Rev 1 on the same geometry prints -0.00000634 au.
+    EXPECT_NEAR(*energy, -6.34e-6, 5e-8);
     EXPECT_LT(*energy, 0.0);
 }
 
