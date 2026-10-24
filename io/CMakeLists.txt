@@ -19,9 +19,12 @@ target_compile_features(qcx-io PUBLIC cxx_std_23)
 # [grid] block's parser refuses an angular size that is not a shipped
 # Lebedev one BY NAME, so it reads the size list from the module that owns
 # it (AngularGrid::kAvailableSizes, parse_input.cpp) instead of copying it.
-# No io header names a grid type.
+# No io header names a grid type. qcx-dispersion is PUBLIC and is not
+# implementation-only: RunInput carries the module's own DispersionOptions
+# (the [dispersion] block), so the type is part of this header's API and the
+# include path must travel with the link.
 target_link_libraries(qcx-io
-  PUBLIC qcx-core qcx-integrals eigen
+  PUBLIC qcx-core qcx-integrals eigen qcx-dispersion
   PRIVATE qcx-molecule qcx-basisset qcx-grid tomlplusplus json)
 
 # The bundled basis directory is baked into the library (the same macro the

@@ -2,6 +2,9 @@ add_library(qcx-response
   src/response_operator.cpp
   src/response_solver.cpp
   src/response_gradient.cpp
+  src/response_kernel.cpp
+  src/response_band.cpp
+  src/response_state.cpp
 )
 target_include_directories(qcx-response PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(qcx-response PUBLIC cxx_std_23)
@@ -11,7 +14,7 @@ target_compile_features(qcx-response PUBLIC cxx_std_23)
 # against spans, so a consumer that has never heard of Eigen can use it. The
 # physical operator a caller wants (OrbitalHessianOperator) consumes the MO
 # two-electron tensor and the orbital energies as plain spans for that reason.
-target_link_libraries(qcx-response PUBLIC qcx-core)
+target_link_libraries(qcx-response PUBLIC qcx-core qcx-linalg)
 
 # PCH is mandatory on every target; response_solver.hpp carries the operator
 # header, so this one entry covers both translation units.
@@ -22,16 +25,21 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-response-tests
       tests/response_solver_test.cpp
       tests/response_gradient_test.cpp
+      tests/response_kernel_test.cpp
+      tests/response_band_test.cpp
+      tests/response_state_test.cpp
     )
     # The C1 anchor runs the real H2/STO-3G SCF at three field strengths, so the
     # test target pulls scf, integrals, basisset and the shared H2/STO-3G
     # fixtures in - qcx-test-fixtures is defined in tests/, which the root
     # CMakeLists adds after this directory (CMake resolves the name at generate
-    # time, the same edge qcx-scf-tests uses). The library's own dependencies
-    # are unchanged by this: a test-only edge, and one the DAG permits (scf is
-    # rank 9, this module sits after it).
+    # time, the same edge qcx-scf-tests uses). The Kohn-Sham kernel test adds
+    # the grid: its finite-difference reference integrates the XC energy of a
+    # converged RKS reference. The library's own dependencies are unchanged by
+    # this: test-only edges, and ones the DAG permits (response follows grid and
+    # scf in the module order).
     target_link_libraries(qcx-response-tests PRIVATE
-        qcx-response qcx-scf qcx-integrals gtest gtest_main qcx-test-fixtures)
+        qcx-response qcx-scf qcx-integrals qcx-grid gtest gtest_main qcx-test-fixtures)
     target_precompile_headers(qcx-response-tests PRIVATE
         <gtest/gtest.h>
         <qcx/response/response_solver.hpp>)

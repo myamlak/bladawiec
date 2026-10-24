@@ -75,7 +75,8 @@ H    P
 END
 )";
 
-// An auxiliary set with an f shell: beyond kMaxEngineL on the CI builds.
+// An auxiliary set with an f shell: beyond kMaxEngineL on a reduced-size
+// build.
 // Every H2O atom needs an entry (BuildShellPairs rejects a basis missing
 // an atom with kInvalidArgument, which would mask the kUnimplemented
 // rejection this fixture is meant to reach - the 2026-08-22 Lmax=2 fix).
@@ -115,7 +116,7 @@ END
 // inlined here): a per-element 3-shell set (O and H both S,P,D; 648
 // functions at 24 waters). The band's positive gap comes from the
 // kRiBandOrbital above, NOT from aux angular momentum - d shells are the
-// ceiling, so the pins also run on the CI Lmax=2 builds.
+// ceiling, so the pins run even on a reduced build with a ceiling of 2.
 inline constexpr std::string_view kRiBandAux = R"(BASIS "ao basis" SPHERICAL PRINT
 O    S
       2.5000000000E+00       3.0000000000E-01
@@ -371,8 +372,8 @@ TEST(RiEngineTest, RiCoulombMatchesDirectCoulomb) {
         GTEST_SKIP() << "heavy numerical test: Release-only";
     }
 
-    // The vendored jfit carries g shells on O: the CI Lmax=2 builds cannot
-    // instantiate the classes those need.
+    // The vendored jfit carries g shells on O: a build below kMaxEngineL 4
+    // cannot instantiate the classes those need. CI builds 6, so it runs there.
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";
@@ -458,8 +459,9 @@ TEST(RiEngineTest, RiJkSplitHalvesComposeToTheFusedBuild) {
         GTEST_SKIP() << "heavy numerical test: Release-only";
     }
 
-    // The vendored jfit carries g shells on O: the CI Lmax=2 builds cannot
-    // instantiate the classes those need (the neighbor test's guard).
+    // The vendored jfit carries g shells on O: a build below kMaxEngineL 4
+    // cannot instantiate the classes those need (the neighbor test's guard).
+    // CI builds 6, so it runs there.
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";
@@ -614,8 +616,8 @@ TEST(RiEngineTest, CudaGemmMatchesCpuGemm) {
         GTEST_SKIP() << "heavy numerical test: Release-only";
     }
 
-    // The vendored jfit carries g shells on O: the CI Lmax=2 builds cannot
-    // instantiate the classes those need.
+    // The vendored jfit carries g shells on O: a build below kMaxEngineL 4
+    // cannot instantiate the classes those need. CI builds 6, so it runs there.
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";
@@ -675,8 +677,8 @@ TEST(RiEngineTest, SchwarzScreenedTensorDropsDistantBlocks) {
         GTEST_SKIP() << "heavy numerical test: Release-only";
     }
 
-    // The vendored jfit carries g shells on O: the CI Lmax=2 builds cannot
-    // instantiate the classes those need.
+    // The vendored jfit carries g shells on O: a build below kMaxEngineL 4
+    // cannot instantiate the classes those need. CI builds 6, so it runs there.
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";
@@ -996,8 +998,8 @@ TEST(RiEngineTest, LightRungMatchesMaterializedWithinThePresetBudget) {
         GTEST_SKIP() << "heavy numerical test: Release-only";
     }
 
-    // The vendored jfit carries g shells on O: the CI Lmax=2 builds cannot
-    // instantiate the classes those need.
+    // The vendored jfit carries g shells on O: a build below kMaxEngineL 4
+    // cannot instantiate the classes those need. CI builds 6, so it runs there.
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";
@@ -1087,8 +1089,8 @@ TEST(RiEngineTest, TermCountersAccumulateOverTheRun) {
         GTEST_SKIP() << "heavy numerical test: Release-only";
     }
 
-    // The vendored jfit carries g shells on O: the CI Lmax=2 builds cannot
-    // instantiate the classes those need.
+    // The vendored jfit carries g shells on O: a build below kMaxEngineL 4
+    // cannot instantiate the classes those need. CI builds 6, so it runs there.
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "this build's kMaxEngineL is below the jfit g shells";

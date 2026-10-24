@@ -256,6 +256,55 @@ grid, and writing this block on one is refused.
 The Lebedev sizes this build carries are 6, 14, 26, 38, 50, 74, 86, 110, 146, 170, 194, 230, 266,
 302, 350 and 434. An unknown size is refused with that list.
 
+### `[dispersion]`
+
+A geometry-only London dispersion correction added to the total energy. It is method-independent:
+both forms ship an `hf` parameter set, so unlike the `functional` key and the `[grid]` block it is
+accepted on every method — an `rhf` or `uhf` run may carry it. A block with no keys is the same as
+no block: no correction is evaluated and the result carries no `dispersion` block.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `form` | string | `"d3"` (zero damping) or `"d4"` (the two-body Becke-Johnson energy); required when the block is written |
+| `preset` | string | a published parameter set of the selected form |
+| `s6`, `s8` | float | scale factors, shared by both forms |
+| `rs6`, `alpha6`, `rs8`, `alpha8` | float | D3 damping parameters |
+| `a1`, `a2` | float | D4 Becke-Johnson damping parameters |
+
+The parameter source is exactly one of three:
+
+- `preset` names a published set. The D3 table carries `b3lyp`, `pbe`, `pbe0`, `bp86`, `blyp`,
+  `revpbe`, `pbesol`, `b97d`, `tpss`, `bpbe`, `bhandhlyp`, `b3pw91` and `hf`. The D4 table carries
+  its own family names — a separate name space (for example `b3lyp`, `pbe`, `hf`, `wb97x`, and the
+  double-hybrid and range-separated families); a name the selected form's table does not carry is
+  refused, so a D3 name is not silently reused as a D4 one.
+- the selected form's **complete** numeric set: `d3` takes all of `s6, s8, rs6, alpha6, rs8,
+  alpha8`; `d4` takes all of `s6, s8, a1, a2`. A partial set is refused, naming every missing key.
+- neither, in which case the set defaults to the run method's own family: the `functional` name on
+  an `rks`/`uks` run, `"hf"` on `rhf`/`uhf`.
+
+Refused rather than silently reinterpreted: a `preset` and numeric keys together (two parameter
+sources for one form); a key of the other form (`a1`/`a2` with `form = "d3"`, or `rs6`/`alpha6`/
+`rs8`/`alpha8` with `form = "d4"`); `s9` and `alp`, which are not parameters of the shipped D4
+energy; and a non-finite parameter.
+
+The dispersion energy is a property of the geometry, not of the SCF. The run evaluates it once and
+adds it to `total_energy_hartree`; the electronic energy, the convergence criteria and the
+residuals are untouched. The result records the resolved set that was used — see the
+`dispersion` block in `docs/qcx-run-schema.md` §3.4.
+
+Two limits belong to the tables, not to the interface. Both forms cover elements up to radon
+(Z = 86; a higher element is refused by name), and D4 is refused on a **charged** molecule: the
+shipped two-body energy evaluates its electronegativity-equilibration charges at total charge 0,
+so a charged run would be given a number computed at the wrong charge. `form = "d3"` is
+charge-independent and remains available on those runs.
+
+```toml
+[dispersion]
+form = "d3"
+preset = "b3lyp"
+```
+
 ### `[properties]`
 
 Each key switches one post-SCF analysis on or off; all of them default to off. An analysis that was

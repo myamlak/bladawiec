@@ -35,15 +35,45 @@ std::string ShippedFunctionalNames() {
     return names;
 }
 
+// The components a mask names, comma-separated, for the refusal message.
+std::string ComponentNames(const excgrid::ComponentMask& mask) {
+    std::string names;
+
+    for (std::size_t index = 0; index < excgrid::kComponentCapacity; ++index)
+    {
+        const auto id = static_cast<excgrid::Component>(index);
+
+        if (!mask.Test(id))
+        {
+            continue;
+        }
+
+        if (!names.empty())
+        {
+            names += ", ";
+        }
+
+        names += excgrid::Describe(id).name;
+    }
+
+    return names;
+}
+
+// The per-point inputs this engine always supplies: both densities, the three
+// gradient invariants, and both kinetic-energy densities. A functional whose
+// RequiredMask() names anything else cannot be integrated here.
+constexpr excgrid::ComponentMask kSuppliedComponents = excgrid::ComponentMask::Collinear();
+
 // One spin's density and density gradient at a grid point.
 using PointDensity = internal::PointDensity;
 
 // Contracts a spin density matrix with the point's AO values and gradients:
 //     rho      = sum_mu nu D_mu nu phi_mu phi_nu
 //     grad rho = sum_mu nu D_mu nu (grad phi_mu phi_nu + phi_mu grad phi_nu)
-// Both sums factor through (D phi)_mu and (D grad phi)_mu, so one point costs
-// O(nAO^2) rather than O(nAO^3). The double-sum form is written out, so the
-// result is exact for a non-symmetric D as well.
+//     tau      = 1/2 sum_mu nu D_mu nu grad phi_mu . grad phi_nu
+// All three sums factor through (D phi)_mu and (D grad phi)_mu, so one point
+// costs O(nAO^2) rather than O(nAO^3). The double-sum form is written out, so
+// the result is exact for a non-symmetric D as well.
 PointDensity ContractSpinDensity(const Eigen::MatrixXd& density,
                                  const std::vector<double>& values,
                                  const std::vector<double>& gradients,
@@ -65,8 +95,10 @@ PointDensity ContractSpinDensity(const Eigen::MatrixXd& density,
 
     for (std::size_t axis = 0; axis < 3; ++axis)
     {
-        result.gradient[axis] = gradient.col(static_cast<Eigen::Index>(axis)).dot(densityPhi) +
-                                phi.dot(densityGradient.col(static_cast<Eigen::Index>(axis)));
+        const Eigen::Index index = static_cast<Eigen::Index>(axis);
+        result.gradient[axis] =
+            gradient.col(index).dot(densityPhi) + phi.dot(densityGradient.col(index));
+        result.tau += 0.5 * gradient.col(index).dot(densityGradient.col(index));
     }
 
     return result;
@@ -74,14 +106,21 @@ PointDensity ContractSpinDensity(const Eigen::MatrixXd& density,
 
 // Accumulates one spin's potential contribution at a point:
 //     V_mu nu += w [ vrho phi_mu phi_nu
-//                    + G . (grad phi_mu phi_nu + phi_mu grad phi_nu) ]
-// written as two rank-1 updates, with G the sigma-weighted density gradient
-// the kernel returned. The form is symmetric in mu and nu by construction,
-// and the O(nAO^2) outer products are the only per-point cost.
+//                    + G . (grad phi_mu phi_nu + phi_mu grad phi_nu)
+//                    + 1/2 vtau grad phi_mu . grad phi_nu ]
+// written as two rank-1 updates plus, when the functional reads tau, one
+// rank-3 outer product, with G the sigma-weighted density gradient the kernel
+// returned. The form is symmetric in mu and nu by construction, and the
+// O(nAO^2) outer products are the only per-point cost. A zero vtau skips the
+// tau product, so an LDA/GGA potential keeps its bits.
 void AccumulatePotential(Eigen::MatrixXd& potential,
                          const std::vector<double>& values,
                          const std::vector<double>& gradients,
+                         // (vrho, vtau) are the two density-component derivatives, in the
+                         // kernel's order; the weight is not interchangeable with either.
+                         // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                          double vrho,
+                         double vtau,
                          const Eigen::Vector3d& gradientWeight,
                          double weight) {
     const Eigen::Index n = potential.rows();
@@ -92,6 +131,11 @@ void AccumulatePotential(Eigen::MatrixXd& potential,
     const Eigen::VectorXd gradientPhi = gradient * gradientWeight;
 
     potential.noalias() += weight * (vrhoPhi * phi.transpose() + phi * gradientPhi.transpose());
+
+    if (vtau != 0.0)
+    {
+        potential.noalias() += (weight * 0.5 * vtau) * gradient * gradient.transpose();
+    }
 }
 
 // Contracts a spin density matrix with the point's AO values alone:
@@ -111,24 +155,78 @@ double ContractValue(const Eigen::MatrixXd& density,
     return phi.dot(densityPhi);
 }
 
+// One point's kernel call, by named component rather than by position: the
+// positional adapter cannot carry tau and reports a refusal as zeros. Every
+// component the engine supplies is set, so the input mask is the seven-bit
+// collinear mask; the result's named first derivatives are read back, and a
+// slot the functional did not produce stays at its initial zero. A refusal is
+// returned as an Error naming the status, never as a silent zero energy.
+qcx::Result<excgrid::XcKernelValue> EvaluateKernel(
+    const excgrid::XcFunctional& functional,
+    std::string_view operation,
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    const PointDensity& densityA,
+    const PointDensity& densityB,
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    const Eigen::Vector3d& gradientA,
+    const Eigen::Vector3d& gradientB) {
+    excgrid::PointInputs inputs;
+    inputs.Set(excgrid::Component::RhoA, densityA.rho);
+    inputs.Set(excgrid::Component::RhoB, densityB.rho);
+    inputs.Set(excgrid::Component::SigmaAa, gradientA.dot(gradientA));
+    inputs.Set(excgrid::Component::SigmaAb, gradientA.dot(gradientB));
+    inputs.Set(excgrid::Component::SigmaBb, gradientB.dot(gradientB));
+    inputs.Set(excgrid::Component::TauA, densityA.tau);
+    inputs.Set(excgrid::Component::TauB, densityB.tau);
+
+    excgrid::PointResult result;
+    const excgrid::KernelStatus status = functional.EvaluatePoint(inputs, result);
+
+    if (status != excgrid::KernelStatus::kOk)
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kUnimplemented,
+                                          std::string(operation) + ": the functional " +
+                                              std::string(excgrid::DescribeStatus(status))});
+    }
+
+    excgrid::XcKernelValue kernel;
+    kernel.exc = result.exc;
+    kernel.vrhoA = result.first[excgrid::IndexOf(excgrid::Component::RhoA)];
+    kernel.vrhoB = result.first[excgrid::IndexOf(excgrid::Component::RhoB)];
+    kernel.vsigmaAa = result.first[excgrid::IndexOf(excgrid::Component::SigmaAa)];
+    kernel.vsigmaAb = result.first[excgrid::IndexOf(excgrid::Component::SigmaAb)];
+    kernel.vsigmaBb = result.first[excgrid::IndexOf(excgrid::Component::SigmaBb)];
+    kernel.vtauA = result.first[excgrid::IndexOf(excgrid::Component::TauA)];
+    kernel.vtauB = result.first[excgrid::IndexOf(excgrid::Component::TauB)];
+
+    return kernel;
+}
+
 // The screened form of AccumulatePotential, on the same selected block:
 //     V_mu nu += w [ (vrho phi_mu + G . grad phi_mu) phi_nu
-//                    + phi_mu (G . grad phi_nu) ]
+//                    + phi_mu (G . grad phi_nu)
+//                    + 1/2 vtau grad phi_mu . grad phi_nu ]
 // The dense form's two rank-1 updates become one (mu, nu) walk over the same
 // terms, with the second term's dot product taken on NU - taking it on mu
 // instead is symmetric only when it is zero, which is why an LDA functional
 // cannot tell the difference and a GGA one can. A functional that ignores the
 // gradients passes a zero gradient weight and a zero-filled gradient buffer,
 // which reduces this to the vrho term exactly as the dense path reduces its
-// own. The per-AO dot products are hoisted into a caller-owned scratch buffer,
-// so the pair loop costs one multiply-add per term.
+// own; a zero vtau likewise skips the tau term and keeps an LDA/GGA result
+// bit-identical. The per-AO dot products are hoisted into a caller-owned
+// scratch buffer, so the pair loop costs one multiply-add per term plus three
+// for the tau contraction.
 void AccumulateSelectedPotential(
     Eigen::MatrixXd& potential,
     // (values, gradients) is the value-then-derivative order the accumulators are addressed by.
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
     std::span<const double> values,
     std::span<const double> gradients,
+    // (vrho, vtau) are the two density-component derivatives, in the kernel's order; the
+    // weight is not interchangeable with either.
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
     double vrho,
+    double vtau,
     const Eigen::Vector3d& gradientWeight,
     double weight,
     std::span<const std::size_t> selectedAos,
@@ -140,6 +238,8 @@ void AccumulateSelectedPotential(
                                      gradients[3 * mu + 2] * gradientWeight[2];
     }
 
+    const bool usesTau = vtau != 0.0;
+
     for (const std::size_t mu : selectedAos)
     {
         const double valueMu = values[mu];
@@ -147,8 +247,22 @@ void AccumulateSelectedPotential(
 
         for (const std::size_t nu : selectedAos)
         {
+            double term = vrhoPhi * values[nu] + valueMu * gradientWeightedValues[nu];
+
+            if (usesTau)
+            {
+                double gradientDot = 0.0;
+
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                {
+                    gradientDot += gradients[3 * mu + axis] * gradients[3 * nu + axis];
+                }
+
+                term += 0.5 * vtau * gradientDot;
+            }
+
             potential(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu)) +=
-                weight * (vrhoPhi * values[nu] + valueMu * gradientWeightedValues[nu]);
+                weight * term;
         }
     }
 }
@@ -174,6 +288,21 @@ qcx::Result<XcGridEngine> XcGridEngine::Create(const qcx::molecule::Molecule& mo
                                           "XcGridEngine::Create: unknown XC functional '" +
                                               std::string(functionalName) +
                                               "'; shipped names: " + ShippedFunctionalNames()});
+    }
+
+    // The refusal is keyed on the functional's declared inputs, not on its
+    // name, so the next functional that reaches past the engine's components
+    // is caught at creation rather than reading a silent zero at every point.
+    const excgrid::ComponentMask unsupplied{functional->RequiredMask().bits &
+                                            ~kSuppliedComponents.bits};
+
+    if (unsupplied.bits != 0)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kUnimplemented,
+                       "XcGridEngine::Create: functional '" + std::string(functionalName) +
+                           "' requires components this engine does not supply: " +
+                           ComponentNames(unsupplied)});
     }
 
     auto geometry = ToExcgridGeometry(molecule);
@@ -237,10 +366,15 @@ qcx::Result<XcEvaluation> XcGridEngine::Evaluate(const Eigen::MatrixXd& densityA
     std::vector<double> valueContraction(_aoCount);
     std::vector<double> gradientContraction(3 * _aoCount);
 
-    // A functional whose kernel ignores sigma (every LDA name) needs neither
-    // the AO gradients nor the gradient contraction, so the whole gradient
-    // tier is skipped for it rather than computed and discarded.
-    const bool usesGradient = _functional->UsesGradient();
+    // A functional whose kernel ignores sigma AND tau (every LDA name) needs
+    // neither the AO gradients nor the gradient contraction, so the whole
+    // gradient tier is skipped for it rather than computed and discarded.
+    // Tau needs the AO gradients even when sigma is not read, so it is part
+    // of the gate rather than riding on UsesGradient alone.
+    const excgrid::ComponentMask required = _functional->RequiredMask();
+    const bool usesGradient = _functional->UsesGradient() ||
+                              required.Test(excgrid::Component::TauA) ||
+                              required.Test(excgrid::Component::TauB);
 
     for (const excgrid::Block& block : _grid.Blocks())
     {
@@ -274,9 +408,9 @@ qcx::Result<XcEvaluation> XcGridEngine::Evaluate(const Eigen::MatrixXd& densityA
                     densityBeta, values, gradients, valueContraction, gradientContraction);
             } else
             {
-                // The density gradients stay zero, which is what the kernel
-                // ignores anyway: the accumulation below then reduces to its
-                // vrho term without a special case.
+                // The density gradients and tau stay zero, which is what the
+                // kernel ignores anyway: the accumulation below then reduces
+                // to its vrho term without a special case.
                 densityA.rho = ContractValue(densityAlpha, values, valueContraction);
                 densityB.rho = ContractValue(densityBeta, values, valueContraction);
             }
@@ -286,25 +420,29 @@ qcx::Result<XcEvaluation> XcGridEngine::Evaluate(const Eigen::MatrixXd& densityA
             const Eigen::Vector3d gradientB(
                 densityB.gradient[0], densityB.gradient[1], densityB.gradient[2]);
 
-            const excgrid::XcKernelValue kernel = _functional->Evaluate(densityA.rho,
-                                                                        densityB.rho,
-                                                                        gradientA.dot(gradientA),
-                                                                        gradientA.dot(gradientB),
-                                                                        gradientB.dot(gradientB));
+            const auto kernel = EvaluateKernel(
+                *_functional, "XcGridEngine::Evaluate", densityA, densityB, gradientA, gradientB);
 
-            evaluation.energy += weight * kernel.exc;
+            if (!kernel.has_value())
+            {
+                return std::unexpected(kernel.error());
+            }
+
+            evaluation.energy += weight * kernel->exc;
 
             AccumulatePotential(evaluation.potentialAlpha,
                                 values,
                                 gradients,
-                                kernel.vrhoA,
-                                2.0 * kernel.vsigmaAa * gradientA + kernel.vsigmaAb * gradientB,
+                                kernel->vrhoA,
+                                kernel->vtauA,
+                                2.0 * kernel->vsigmaAa * gradientA + kernel->vsigmaAb * gradientB,
                                 weight);
             AccumulatePotential(evaluation.potentialBeta,
                                 values,
                                 gradients,
-                                kernel.vrhoB,
-                                2.0 * kernel.vsigmaBb * gradientB + kernel.vsigmaAb * gradientA,
+                                kernel->vrhoB,
+                                kernel->vtauB,
+                                2.0 * kernel->vsigmaBb * gradientB + kernel->vsigmaAb * gradientA,
                                 weight);
         }
     }
@@ -401,7 +539,12 @@ qcx::Result<XcEvaluation> XcGridEngine::EvaluateScreened(const Eigen::MatrixXd& 
     std::vector<std::size_t> batchAoOffsets(bufferPoints + 1);
     std::vector<double> batchWeights(bufferPoints);
 
-    const bool usesGradient = _functional->UsesGradient();
+    // Tau needs the AO gradients even when sigma is not read, so the gate is
+    // the functional's own gradient flag extended by the two tau bits.
+    const excgrid::ComponentMask required = _functional->RequiredMask();
+    const bool usesGradient = _functional->UsesGradient() ||
+                              required.Test(excgrid::Component::TauA) ||
+                              required.Test(excgrid::Component::TauB);
 
     for (const excgrid::Block& block : _grid.Blocks())
     {
@@ -527,31 +670,38 @@ qcx::Result<XcEvaluation> XcGridEngine::EvaluateScreened(const Eigen::MatrixXd& 
                 const Eigen::Vector3d gradientB(
                     densityB.gradient[0], densityB.gradient[1], densityB.gradient[2]);
 
-                const excgrid::XcKernelValue kernel =
-                    _functional->Evaluate(densityA.rho,
-                                          densityB.rho,
-                                          gradientA.dot(gradientA),
-                                          gradientA.dot(gradientB),
-                                          gradientB.dot(gradientB));
+                const auto kernel = EvaluateKernel(*_functional,
+                                                   "XcGridEngine::EvaluateScreened",
+                                                   densityA,
+                                                   densityB,
+                                                   gradientA,
+                                                   gradientB);
+
+                if (!kernel.has_value())
+                {
+                    return std::unexpected(kernel.error());
+                }
 
                 const double weight = batchWeights[index];
-                evaluation.energy += weight * kernel.exc;
+                evaluation.energy += weight * kernel->exc;
 
                 AccumulateSelectedPotential(evaluation.potentialAlpha,
                                             values,
                                             gradients,
-                                            kernel.vrhoA,
-                                            2.0 * kernel.vsigmaAa * gradientA +
-                                                kernel.vsigmaAb * gradientB,
+                                            kernel->vrhoA,
+                                            kernel->vtauA,
+                                            2.0 * kernel->vsigmaAa * gradientA +
+                                                kernel->vsigmaAb * gradientB,
                                             weight,
                                             selectedAos,
                                             gradientWeightedValues);
                 AccumulateSelectedPotential(evaluation.potentialBeta,
                                             values,
                                             gradients,
-                                            kernel.vrhoB,
-                                            2.0 * kernel.vsigmaBb * gradientB +
-                                                kernel.vsigmaAb * gradientA,
+                                            kernel->vrhoB,
+                                            kernel->vtauB,
+                                            2.0 * kernel->vsigmaBb * gradientB +
+                                                kernel->vsigmaAb * gradientA,
                                             weight,
                                             selectedAos,
                                             gradientWeightedValues);

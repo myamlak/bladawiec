@@ -653,4 +653,246 @@ screening_tolerance = 0.0
     EXPECT_TRUE(uks.IsValid()) << (uks.issues.empty() ? "" : uks.issues[0]);
 }
 
+TEST(RunInputValidationTest, TotalGradientIsRefusedOnEveryMethodButRhf) {
+    // The key is the closed-shell RHF assembly's, so it is legal exactly
+    // there and refused by name on the other three words. Refused, never
+    // ignored: an absent `total_gradient` block in the record would otherwise
+    // read as "no gradient was computed", which is true, while the file's own
+    // request vanished without a word.
+    const auto rhf = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[properties]
+total_gradient = true
+)");
+    EXPECT_TRUE(rhf.IsValid()) << (rhf.issues.empty() ? "" : rhf.issues[0]);
+
+    const auto uhf = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "uhf"
+accuracy = "kNormal"
+[properties]
+total_gradient = true
+)");
+    ASSERT_EQ(uhf.issues.size(), 1u);
+    EXPECT_EQ(uhf.issues[0],
+              "properties.total_gradient: uhf does not take the total analytic gradient (the "
+              "assembly differentiates a converged closed-shell RHF reference; the rhf method "
+              "is the only lane that runs one)");
+
+    const auto rks = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rks"
+accuracy = "kNormal"
+functional = "pbe"
+[properties]
+total_gradient = true
+)");
+    ASSERT_EQ(rks.issues.size(), 1u);
+    EXPECT_EQ(rks.issues[0],
+              "properties.total_gradient: rks does not take the total analytic gradient (the "
+              "assembly differentiates a converged closed-shell RHF reference; the rhf method "
+              "is the only lane that runs one)");
+
+    const auto uks = Validate(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["O", 0.0, 0.0, 1.2075]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "uks"
+accuracy = "kNormal"
+functional = "pbe"
+[properties]
+total_gradient = true
+)");
+    ASSERT_EQ(uks.issues.size(), 1u);
+    EXPECT_EQ(uks.issues[0],
+              "properties.total_gradient: uks does not take the total analytic gradient (the "
+              "assembly differentiates a converged closed-shell RHF reference; the rhf method "
+              "is the only lane that runs one)");
+}
+
+TEST(RunInputValidationTest, DispersionIsMethodIndependent) {
+    // Dispersion is geometry, not electronic structure: both forms carry an
+    // "hf" parameter set, so an rhf run with a correction is a supported
+    // request - deliberately unlike the Kohn-Sham key family above. The same
+    // block is legal on each method family, and the parameter source is the
+    // module's business (the resolver looks a preset up and the method family
+    // up; this layer checks the block's shape only).
+    const auto rhfPreset = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[dispersion]
+form = "d3"
+preset = "b3lyp"
+)");
+    EXPECT_TRUE(rhfPreset.IsValid()) << (rhfPreset.issues.empty() ? "" : rhfPreset.issues[0]);
+
+    // The method-default request: a form and nothing else. Valid here; what
+    // the family resolves to is the resolver's answer, and a family with no
+    // entry is refused there by name.
+    const auto rhfDefault = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[dispersion]
+form = "d3"
+)");
+    EXPECT_TRUE(rhfDefault.IsValid()) << (rhfDefault.issues.empty() ? "" : rhfDefault.issues[0]);
+
+    // A complete explicit set, on the Kohn-Sham lane this time.
+    const auto rksExplicit = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rks"
+functional = "pbe"
+accuracy = "kNormal"
+[dispersion]
+form = "d4"
+s6 = 1.0
+s8 = 0.0
+a1 = 0.4
+a2 = 4.0
+)");
+    EXPECT_TRUE(rksExplicit.IsValid()) << (rksExplicit.issues.empty() ? "" : rksExplicit.issues[0]);
+}
+
+TEST(RunInputValidationTest, DispersionShapeRefusalsAreNamed) {
+    // The five cross-key rules, each pinned verbatim. The block's SHAPE is
+    // what this layer can see (the parser preserved per-key presence); the
+    // values themselves belong to the module's parameter tables.
+    const auto noForm = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[dispersion]
+s6 = 1.0
+)");
+    ASSERT_EQ(noForm.issues.size(), 1u);
+    EXPECT_EQ(noForm.issues[0],
+              "[dispersion]: form is required when the block is written (d3 | d4); the block's "
+              "parameters belong to a form's set, and no form is ever defaulted");
+
+    // A preset and a numeric set are two sources: one set is named, never
+    // merged (the contract forbids a second source).
+    const auto twoSources = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[dispersion]
+form = "d3"
+preset = "b3lyp"
+s6 = 1.0
+s8 = 0.5
+rs6 = 1.2
+alpha6 = 14.0
+rs8 = 1.5
+alpha8 = 16.0
+)");
+    ASSERT_EQ(twoSources.issues.size(), 1u);
+    EXPECT_EQ(twoSources.issues[0],
+              "[dispersion]: dispersion.preset and the numeric keys are two parameter sources; "
+              "write the set one way (remove the numeric keys, or remove dispersion.preset and "
+              "state the selected form's complete numeric set)");
+
+    // A key of the other form is refused by name, and the message states both
+    // forms' published sets so the repair is one edit.
+    const auto crossForm = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[dispersion]
+form = "d3"
+a1 = 0.4
+)");
+    ASSERT_EQ(crossForm.issues.size(), 1u);
+    EXPECT_EQ(crossForm.issues[0],
+              "[dispersion]: form = \"d3\" does not take a1; a block writes only the selected "
+              "form's parameters (d3: s6, s8, rs6, alpha6, rs8, alpha8; d4: s6, s8, a1, a2)");
+
+    // A partial numeric set names EVERY missing key, so the block is repaired
+    // in one pass rather than one refusal per run.
+    const auto partial = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[dispersion]
+form = "d4"
+s6 = 1.0
+s8 = 0.0
+a1 = 0.4
+)");
+    ASSERT_EQ(partial.issues.size(), 1u);
+    EXPECT_EQ(partial.issues[0],
+              "[dispersion]: form = \"d4\" with a partial numeric set; missing a2 (a numeric set "
+              "is written whole, or replaced by dispersion.preset, or omitted for the method "
+              "default)");
+
+    // The shipped D4 energy evaluates its EEQ charges at total charge 0, so a
+    // charged molecule is refused before any run starts - naming the charge
+    // and the remedy. (He+ with one electron, multiplicity 2, is a valid
+    // unrestricted start; the dispersion rule is the only issue reported.)
+    const auto charged = Validate(R"(
+[molecule]
+charge = 1
+multiplicity = 2
+atoms = [["He", 0.0, 0.0, 0.0]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "uhf"
+accuracy = "kNormal"
+[dispersion]
+form = "d4"
+)");
+    ASSERT_EQ(charged.issues.size(), 1u);
+    EXPECT_EQ(charged.issues[0],
+              "[dispersion]: form = \"d4\" with molecule.charge = 1; the shipped D4 two-body "
+              "energy evaluates its EEQ charges at total charge 0, so a charged molecule is "
+              "refused rather than given a number computed at the wrong charge (remove the "
+              "charge, or select form = \"d3\")");
+}
+
 } // namespace

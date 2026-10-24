@@ -1,9 +1,10 @@
-﻿# Instantiation cap for the per-class MD integral engines.
-# The local build compiles the full l <= 6 class matrix; CI configures with 2 so
-# per-push jobs stay within the minutes budget - no CI configuration ever builds
-# the full matrix.
+﻿# Instantiation ceiling for the per-class MD integral engines.
+# The library supports shells up to l = 6 - that is the capability boundary, and
+# the 154-class matrix at 6 is the shipped default and the only configuration CI
+# builds. A lower value builds a reduced matrix for local compile-time
+# experiments; it is not a narrower product contract.
 set(QCX_INTEGRALS_LMAX "6" CACHE STRING
-    "Max shell l instantiated by the MD 2e/3c engines (0..6; CI builds use 2)")
+    "Max shell l instantiated by the MD 2e/3c engines (0..6; 6 is shipped and what CI builds)")
 if (NOT QCX_INTEGRALS_LMAX MATCHES "^[0-6]$")
     message(FATAL_ERROR "QCX_INTEGRALS_LMAX must be an integer in 0..6, got '${QCX_INTEGRALS_LMAX}'")
 endif()
@@ -116,10 +117,12 @@ add_library(qcx-integrals
   ${_qcxBoysExt}/src/boys_simd.cpp
   src/boys_build_record.cpp
   src/one_electron.cpp
+  src/one_electron_gradient.cpp
   src/two_electron.cpp
   src/eri_batch.cpp
   src/eri_cache.cpp
   src/eri_dense.cpp
+  src/eri_gradient.cpp
   src/fock_build.cpp
   src/fock_contract_simd.cpp
   src/lean_fock_build.cpp
@@ -222,7 +225,6 @@ endif()
 # sources and their own SIMD-heavy headers.
 if (QCX_ARCH_X86_64)
     set_source_files_properties(${_qcxBoysExt}/src/boys_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties(src/internal/md_bra_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
     # Non-x86-64: no AVX2/FMA/F16C tier exists, and neither TU defines it.
@@ -236,10 +238,14 @@ else()
 endif()
 
 # The split (boys 5.0.0) makes a group header precede the front door in the unit that names it,
-# and this target's PCH parses the front door first: these two submodule units open a group of
-# their own and are therefore compiled without it.
+# and this target's PCH parses the front door first: these submodule units open a group of their
+# own and are therefore compiled without it. boys_orders_simd.cpp is skipped on every
+# architecture, not only where its SIMD tier exists: its own header opens six groups, and the
+# PCH's front door settles their markers first, so AppleClang reports the group specializations
+# as after instantiation.
 set_source_files_properties(${_qcxBoysExt}/src/boys.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(${_qcxBoysExt}/src/boys_probe.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # The Fock-contraction kernel's AVX2 copy. The kernel body is ONE template
 # (internal/fock_contract_kernel.hpp); the scalar copy instantiates inside
@@ -273,8 +279,8 @@ target_precompile_headers(qcx-integrals PRIVATE
 
 # The per-class instantiation matrix: the 2e triangle (LBra <= LKet <=
 # 2*QCX_INTEGRALS_LMAX) UNION the RI rectangle (LKet <= QCX_INTEGRALS_LMAX,
-# LBra <= 2*QCX_INTEGRALS_LMAX) - 154 classes at Lmax=6, 24 at Lmax=2 (the
-# counts match the CUDA matrix below). The classes are one OBJECT library, not
+# LBra <= 2*QCX_INTEGRALS_LMAX) - 154 classes at Lmax=6, 24 at Lmax=2 (a
+# reduced local build; the counts match the CUDA matrix below). The classes are one OBJECT library, not
 # one per class: a precompiled header of <internal/md_vrr.hpp> measured about
 # 1 GiB, so one per class wrote 152 GiB and filled the Windows runners' disks
 # (C1085/C1088). One PCH for the matrix bounds the disk; parallelism is the
@@ -356,7 +362,9 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/f16_test.cpp
         tests/aux_basis_test.cpp
         tests/one_electron_test.cpp
+        tests/one_electron_gradient_test.cpp
         tests/two_electron_test.cpp
+        tests/eri_gradient_test.cpp
         tests/md_tables_test.cpp
         tests/md_scatter_table_test.cpp
         tests/md_derivative_test.cpp
@@ -380,6 +388,8 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/ri_engine_test.cpp
         tests/ri_engine_chunk_test.cpp
         tests/ri_coulomb_gradient_test.cpp
+        tests/one_electron_fock_derivative_test.cpp
+        tests/two_electron_fock_derivative_test.cpp
         tests/ri_orbit_test.cpp
         tests/ri_occ_k_test.cpp
         tests/ri_full_fock_test.cpp
@@ -583,7 +593,7 @@ if (QCX_ENABLE_CUDA)
     # per {L_bra, L_ket} class from eri_cuda_instantiate.cu.in. The
     # instantiation matrix is the 2e triangle (lBra <= lKet <= 2*Lmax) UNION
     # the RI rectangle (lKet <= Lmax, lBra <= 2*Lmax) - 154 classes at
-    # Lmax=6, 24 at Lmax=2 (CI stays at Lmax=2).
+    # Lmax=6, 24 at Lmax=2. CUDA never builds in CI.
     # ----------------------------------------------------------------------
     set(_qcxCudaLmax "${QCX_INTEGRALS_CUDA_LMAX}")
     if (_qcxCudaLmax STREQUAL "")

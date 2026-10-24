@@ -51,16 +51,21 @@ name: CI
 #                          configure + qcx-docs. The gate is additionally proven
 #                          on the code-only PUBLIC tree - see the note below.
 #
-# THE INTEGRAL CEILING CHANGED ON 2026-09-20 AND IT COSTS COMPILE MINUTES. Every
-# Release leg used to build a narrower class matrix than the release does - the
-# presets pinned QCX_INTEGRALS_LMAX to 2 and every bare configure repeated it,
-# so no CI leg had ever compiled the shipped 154-class matrix, and 55 routine
-# tests skipped on every leg for that reason alone. The Release legs now take the
-# shipped default and the Debug entries keep 2, for a reason measured on the test
-# sources; the numbers, the legs and the exception are recorded on the
-# windows-msvc job's Configure note, which is the one place this is written down.
-# The cost is real on every leg that changed: about two minutes eleven more
-# compile per full Release build, and essentially nothing in test time.
+# EVERY LEG BUILDS THE SHIPPED INTEGRAL CEILING, 6, SINCE 2026-10-20. The
+# library supports shells up to l = 6; that is the capability boundary, and at
+# it the engine instantiates the full 154-class matrix. CI used to pin
+# QCX_INTEGRALS_LMAX to 2 (24 classes) on every leg that named it - the Debug
+# entries, the sanitizer leg and the Windows Release smoke - so 55 routine
+# tests skipped on those legs and no leg had ever compiled the full matrix that
+# ships. The owner ruled that CI builds and tests the real bound, so no leg
+# names a ceiling now: every configure takes the shipped default. The cost,
+# measured on this tree 2026-09-20 (12 cores, g++, no ccache): about two
+# minutes eleven more compile per full Release build (7m26s at 2, 9m37s at 6),
+# essentially nothing in test time (42m12s at 2, 42m40s at 6), and a 528 MB
+# qcx-integrals library against 190 MB at 2. The two Debug-slow footprint cases
+# the old pin kept out now carry the fast-mode gate the rest of the suite has,
+# so Debug still skips them and Release at 6 runs them; the measurements are on
+# the windows-msvc job's Configure note.
 #
 # THE FIVE LEGS ADDED 2026-09-19, AND WHAT EACH ONE HAS BEHIND IT. The bar the
 # block above sets - "has this exact shape reported green" - is NOT met by
@@ -69,10 +74,12 @@ name: CI
 # than it is:
 #
 #   linux-sanitizers asan+ubsan   CONFIGURE RUN LOCALLY, 2026-09-19: this
-#                         configure (gcc, Release, QCX_INTEGRALS_LMAX=2, the
-#                         sanitizer flags) completed on this tree with no
-#                         errors. The build and the test step below have not
-#                         been run anywhere; CI is their first run.
+#                         configure (gcc, Release, the sanitizer flags)
+#                         completed on this tree with no errors. That run was
+#                         at the reduced ceiling of 2; the leg now configures
+#                         the shipped 6 like every other, and that configure has
+#                         not been re-run. The build and the test step below
+#                         have not been run anywhere; CI is their first run.
 #   linux-arm64 gcc Release  WRITTEN, NOT RUN - no arm64 machine exists here.
 #                         What is established instead: this tree's x86-only
 #                         constructs are excluded by ARCHITECTURE (see below),
@@ -274,12 +281,9 @@ jobs:
     env:
       # ccache across pushes: the per-class MD instantiation TUs and the PCH
       # surfaces dominate compile minutes; cache hits keep the legs near-
-      # incremental. The class matrix each entry compiles is the preset's: the
-      # two Release presets name no QCX_INTEGRALS_LMAX and so build the shipped
-      # default (6 - 154 classes), while the two Debug presets pin 2 (24
-      # classes) for the measured reason recorded on the windows-msvc job below.
-      # The split is by build type, not by leg: every leg that builds what ships
-      # builds the shipped ceiling.
+      # incremental. Every entry builds the shipped class matrix: the presets
+      # name no QCX_INTEGRALS_LMAX, so the configure takes the 6 the library
+      # ships (154 classes), the bound the engine supports.
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
       - uses: actions/checkout@v7.0.1
@@ -386,26 +390,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Quoted on purpose: an unquoted number is read as an integer by some
-          # YAML parsers and as a string by others, and this value is handed to
-          # timeout-minutes as a rendered string.
-          #
           # The cap is per entry rather than one number for the job: an MSVC
           # Debug build of this tree compiles several times slower than the
           # Release one, and a cap sized for Release would end the Debug entry
-          # as a platform timeout - a red leg carrying no diagnostic.
+          # as a platform timeout - a red leg carrying no diagnostic. The
+          # job-level expression below selects the cap from the build type; the
+          # quoted string it used to read was not a usable timeout and the jobs
+          # were not created, so the cap is a numeric expression.
           #
-          # lmax_arg is the ceiling each entry asks for, and the empty string
-          # is not a shorthand for zero: it is the entry naming no ceiling at
-          # all, so the configure takes the value integrals/CMakeLists.txt
-          # ships. Read the Configure step's note before changing either.
+          # Neither entry names a QCX_INTEGRALS_LMAX: both take the value
+          # integrals/CMakeLists.txt ships (6, the 154-class matrix), so both
+          # build the program that ships, and the two entries differ in the
+          # build type and nothing else. The Debug cap stays at 150: the two
+          # footprint cases the old reduced ceiling used to skip now carry the
+          # fast-mode gate, so Debug skips them like every other heavy
+          # numerical case; see the Configure note.
           - build_type: Release
-            timeout_minutes: '90'
-            lmax_arg: ''
           - build_type: Debug
-            timeout_minutes: '150'
-            lmax_arg: '-DQCX_INTEGRALS_LMAX=2'
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    timeout-minutes: ${{ matrix.build_type == 'Debug' && 150 || 90 }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -452,46 +454,38 @@ jobs:
       # QCX_BUILD_BENCHMARKS=ON), and a hosted runner carries neither that
       # generator version nor any reason to build benchmarks. The flags below
       # are the ones the green run used: Ninja, the vcpkg toolchain,
-      # QCX_ENABLE_IO=OFF. The build type and the integral ceiling are the two
-      # things that vary between the entries; the build directory carries the
-      # first so the two never share a tree, and lmax_arg (see the matrix above)
-      # carries the second.
+      # QCX_ENABLE_IO=OFF. The build type is the one thing that varies between
+      # the entries, so the build directory carries it and the two never share
+      # a tree.
       #
-      # THE RELEASE ENTRY NAMES NO CEILING AND THE DEBUG ENTRY PINS 2, and that
-      # asymmetry is measured rather than assumed. This note is where the whole
-      # measurement is written down; the other legs' notes point here rather
-      # than restating it.
-      #
-      # The Release entry takes the ceiling integrals/CMakeLists.txt ships: 6,
-      # 154 instantiated classes against the 24 a ceiling of 2 builds. It is the
-      # leg that reports green on the shipped configuration, so it must compile
-      # and test the shipped class matrix; naming `2` here used to make the only
-      # Windows leg that had ever reported green the one leg building a
-      # different program than the release does. The cost of that change on this
-      # machine (12 cores, g++, no ccache, 2026-09-20, Debug/Release only - CI's
-      # own timings are the linux-x86 gcc Release leg's) is about two minutes
-      # eleven more compile per full Release build (7m26s at 2, 9m37s at 6) and
-      # essentially nothing in test time (42m12s at 2, 42m40s at 6), for 55
-      # routine tests that skip at 2 and run at 6.
-      #
-      # The Debug entry stays at 2 because at 6 its test step stops skipping two
-      # footprint cases that carry no fast-mode gate - footprint_test.cpp is the
-      # file that note in grid/CMakeLists.txt names as having had zero
-      # IsFastOnlyMode() calls - and they are Debug-slow by two orders of
+      # BOTH ENTRIES TAKE THE SHIPPED INTEGRAL CEILING, 6 - 154 instantiated
+      # MD classes against the 24 a ceiling of 2 builds. The Release entry has
+      # always been the leg that reports green on the shipped configuration, so
+      # it must compile and test the shipped class matrix. The Debug entry used
+      # to pin 2 because at 6 its test step stops skipping two footprint cases
+      # that carried no fast-mode gate, and they are Debug-slow by two orders of
       # magnitude, measured on this tree 2026-09-20 (12 cores, g++, -j12):
       # RiFootprint.PrintsTheEngineCreateTimeFootprintAtC24H50Def2Svp passes at
       # 830 s in Debug against 6.25 s on CI's Release leg, and
       # Footprint.RiJkNestedExchangeReachesItsOwnLightRungOnTheCountedPreGate
-      # was still running past 1200 s in Debug against 27.6 s in Release. Both
-      # skip at 2. A Debug leg that newly runs them pays that per push to
-      # re-cover what the Release legs already cover, and the per-test cap is
-      # 2400 s (QCX_TEST_TIMEOUT_SECONDS), so one of them is a leg-long timeout
-      # waiting to happen. When those two cases get the fast-mode gate the rest
-      # of the suite has, or move to the large manifest, the Debug entry drops
-      # lmax_arg and follows the Release one; until then the pin is the
-      # deliberate exception, not a leftover.
+      # was still running past 1200 s in Debug against 27.6 s in Release.
+      #
+      # The owner ruled on 2026-10-20 that CI builds and tests the real bound.
+      # Both cases now carry the fast-mode gate the rest of the suite has
+      # (integrals/tests/footprint_test.cpp), so the pin is gone rather than
+      # replaced: the Debug selection skips them as it does every other heavy
+      # numerical case, and every Release leg at the shipped ceiling runs them
+      # at the measured 6.25 s and 27.6 s. Without the gate no job timeout could
+      # have covered Debug either - the per-test cap is 2400 s
+      # (QCX_TEST_TIMEOUT_SECONDS), and the second case reaches it on a slow
+      # runner.
+      #
+      # The ceiling itself costs about two minutes eleven more compile per full
+      # Release build (7m26s at 2, 9m37s at 6) and essentially nothing in test
+      # time (42m12s at 2, 42m40s at 6), for 55 routine tests that skip at 2 and
+      # run at 6.
       - name: Configure
-        run: cmake -S . -B C:/bld/windows-msvc-ci-${{ matrix.build_type }} -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DQCX_ENABLE_IO=OFF ${{ matrix.lmax_arg }} -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: cmake -S . -B C:/bld/windows-msvc-ci-${{ matrix.build_type }} -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DQCX_ENABLE_IO=OFF -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
       - name: Build
         run: cmake --build C:/bld/windows-msvc-ci-${{ matrix.build_type }} -j $env:NUMBER_OF_PROCESSORS
       - name: Check module DAG
@@ -522,7 +516,8 @@ jobs:
     runs-on: ubuntu-latest
     # Above the neighbours' 90 on purpose: an instrumented build compiles and
     # runs several times slower, and a silent platform timeout is a red leg
-    # nobody can read.
+    # nobody can read. The shipped 154-class matrix is unmeasured on this leg,
+    # which has never run; the cap stays as it was until a run reports.
     timeout-minutes: 180
     env:
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -552,21 +547,15 @@ jobs:
       # the shipped configuration plus its own flags. The rest of the geometry
       # is every other leg's - Ninja, gcc from the image, I/O on.
       #
-      # QCX_INTEGRALS_LMAX=2 BELOW IS THE ONLY CEILING PINNED ON A RELEASE
-      # BUILD IN CI. Every Release leg elsewhere takes the shipped default of 6,
-      # so those compile the program that ships; this one narrows its own build
-      # because instrumentation is the one plausible resource constraint here -
-      # ASan and UBSan multiply the compile AND the run, and this leg already
-      # carries one of the two widest timeout-minutes in the file. The Debug
-      # entries pin 2 as well, for a different reason measured on the test
-      # sources rather than on this leg's cost; that reason is recorded on the
-      # windows-msvc Configure note and is not a precedent for this one.
-      # Raising this line is a separate judgement that needs its own
-      # measurement of this leg, not a copy of the others' change; until that
-      # number exists this line is the deliberate exception, not a leftover.
+      # The configure takes the shipped integral ceiling: 6, 154 instantiated
+      # MD classes against the 24 a ceiling of 2 builds. The old pin here was a
+      # guess about instrumentation cost, and the owner's 2026-10-20 ruling
+      # makes the shipped matrix the only configuration CI builds. This leg has
+      # never run, so its cost on the full matrix is unverified until its first
+      # report; a timeout is not a reason to narrow the matrix again.
       - name: Configure (ASan + UBSan)
         run: |
-          cmake -S . -B build/linux-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_INTEGRALS_LMAX=2 \
+          cmake -S . -B build/linux-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
       # A configure that silently dropped the flags would leave this leg a plain
@@ -704,9 +693,9 @@ jobs:
       - name: Install Boost.Graph
         run: vcpkg install boost-graph:arm64-windows
       # Same configure as the x64 Windows leg, with the triplet following the
-      # toolchain's target architecture, and - like every Release leg in this
-      # file - no QCX_INTEGRALS_LMAX: the configure takes the shipped default,
-      # so this leg builds the program that ships rather than a narrower one.
+      # toolchain's target architecture, and - like every leg in this file - no
+      # QCX_INTEGRALS_LMAX: the configure takes the shipped default, so this leg
+      # builds the program that ships rather than a narrower one.
       - name: Configure
         run: cmake -S . -B build/windows-arm64-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DQCX_ENABLE_IO=OFF -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
       - name: Assert the x86-64 vector tier is off
@@ -753,15 +742,19 @@ jobs:
   # them either. The entry is on macos-latest (Apple Silicon) alone, and that
   # is the whole of the architecture choice: it carries the newer AppleClang,
   # one Debug leg per system is the rule, and a second architecture would
-  # re-cover the same toolchain and buy only the cross-product. Debug runs the
-  # fast subset by construction rather than by a flag below: the heavy
+  # re-cover the same toolchain and buy only the cross-product. Debug mostly
+  # runs the fast subset by construction rather than by a flag below: the heavy
   # numerical cases GTEST_SKIP themselves through the fast-mode gate the build
-  # system defines for $<CONFIG:Debug>.
+  # system defines for $<CONFIG:Debug>, and the two footprint cases take that
+  # gate too, so the Debug entry runs the fast subset whole.
   #
   # The timeout is per entry for the same reason it is on the Windows job: an
   # unoptimised Debug build takes substantially longer than the Release one,
   # and a cap sized for Release would end that entry as a platform timeout - a
-  # red leg carrying no diagnostic.
+  # red leg carrying no diagnostic. The Debug cap stays at 180, its value
+  # before the ceiling change: the shipped matrix adds the two footprint cases
+  # to the Release entries only, because the gate skips them in Debug; their
+  # measurements are on the windows-msvc Configure note.
   #
   # The architecture probe is asserted per line, so this job states both of the
   # probe's answers: OFF on Apple Silicon, ON on Intel.
@@ -769,41 +762,35 @@ jobs:
   macos:
     name: macos ${{ matrix.arch }} ${{ matrix.build_type }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    timeout-minutes: ${{ matrix.build_type == 'Debug' && 180 || 120 }}
     strategy:
       fail-fast: false
       matrix:
         include:
           # Quoted on purpose: an unquoted ON/OFF is a boolean in some YAML
           # parsers and a string in others, and this value is compared as a
-          # string in the step below. timeout_minutes is quoted for the same
-          # reason - it is handed to timeout-minutes as a rendered string.
+          # string in the step below.
           #
-          # lmax_arg is the ceiling each entry asks for; the empty string is the
-          # entry naming no ceiling at all, so the configure takes the value
-          # integrals/CMakeLists.txt ships. The two Release entries take it and
-          # the Debug entry pins 2, for the reason and the measurements recorded
-          # on the windows-msvc job's Configure step.
+          # No entry names a QCX_INTEGRALS_LMAX: all three take the value
+          # integrals/CMakeLists.txt ships (6, the 154-class matrix), so a
+          # macOS leg builds the program that ships. The Debug entry used to
+          # pin 2; its two slow footprint cases now carry the fast-mode gate,
+          # and the measurements behind the old pin are on the windows-msvc
+          # Configure note.
           - runner: macos-latest
             arch: arm64
             build_type: Release
-            timeout_minutes: '120'
             expect_x86_64: 'OFF'
-            lmax_arg: ''
           - runner: macos-15-intel
             arch: x64
             build_type: Release
-            timeout_minutes: '120'
             expect_x86_64: 'ON'
-            lmax_arg: ''
           # The Debug lane: Apple Silicon, the fast subset, and the reason it
           # exists is in the job note above.
           - runner: macos-latest
             arch: arm64
             build_type: Debug
-            timeout_minutes: '180'
             expect_x86_64: 'OFF'
-            lmax_arg: '-DQCX_INTEGRALS_LMAX=2'
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -812,12 +799,11 @@ jobs:
       - name: Install toolchain
         run: brew install ninja boost libomp
       # The build directory carries the build type, so a Debug entry and a
-      # Release entry can never be read as each other's tree. lmax_arg carries
-      # the entry's ceiling, and the Release entries' empty value is the shipped
-      # default rather than a number - see the windows-msvc Configure note.
+      # Release entry can never be read as each other's tree. No entry names an
+      # integral ceiling: every one takes the shipped default, 6.
       - name: Configure
         run: |
-          cmake -S . -B build/macos-ci-${{ matrix.build_type }} -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ${{ matrix.lmax_arg }} -DQCX_ENABLE_IO=OFF \
+          cmake -S . -B build/macos-ci-${{ matrix.build_type }} -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DQCX_ENABLE_IO=OFF \
             -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp" \
             -DOpenMP_CXX_LIB_NAMES=omp \
             -DOpenMP_omp_LIBRARY="$(brew --prefix libomp)/lib/libomp.dylib"

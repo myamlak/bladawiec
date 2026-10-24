@@ -87,19 +87,25 @@ using HessianExtraTermFn =
     std::function<qcx::Result<void>(std::span<const double> x, std::span<double> y)>;
 
 /// \ingroup qcx-response
-/// The closed-shell Hartree-Fock orbital-Hessian operator, applied matrix-free.
+/// The closed-shell orbital-Hessian operator, applied matrix-free.
 ///
 /// This is the coupled-perturbed Hartree-Fock matrix that the orbital response
 /// to a perturbation is solved against - the "A + B" combination of the
 /// orbital-rotation Hessian in the static limit [Helgaker2000]. With occupied
 /// orbitals i and j, virtual orbitals a and b, the canonical orbital energies
-/// e, and two-electron integrals in chemists' notation (pq|rs),
+/// e, two-electron integrals in chemists' notation (pq|rs), and the
+/// exact-exchange fraction c_HF,
 ///
-///     A(ai, bj) = (e_a - e_i) d_ab d_ij + 4 (ai|bj) - (ab|ij) - (aj|ib)
+///     A(ai, bj) = (e_a - e_i) d_ab d_ij + 4 (ai|bj)
+///                 - c_HF [(ab|ij) + (aj|ib)]
 ///
 /// The action is matrix-free: the n_o n_v squared matrix is never formed, and
 /// the integral tensor is borrowed rather than copied, so how it is stored
 /// stays the caller's decision.
+///
+/// A density functional's exchange-correlation kernel is not part of this
+/// action; it enters through the extra-term overload, and the exchange
+/// fraction it needs scales the exchange integrals here.
 ///
 /// \pre The spans passed to Create outlive the operator.
 class OrbitalHessianOperator {
@@ -133,6 +139,43 @@ public:
                                                       MoTwoElectronTensor moTwoElectron,
                                                       HessianExtraTermFn extraTerm);
 
+    /// Builds the action with a scaled exact-exchange term.
+    /// \param layout Occupied/virtual counts; both must be non-zero.
+    /// \param orbitalEnergies Canonical orbital energies, occupied orbitals
+    /// first, size `layout.numOccupied + layout.numVirtual`.
+    /// \param moTwoElectron MO-basis two-electron integrals in chemists'
+    /// notation (pq|rs), full n^4 at `n = layout.numOccupied + layout.numVirtual`.
+    /// Neither is copied.
+    /// \param exchangeFraction The exact-exchange fraction c_HF, in [0, 1]. A
+    /// value of 1.0 runs the unscaled loop: the Hartree-Fock action is then
+    /// bit-identical to the three-argument overload's.
+    /// \returns The operator, or an Error (kInvalidArgument for a zero block, a
+    /// length mismatch, an integral array that is not n^4 long, or a fraction
+    /// outside [0, 1]).
+    static qcx::Result<OrbitalHessianOperator> Create(ResponseLayout layout,
+                                                      OrbitalEnergies orbitalEnergies,
+                                                      MoTwoElectronTensor moTwoElectron,
+                                                      double exchangeFraction);
+
+    /// Builds the action with a scaled exact-exchange term and a term the
+    /// Hartree-Fock action does not carry.
+    /// \param layout Occupied/virtual counts; both must be non-zero.
+    /// \param orbitalEnergies Canonical orbital energies, occupied orbitals
+    /// first, size `layout.numOccupied + layout.numVirtual`.
+    /// \param moTwoElectron MO-basis two-electron integrals in chemists'
+    /// notation (pq|rs), full n^4 at `n = layout.numOccupied + layout.numVirtual`.
+    /// Neither is copied.
+    /// \param exchangeFraction The exact-exchange fraction c_HF, in [0, 1].
+    /// \param extraTerm The term added to every action; must be non-null.
+    /// \returns The operator, or an Error (kInvalidArgument for a zero block, a
+    /// length mismatch, an integral array that is not n^4 long, a fraction
+    /// outside [0, 1], or a null extra term).
+    static qcx::Result<OrbitalHessianOperator> Create(ResponseLayout layout,
+                                                      OrbitalEnergies orbitalEnergies,
+                                                      MoTwoElectronTensor moTwoElectron,
+                                                      double exchangeFraction,
+                                                      HessianExtraTermFn extraTerm);
+
     /// Applies the operator: y = A x.
     /// \param x Trial vector, size Dimension().
     /// \param y Result vector, size Dimension(); must not alias \p x.
@@ -158,10 +201,17 @@ public:
         return _layout.Dimension();
     }
 
+    /// \returns The exact-exchange fraction the action scales its exchange
+    /// integrals by.
+    double ExchangeFraction() const noexcept {
+        return _exchangeFraction;
+    }
+
 private:
     OrbitalHessianOperator(ResponseLayout layout,
                            OrbitalEnergies orbitalEnergies,
                            MoTwoElectronTensor moTwoElectron,
+                           double exchangeFraction,
                            HessianExtraTermFn extraTerm);
 
     /// Runs the Hartree-Fock action alone, without the extra term.
@@ -169,10 +219,24 @@ private:
     /// \param y Result vector, size Dimension().
     void ApplyHartreeFock(std::span<const double> x, std::span<double> y) const;
 
+    /// The unscaled Hartree-Fock action: the exact-exchange fraction is one and
+    /// this loop is the operator's original one, kept verbatim so every anchor
+    /// built before the fraction existed stays bit-identical.
+    /// \param x Trial vector, size Dimension().
+    /// \param y Result vector, size Dimension().
+    void ApplyHartreeFockUnscaled(std::span<const double> x, std::span<double> y) const;
+
+    /// The Hartree-Fock action with the exchange integrals scaled by the
+    /// exact-exchange fraction.
+    /// \param x Trial vector, size Dimension().
+    /// \param y Result vector, size Dimension().
+    void ApplyHartreeFockScaled(std::span<const double> x, std::span<double> y) const;
+
     ResponseLayout _layout;
     std::size_t _numOrbitals = 0;
     std::span<const double> _orbitalEnergies;
     std::span<const double> _moTwoElectron;
+    double _exchangeFraction = 1.0;
     HessianExtraTermFn _extraTerm;
 };
 

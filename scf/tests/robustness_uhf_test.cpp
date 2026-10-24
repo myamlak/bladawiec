@@ -714,7 +714,8 @@ TEST(RobustnessUhfTest, P0SaddleLockingNotRescuedByComposedConfigurations) {
     // 15.2 as the pin minus 3.47e-11), and the 2026-09-15 conversion moved
     // this family to the operating 1e-8/1e-6 defaults that the helper above
     // sets. The re-reading the old comment asked for arrived on 2026-09-18:
-    // on GCC Release (LMAX=2) the leg below draws -147.37855917670876 /
+    // on GCC Release at the reduced LMAX=2 configuration the leg below draws
+    // -147.37855917670876 /
     // <S^2> 2.0127238702532466 in 21 iterations, converged - the MSVC
     // constants to 1.1e-10 and 1.5e-9, inside the 1e-4 bands this cell has
     // always used. At the tight gate the same trajectory ran the 100-iteration

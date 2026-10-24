@@ -58,13 +58,13 @@ The options that matter when configuring:
 | `QCX_ENABLE_LARGE_TESTS` | `OFF` | registers the long-running test targets (see §3) |
 | `QCX_REFERENCE_REGENERATION_CHECK` | `OFF` | the local-only regeneration checks |
 | `QCX_TEST_TIMEOUT_SECONDS` | `2400` | the per-test timeout |
-| `QCX_INTEGRALS_LMAX` | `6` | the highest angular momentum the integral engine builds for |
+| `QCX_INTEGRALS_LMAX` | `6` | the instantiation ceiling for the MD 2e/3c class matrix (6 is the supported bound and what CI builds; lower values build a reduced matrix for local compile-time experiments) |
 
 ## 2. Test selection
 
 **Run the subset the change reaches, not the whole suite.** The module DAG makes that a
 derivation rather than a guess: `core → backend → memory → linalg → molecule → symmetry →
-basisset → grid → integrals → scf → storage → io → properties → driver`. A change in
+basisset → grid → dispersion → integrals → scf → storage → io → properties → driver`. A change in
 module X can move X and every module to its right, and nothing to its left — so the test
 binaries from X onward are the only ones that can tell you something.
 

@@ -15,6 +15,7 @@
 #include "qcx/io/run_input.hpp"
 
 #include <array>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -226,6 +227,141 @@ struct RunXcGradient {
     double energyHartree = 0.0;
 };
 
+/// The terms of a total analytic nuclear gradient (schema 45), each a 3N
+/// vector in Hartree/Bohr, atom-major, in the molecule's canonical atom
+/// order.
+///
+/// One vector per term rather than a sum and a note, because the failure a
+/// gradient assembly can hide is a term that is silently absent: a term a
+/// consumer can read on its own is one it can check on its own.
+/// \ingroup qcx-io
+struct RunTotalGradientTerms {
+    /// `d Tr(D h)/dR` at the fixed reference density, `h = T + V`.
+    std::vector<double> oneElectron;
+    /// `dE_nuc/dR`, the analytic pair sum.
+    std::vector<double> nuclearRepulsion;
+    /// `dE_J/dR`.
+    std::vector<double> coulomb;
+    /// `-(1/2) dE_K/dR`, the exchange as the closed-shell energy subtracts it.
+    std::vector<double> exchange;
+    /// `Tr(F D(1))`, the orbital response's energy-weighted term.
+    std::vector<double> response;
+    /// `dE_disp/dR`. PRESENT exactly when the input wrote a `[dispersion]`
+    /// block and ABSENT otherwise: a term nobody requested is absent, never a
+    /// zero vector a consumer could read as a computed contribution.
+    std::optional<std::vector<double>> dispersion;
+};
+
+/// The energies a total gradient's terms belong to, in Hartree.
+/// \ingroup qcx-io
+struct RunTotalGradientEnergies {
+    /// The reference SCF's electronic energy, `1/2 Tr[D (H + F[D])]`.
+    double electronic = 0.0;
+    /// The electronic energy the derivative walks' own contractions rebuild.
+    /// It exists to be compared with `electronic`: `energy_residual_hartree`
+    /// is their difference.
+    double reconstructedElectronic = 0.0;
+    /// The nuclear repulsion at the reference geometry.
+    double nuclearRepulsion = 0.0;
+    /// The dispersion correction's own energy. PRESENT under the same rule as
+    /// `RunTotalGradientTerms::dispersion`.
+    std::optional<double> dispersion;
+    /// `electronic + nuclearRepulsion + dispersion`.
+    double total = 0.0;
+};
+
+/// The dimensions a total gradient was computed at.
+/// \ingroup qcx-io
+struct RunTotalGradientSizes {
+    std::size_t atomCount = 0; ///< Atoms in the reference molecule.
+    std::size_t numBasisFunctions = 0; ///< The AO dimension n.
+    std::size_t numOccupied = 0; ///< Occupied spatial orbitals.
+    std::size_t numVirtual = 0; ///< Virtual spatial orbitals.
+};
+
+/// The one-electron derivative walk's counted cost.
+/// \ingroup qcx-io
+struct RunTotalGradientOneElectronCounts {
+    std::size_t orbitalPairs = 0; ///< Canonical orbital pairs visited.
+    std::size_t overlapTuples = 0; ///< Overlap derivative tuples differentiated.
+    std::size_t kineticTuples = 0; ///< Kinetic derivative tuples differentiated.
+    std::size_t nuclearTuples = 0; ///< Nuclear-attraction tuples differentiated.
+};
+
+/// The two-electron derivative Fock-block walk's counted cost.
+/// \ingroup qcx-io
+struct RunTotalGradientTwoElectronCounts {
+    std::size_t braPairs = 0; ///< Canonical bra pairs walked.
+    std::size_t ketPairs = 0; ///< Canonical ket pairs walked.
+    std::size_t quartets = 0; ///< Quartets differentiated.
+    std::size_t screenedQuartets = 0; ///< Quartets every predicate discarded.
+};
+
+/// The walks' counted cost, kept so the price of a gradient stays readable.
+/// \ingroup qcx-io
+struct RunTotalGradientCounts {
+    RunTotalGradientOneElectronCounts oneElectron; ///< The one-electron walk.
+    RunTotalGradientTwoElectronCounts twoElectron; ///< The two-electron walk.
+};
+
+/// What the response solves cost. The state's own report carries these three
+/// members and no others; the schema must not invent a matvec count or a
+/// worst residual the state does not keep.
+/// \ingroup qcx-io
+struct RunTotalGradientResponse {
+    std::size_t solves = 0; ///< Right-hand sides solved (one per coordinate).
+    std::size_t warmStarted = 0; ///< Solves that began from a stored answer.
+    std::size_t iterations = 0; ///< Conjugate-gradient iterations in total.
+};
+
+/// The total analytic nuclear gradient at a converged closed-shell RHF
+/// reference (schema 45), serialized as `total_gradient`.
+///
+/// **What the block is.** `gradient` is `dE/dR` for the run's own total
+/// energy, with each contribution kept apart under `terms` in the order the
+/// total accumulates them: the one-electron skeleton, the nuclear repulsion,
+/// the Coulomb and exchange skeletons, the orbital response, and the
+/// dispersion correction when one was requested. The total is the terms
+/// summed, not an independently assembled number, so the decomposition and
+/// the total cannot disagree.
+///
+/// **Presence.** Absent unless the run asked (`[properties] total_gradient`),
+/// so a record without the block states that no gradient was computed and not
+/// that it was zero - the null-honesty rule the opt-in blocks beside it
+/// follow. The block is written on the `rhf` lane only, because the assembly
+/// differentiates a closed-shell RHF reference; a request on any other method
+/// word is refused by the validator rather than recorded as absent, and a
+/// non-converged SCF is refused at run time.
+/// \ingroup qcx-io
+struct RunTotalGradient {
+    /// The total gradient, 3N entries in Hartree/Bohr, atom-major, in the
+    /// molecule's canonical atom order.
+    std::vector<double> gradient;
+    /// The decomposition.
+    RunTotalGradientTerms terms;
+    /// The energies the terms belong to.
+    RunTotalGradientEnergies energies;
+    /// The dimensions the gradient was computed at.
+    RunTotalGradientSizes sizes;
+    /// The walks' counted cost.
+    RunTotalGradientCounts counts;
+    /// What the response solves cost.
+    RunTotalGradientResponse response;
+    /// `max|2 F_ai|` at the emitted reference, Hartree - the stationarity
+    /// gate's own measure. The run is refused when it exceeds the assembly's
+    /// tolerance, so a present block is a stationary-reference block and this
+    /// value is at or below the gate.
+    double stationarityResidual = 0.0;
+    /// `|reconstructed_electronic - electronic|`, Hartree - the second gate's
+    /// measure, at or below its tolerance on every emitted block.
+    double energyResidualHartree = 0.0;
+    /// The right-hand-side contributions the response solved against, in the
+    /// order they were wired. A contribution silently dropped from the wiring
+    /// is invisible in the total; this list is what makes its absence visible.
+    /// The shipped assembly wires `["one-electron", "coulomb", "exchange"]`.
+    std::vector<std::string> rightHandSideTerms;
+};
+
 /// The properties of one run, plain data so io stays free of Eigen (the
 /// driver converts from the properties module's matrix types). The
 /// population/moment block is always computed; the charge blocks
@@ -244,6 +380,7 @@ struct RunProperties {
     std::optional<RunQtaim> qtaim; ///< Bader QTAIM, opt-in.
     std::optional<RunMolden> molden; ///< Molden export, opt-in.
     std::optional<RunXcGradient> xcGradient; ///< XC gradient contribution, opt-in.
+    std::optional<RunTotalGradient> totalGradient; ///< Total analytic gradient, opt-in.
 };
 
 /// One score row of the coefficients record: a candidate's MAD score
@@ -949,6 +1086,54 @@ struct RunEriStore {
     std::vector<RunEriStoreClassHits> hitQuartetsByClass;
 };
 
+/// The `eri_cache` block of resources_resolved (schema 43): the in-memory ERI
+/// cache budget request's requested-vs-ran pairing
+/// (`method.eri_cache_bytes`, the FockBuildOptions::maxCacheBytes request
+/// surface). It exists because the key's two legs behave differently by
+/// default - the unrestricted legs compute a cap-derived grant, the
+/// restricted legs run with the cache off - so without this block a run that
+/// asked for a budget could not be told from one that inherited whichever
+/// default its leg carries.
+///
+/// Four numbers, and the distinctions they keep: `requested_bytes` is what
+/// the input wrote; `granted_bytes` is what the driver handed the engine's
+/// options; `effective_bytes` is what the engine's Create-time decision
+/// actually FIRED (the mode record's cache term divided by three, the same
+/// quantity its own sure-fit gate compared against the remaining workspace);
+/// and `clamped` says the fired budget fell below the grant. The grant can
+/// exceed the fired budget either because the Create-time clamp reduced it
+/// to fit the workspace or because the cache did not engage at all (the
+/// class-aware path and the LightPath), in which case `effective_bytes` is
+/// 0 - the true fired budget, never a fabricated grant.
+///
+/// Present exactly when the input wrote `[method] eri_cache_bytes`; absent
+/// when the key was omitted (an omitted key is not a request, and the
+/// leg-dependent default is the system's judgement rather than a request to
+/// record - the schema-19 null-honesty rule the sibling request blocks
+/// follow). A request the resolved route cannot honour is REFUSED by name
+/// before serialization, so it has no shape here.
+/// \ingroup qcx-io
+struct RunEriCache {
+    /// The input's value, verbatim, in bytes (>= 1).
+    std::size_t requestedBytes = 0;
+    /// The per-lane budget the driver handed the engine. Equals the request
+    /// on the routes that own the knob; recorded separately so a future
+    /// demotion of the grant stays visible beside what was asked.
+    std::size_t grantedBytes = 0;
+    /// The FIRED per-lane budget: the engine's Create-time mode record's
+    /// cache term divided by three (the two payload lanes plus the entry
+    /// map). 0 means no cache engaged on the route that ran (the
+    /// class-aware path, the LightPath); absent means the engine made no
+    /// mode decision to read (the legacy null-budget path, which an honoured
+    /// request never takes because the key is refused at memory_cap_gib =
+    /// 0) - never a fabricated zero.
+    std::optional<std::size_t> effectiveBytes;
+    /// True when the fired budget is below the grant (a Create-time
+    /// sure-fit clamp, or a path that disengages the cache). False when the
+    /// grant fired whole.
+    bool clamped = false;
+};
+
 /// input the certified fp32 lane's default was RESOLVED against, recorded so
 /// a reader can check the verdict against the machine that produced it. It is
 /// the lane's *decided* record; RunCertifiedBound is the same lane's
@@ -1209,6 +1394,15 @@ struct RunResourcesResolved {
     /// resolve; the driver simply had no probe to seed them with, which is
     /// the conservative interim rather than a missing measurement).
     std::optional<RunComputeProfile> computeProfile;
+    /// The in-memory ERI cache budget request record (schema 43): what
+    /// `method.eri_cache_bytes` asked for and what the engine fired. Present
+    /// exactly when the input wrote the key; absent when it was omitted.
+    /// Sibling of the request blocks above for the same reason: a new key, a
+    /// new block, so absence never means two things. Filled after the SCF
+    /// from the engine's own mode record, so it cannot disagree with the
+    /// engine about the budget that ran. Appended last so the aggregate's
+    /// earlier fields keep their positions.
+    std::optional<RunEriCache> eriCache;
 };
 
 /// The term_counters block of an instrumented ri_j run: the
@@ -1246,7 +1440,10 @@ struct RunTermCounters {
 /// kernel-bound sums (what the lane's arithmetic cost the Fock matrix),
 /// while `routedHa` is the ROUTING bound sum the preset-derived budget was
 /// compared against (the gate's own units, orders smaller per routed
-/// quartet). `enforced` says whether the comparison ran at all.
+/// quartet). `enforced` says whether the comparison ran at all; `demoted`
+/// (schema 44) says it was skipped because the final call's route cannot
+/// carry it, which `enforced: false` alone cannot distinguish from the key
+/// never being set.
 /// \ingroup qcx-io
 struct RunCertifiedBound {
     /// The number of Fock builds the block summarizes: every main-SCF
@@ -1265,6 +1462,19 @@ struct RunCertifiedBound {
     /// measured on the SAME final observed call as lastCallHa. See
     /// RunCertifiedBound::enforced.
     bool enforced = false;
+    /// The enforcement was DEMOTED on the final observed call (schema 44):
+    /// the key was set but that call's route cannot carry the comparison
+    /// (the LightPath chunk loop, an engaged precision ladder), so the
+    /// comparison was skipped and the build ran exactly as an
+    /// enforcement-off build. `enforced` is false on such a call, because
+    /// the comparison did not run - `demoted` is what separates "the key
+    /// was not set" from "the key was set and this route could not honour
+    /// it". Always written inside a present block.
+    bool demoted = false;
+    /// Why the comparison was skipped, in the engine's own words. Present
+    /// exactly when `demoted` is true (the eri_store block's rule: the
+    /// verdict is always written, the reason only when there is one).
+    std::string demotedReason;
     /// The budget the accuracy preset derived for the final observed call
     /// (Eh): PresetEnergyBudget(accuracy) less the call's screened-out
     /// bound sum less the ladder's slack. 0.0 is a real budget here (the
@@ -1501,6 +1711,67 @@ struct RunBuilderAxes {
     std::optional<std::string> device;
 };
 
+/// The dispersion correction a run applied (schema 41), serialized as
+/// "dispersion": the form, where its parameters came from, the values they
+/// resolved to, and the energy the correction contributed to
+/// `total_energy_hartree`.
+///
+/// The block records the RESOLVED set rather than the input's words, because
+/// the parameter source may be the method family or a preset the run looked
+/// up: a reader must be able to reproduce the number from the document alone,
+/// without the input file and without the preset table. That is why
+/// `parameters` carries the numbers the kernel consumed under the form's own
+/// key names, not a path to them.
+/// \ingroup qcx-io
+struct RunDispersion {
+    /// "d3" | "d4" - the input's own form vocabulary.
+    std::string form;
+    /// "method" | "preset" | "explicit" - where `parameters` came from.
+    std::string parameterSource;
+    /// The table name the values came from: the `dispersion.preset` name for
+    /// "preset", the run method's family for "method"; absent for "explicit",
+    /// where the input stated every value itself.
+    std::optional<std::string> parameterSet;
+    /// The values the correction consumed, under the form's published key
+    /// names: d3 gives s6, s8, rs6, alpha6, rs8 and alpha8; d4 gives s6, s8,
+    /// a1 and a2.
+    std::map<std::string, double> parameters;
+    /// The correction's own contribution to `total_energy_hartree`, in
+    /// Hartree; negative for attraction.
+    double energyHartree = 0.0;
+};
+
+/// The initial-guess block of a run (schema 42), serialized as "guess": the
+/// requested word when the input wrote one, the word the run actually RAN,
+/// and the checkpoint a restart read.
+///
+/// `type` and `ran` are two facts, not one repeated: the schema's `core`
+/// word names the METHOD'S DEFAULT START, which on RHF is the GWH guess (and
+/// on UHF the loop's Step-C default tier), so a run whose file wrote
+/// `type = "core"` runs "gwh" and the record says both. A consumer reading
+/// only `type` would conclude the run built a zero start that it never
+/// built; a consumer reading only `ran` could not tell a default from a
+/// request. `type` is present exactly when `[guess] type` was written (the
+/// schema-19 null-honesty rule) - an absent key is not a request and has no
+/// word.
+/// \ingroup qcx-io
+struct RunGuess {
+    /// "core" | "gwh" | "sad" | "restart" - the input's own word, present
+    /// exactly when the file wrote `[guess] type`.
+    std::optional<std::string> type;
+    /// "gwh" | "sad" | "restart" - what the run actually ran. Always
+    /// present: every SCF started from a guess, and `core` resolves to the
+    /// method's default start, which is "gwh" on RHF (the word the record
+    /// uses for that start on both paths). The default is the input's own
+    /// default start, so a result no driver filled still names a real start
+    /// rather than an empty word.
+    std::string ran = "gwh";
+    /// The checkpoint file a restart guess read; present exactly when the
+    /// run seeded from one (`type = "restart"`), never an empty string
+    /// standing in for "none".
+    std::optional<std::string> restartPath;
+};
+
 /// The machine-readable result of one run.
 /// \ingroup qcx-io
 struct RunResult {
@@ -1604,7 +1875,69 @@ struct RunResult {
     /// unless the run asked for it (the `xc_grid` presence rule beside it), and
     /// it is present on the Kohn-Sham lanes only - a request on rhf/uhf is
     /// refused before serialization rather than recorded as absent.
-    static constexpr int kSchemaVersion = 40;
+    ///
+    /// Schema 41 ADDS the top-level `dispersion` block (RunDispersion): the
+    /// London dispersion correction a run applied - its form ("d3" | "d4"),
+    /// the parameter source ("method" | "preset" | "explicit"), the preset
+    /// name when one was used, the values the kernel consumed under the
+    /// form's own key names, and the energy the correction contributed. Keys
+    /// added, so the number moved with them. Presence rule: absent unless the
+    /// input wrote a `[dispersion]` block, and then always present - a
+    /// request that cannot be honoured is refused before serialization,
+    /// never recorded as absent. The block is a change a consumer must notice
+    /// beyond its presence: `total_energy_hartree` includes this term on runs
+    /// that carry it, so a comparison across this boundary compares a total
+    /// with a dispersion contribution against one that could not have carried
+    /// any. `electronic_energy_hartree` and the convergence residuals are
+    /// unaffected: the SCF loop itself remains dispersion-free.
+    ///
+    /// Schema 42 ADDS the top-level `guess` block (RunGuess): the requested
+    /// guess word, the word the run actually RAN, and the checkpoint a
+    /// restart read. Keys added, so the number moved with them. The
+    /// `type`-vs-`ran` split is the reason a consumer must notice the block:
+    /// `core` is the method's DEFAULT START (GWH on RHF), so the two words
+    /// legitimately differ, and before this block a record neither said what
+    /// the input asked for nor what the run started from.
+    ///
+    /// Schema 43 ADDS the `resources_resolved.eri_cache` block
+    /// (RunEriCache): the in-memory ERI cache budget request's
+    /// requested-vs-ran pairing - the bytes the input asked for, the grant
+    /// the driver handed the engine, the budget the engine's Create-time
+    /// decision actually fired, and whether that fell below the grant. Keys
+    /// added, so the number moved with them, and the key is one a consumer
+    /// must notice for a reason beyond its presence: the two legs carry
+    /// DIFFERENT defaults (the unrestricted legs compute a cap-derived
+    /// grant, the restricted legs run with the cache off), so before this
+    /// block the same budget could appear in a document with no way to tell
+    /// a request from an inherited default.
+    ///
+    /// Schema 44 ADDS the top-level `certified_bound` block's `demoted` and
+    /// `demoted_reason` members: the enforcement key's two non-composing rungs - the LightPath
+    /// chunk loop and an engaged precision ladder - no longer refuse the build, so a record must
+    /// say whether the comparison was skipped rather than leave `enforced: false` to mean both "not
+    /// requested" and "requested, route could not carry it". Keys added, so the number moved with
+    /// them.
+    ///
+    /// Schema 45 ADDS the `properties.total_gradient` input key and the
+    /// `total_gradient` record member (RunTotalGradient): the total analytic
+    /// nuclear gradient at a converged closed-shell RHF reference, with each
+    /// contribution kept apart - the one-electron skeleton, the nuclear
+    /// repulsion, the Coulomb and exchange skeletons, the orbital response and
+    /// the requested dispersion correction - plus the energies the terms
+    /// belong to, the dimensions, the walks' counted cost, the response solve
+    /// report, both gate residuals and the wired right-hand-side contribution
+    /// names. Keys added, so the number moves with them. It is the first
+    /// record member that is the FULL derivative of the run's total energy
+    /// (schema 40's `xc_gradient` is one fixed-density contribution), so a
+    /// consumer comparing records across this boundary compares a document
+    /// carrying a total nuclear gradient against one that could carry none.
+    /// The block is absent unless the run asked and is written on the `rhf`
+    /// lane only; a request the assembly refuses - a non-converged SCF, a
+    /// non-stationary reference, a D4 dispersion gradient - fails the run by
+    /// name rather than being recorded as an absent block, and a term nobody
+    /// requested (the dispersion correction without a `[dispersion]` block)
+    /// is absent inside the block, never a zero-filled vector.
+    static constexpr int kSchemaVersion = 45;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.
@@ -1649,7 +1982,12 @@ struct RunResult {
     /// nullopt means "no SCF loop filled it" - never a fabricated zero.
     std::optional<std::size_t> numRemovedOverlapDirections;
 
-    double totalEnergyHartree = 0.0; ///< Electronic plus nuclear repulsion.
+    /// Electronic plus nuclear repulsion, plus the `[dispersion]` block's
+    /// energy when the run applied one (schema 41). The SCF loop is
+    /// dispersion-free: `electronicEnergyHartree` and the convergence
+    /// residuals describe the SCF energy, and the correction is added to the
+    /// total once, after convergence.
+    double totalEnergyHartree = 0.0;
     double electronicEnergyHartree = 0.0; ///< 1/2 Tr[D (H + F)].
     std::optional<double> spinSquared; ///< UHF spin-contamination diagnostic;
                                        ///< nullopt on RHF (not applicable).
@@ -1835,6 +2173,21 @@ struct RunResult {
     /// to fill it. Appended last so the aggregate's earlier fields keep their
     /// positions.
     RunBuilderAxes builderAxes;
+
+    /// The dispersion correction this run applied (schema 41,
+    /// RunDispersion), serialized as "dispersion". Present exactly when the
+    /// input wrote a `[dispersion]` block; absent otherwise (the
+    /// null-honesty rule: a run that asked for no correction carries no
+    /// block, never a zero-filled one). Appended last so the aggregate's
+    /// earlier fields keep their positions.
+    std::optional<RunDispersion> dispersion;
+
+    /// The initial-guess block (schema 42, RunGuess), serialized as "guess".
+    /// Always present: every SCF started from a guess, so `ran` is always a
+    /// run fact; `type` is present only when the file wrote `[guess] type`,
+    /// and `restart_path` only when a restart actually read a checkpoint.
+    /// Appended last so the aggregate's earlier fields keep their positions.
+    RunGuess guess;
 };
 
 /// Serializes a run result to the JSON schema (see the header note).

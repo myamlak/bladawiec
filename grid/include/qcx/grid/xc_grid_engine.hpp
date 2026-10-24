@@ -126,11 +126,16 @@ struct XcEvaluation {
 /// Wires excgrid's molecular block grid and frozen per-point kernel API to
 /// qcx's AO tier. It builds the grid for a molecule once, then integrates a
 /// named functional over it for a pair of spin densities,
-///     E_xc = sum_i w_i e_xc(rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb)(r_i),
+///     E_xc = sum_i w_i e_xc(rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb,
+///                            tau_a, tau_b)(r_i),
 ///     V_s  = dE_xc/dD_s,
-/// assembling each point's densities and density gradients from the AO values
-/// and first derivatives (AoEvaluator::EvaluateDerivatives) contracted with
-/// the density matrices.
+/// assembling each point's densities, density gradients, and kinetic-energy
+/// densities from the AO values and first derivatives contracted with the
+/// density matrices. The kinetic-energy density is the libxc/PySCF per-spin
+/// form,
+///     tau_s = 1/2 sum_mu nu D_s,mu nu grad phi_mu . grad phi_nu,
+/// and the potential carries its derivative,
+///     V_s,mu nu += 1/2 w vtau_s grad phi_mu . grad phi_nu.
 ///
 /// The density matrices must address the AOs in the evaluator's own order (the
 /// integrals module's basis ordering). A mismatch is not detectable here and
@@ -140,16 +145,20 @@ struct XcEvaluation {
 /// (excgrid::FindFunctional), and a name may denote a single component: "pbe"
 /// is PBE exchange without correlation, "pbe_c" its correlation. UsesGradient()
 /// and ExchangeFraction() are exposed because a hybrid's exact-exchange
-/// fraction is the SCF's business, not the engine's.
+/// fraction is the SCF's business, not the engine's. The seven collinear
+/// components above are the whole input set; a functional whose RequiredMask()
+/// names any other component is refused by Create, with the missing names in
+/// the message.
 ///
 /// Per-point cost is O(nAO^2) for the density contraction and O(nAO^2) for
-/// the potential accumulation; the dense entry points make no screening or
-/// batching assumption beyond excgrid's own spatial blocks. The screened entry
-/// points add the density-weighted shell screening of shell_screening.hpp: at
-/// each point only the significant shells are evaluated and only their block is
-/// contracted and accumulated, with the setup counted alongside the per-point
-/// work in XcScreeningCounts. A batched density tier is a deliberate follow-up,
-/// not pre-empted here.
+/// the potential accumulation, with one extra O(nAO) tau contraction per spin
+/// and one rank-3 outer product per tau-reading potential. The dense entry
+/// points make no screening or batching assumption beyond excgrid's own
+/// spatial blocks. The screened entry points add the density-weighted shell
+/// screening of shell_screening.hpp: at each point only the significant shells
+/// are evaluated and only their block is contracted and accumulated, with the
+/// setup counted alongside the per-point work in XcScreeningCounts. A batched
+/// density tier is a deliberate follow-up, not pre-empted here.
 /// \ingroup qcx-grid
 class XcGridEngine {
 public:
@@ -161,7 +170,9 @@ public:
     /// \returns The engine, or an Error: kInvalidArgument for an unknown
     /// functional name, a molecule whose coordinates are unusable, or grid
     /// parameters excgrid rejects; kUnimplemented for a basis function whose
-    /// angular momentum the AO tier does not support.
+    /// angular momentum the AO tier does not support, or for a functional
+    /// whose RequiredMask() names a component the engine does not supply (the
+    /// message names them).
     /// \ingroup qcx-grid
     static qcx::Result<XcGridEngine> Create(const qcx::molecule::Molecule& molecule,
                                             const qcx::basisset::BasisSet& basis,

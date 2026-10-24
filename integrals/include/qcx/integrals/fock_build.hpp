@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace qcx::integrals {
@@ -449,12 +450,14 @@ struct FockBuildOptions {
     /// computed. The budget is derived from the accuracy preset, never
     /// passed in - a caller cannot widen it to keep the lane alive.
     /// Composition: the FastPath only. The LightPath (the chunked
-    /// low-memory route) and an engaged precision ladder both refuse it
-    /// (kUnimplemented) rather than ignore it silently; the GPU builder
-    /// does not implement it either, so a GPU-family request is refused by
-    /// name at resolution (run_driver.cpp) - the one exception is the
-    /// retargeted device-less fallback, which lands on this member and can
-    /// honour the key.
+    /// low-memory route) and an engaged precision ladder cannot carry the
+    /// comparison, so they DEMOTE it: the build records why in
+    /// CertifiedBudgetOutcome (demoted/demotedReason), skips the
+    /// comparison, and runs exactly as the option's absence would produce.
+    /// The GPU builder does not implement it either, so a GPU-family
+    /// request is refused by name at resolution (run_driver.cpp) - the one
+    /// exception is the retargeted device-less fallback, which lands on
+    /// this member and can honour the key.
     bool enforceCertifiedBoundBudget = false;
     bool buildExchangeOnly = false; ///< Skip the J accumulation (the four K targets
                                     ///< only): the RiJkFockBuilder mode - RI provides J,
@@ -833,14 +836,26 @@ struct FockModeInfo {
 /// (FockBuildOptions::enforceCertifiedBoundBudget): what the build's routed
 /// bound sum was, what budget the accuracy preset derived for it, and which
 /// way the comparison went. Written only by a build that ran the
-/// enforcement; every member keeps its zero default otherwise, so a caller
-/// must read Enforced first - an unenforced call's zeros are not
-/// measurements.
+/// enforcement; every measured member keeps its zero default otherwise, so a
+/// caller must read Enforced first - an unenforced call's zeros are not
+/// measurements. A route that cannot carry the comparison (the LightPath
+/// chunk loop, an engaged precision ladder) is NOT refused: the build
+/// records the demotion in Demoted/DemotedReason and runs exactly as the
+/// option's absence would produce, with Enforced false because the
+/// comparison did not run.
 /// \ingroup qcx-integrals
 struct CertifiedBudgetOutcome {
     /// The enforcement ran on this call (the option was set and the route
-    /// admitted it), so every member below is a measurement.
+    /// admitted it), so every measured member below is a measurement.
     bool enforced = false;
+    /// The enforcement was DEMOTED on this call: the option was set but this
+    /// route cannot carry the comparison, so it was skipped and the build
+    /// ran as an enforcement-off build. False = no demotion (either the
+    /// comparison ran, or the option was not set).
+    bool demoted = false;
+    /// Why the comparison was skipped, in the record's own words. Empty when
+    /// Demoted is false.
+    std::string demotedReason;
     /// The derived budget in Eh: CertifiedBoundBudget(accuracy, screenedHa).
     /// 0.0 means the preset's own screening co-term consumed the target.
     double budgetHa = 0.0;
@@ -926,10 +941,12 @@ public:
     /// \param budgetOut Optional out-parameter receiving the global
     /// budget enforcement's outcome (CertifiedBudgetOutcome): the routed
     /// bound sum, the preset-derived budget, and the comparison's verdict.
-    /// Filled only when FockBuildOptions::enforceCertifiedBoundBudget is set
-    /// and the route admits the enforcement; the LightPath and an engaged
-    /// precision ladder return kUnimplemented instead, so the option is
-    /// never silently dropped. Null (the default) keeps the zero-cost path.
+    /// Filled only when FockBuildOptions::enforceCertifiedBoundBudget is set;
+    /// a route that cannot carry the comparison (the LightPath, an engaged
+    /// precision ladder) records the demotion (Demoted/DemotedReason) and
+    /// the build runs as the option's absence would produce, so the option
+    /// is never silently dropped. Null (the default) keeps the zero-cost
+    /// path.
     /// \returns The Fock matrix as a rank-2 tensor, or an Error.
     qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> BuildFock(
         const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& density,

@@ -88,12 +88,16 @@ struct XcGradientEvaluation {
 ///   - the point's motion, `w * (grad e) . dx/dR`, where grad e is the spatial
 ///     gradient of the composite integrand. For a functional that consumes the
 ///     density gradients this needs the density field's second derivative, and
-///     therefore the AO tier's second derivative.
+///     therefore the AO tier's second derivative; for one that consumes the
+///     kinetic-energy density it also carries that field's own derivative, the
+///     same contracted gradient against the AO tier's second derivative.
 ///   - the atomic orbitals' motion: the density's own chain rule through the AO
 ///     functions, which move with the atoms they sit on. Each atom's row takes
 ///     the density's contraction with the AO gradients and with their curvature,
 ///     over the shells that point kept, and the functional's partials weight
-///     them [Helgaker2000].
+///     them [Helgaker2000]. The kinetic-energy density's motion is the same
+///     contraction weighted by vtau; the half in its definition cancels the two
+///     density index slots, so its row carries coefficient one rather than two.
 ///
 /// And nothing else: the density matrix is fixed, so its response to the
 /// displacement is the SCF's business rather than this walk's.
@@ -108,8 +112,9 @@ struct XcGradientEvaluation {
 /// from, and its derivative arrays are indexed by nuclear coordinate in the
 /// caller's own 3N order.
 /// \param evaluator The AO evaluator the blocks' points are evaluated with.
-/// \param functional The functional kernel; its sigma convention is the one the
-/// potential assembly below assumes.
+/// \param functional The functional kernel; its sigma and kinetic-energy-density
+/// conventions are the energy path's, and every seven collinear components are
+/// supplied to it at each point.
 /// \param envelopes The screening envelopes, in the evaluator's shell order.
 /// \param thresholds The energy path's truncation and screening thresholds.
 /// \param batch The batch granularity; it changes no number, only how the grid is

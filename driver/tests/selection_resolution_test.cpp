@@ -5,8 +5,10 @@
 // both disk routes and gpu run only as explicit opt-ins. A tier this run
 // cannot WIRE is DEMOTED with disclosure (the record's reasoning plus the
 // warning), never refused for an absent key and never silently substituted;
-// an explicit request is honored or refused by name and is never demoted.
-// The model-driven auto-selection stays retired from the default path.
+// an explicit request is honored or refused by name and is never demoted
+// EXCEPT by [method] enforce_certified_bound, whose claim overrides the
+// builder choice on restricted runs and states the override in the warning
+// (the demotion tests at the end of this file pin both sides).
 // Nothing refuses at the resolution: the ladder's floor is wired for every
 // method, so every memory admission fires downstream of it - in the wiring,
 // or one step earlier at the driver's pre-gate setup admission
@@ -681,4 +683,144 @@ TEST(SelectionResolutionTest, UhfExplicitQfmmRequestIsHonoredVerbatimAndSilently
     EXPECT_TRUE(resolved->explicitBuilder);
     EXPECT_TRUE(resolved->warning.empty());
     EXPECT_NE(resolved->reasoning.find("explicit fock_builder qfmm honored"), std::string::npos);
+}
+
+TEST(SelectionResolutionTest, EnforcedBoundDemotesARestrictedExplicitFamilyToTheMachineryMember) {
+    // [method] enforce_certified_bound is the ONE key that overrides an
+    // explicit builder request (the header's file note): the restricted run
+    // cannot place the enforcement on ri_j_link, so the resolution rewrites
+    // it onto the direct family's machinery member - the builder that runs
+    // and the one the record's builder/builder_member name - and states the
+    // rewrite in the warning and the reasoning. A refusal here would make
+    // the claim unusable on every non-default route for no gain: the key
+    // names no builder, so honouring it costs the route and nothing else.
+    RunInput input = AutoInput();
+    input.method.builder = BuilderKind::kRiJLink;
+    input.method.enforceCertifiedBound = true;
+
+    const auto resolved = ResolveBuilderSelection(LargeInput(DeviceTopology(), input));
+    ASSERT_TRUE(resolved.has_value()) << resolved.error().message;
+
+    EXPECT_EQ(resolved->kind, BuilderKind::kDirect);
+    EXPECT_FALSE(resolved->leanMember);
+    // Requested-vs-ran is not collapsed: the record's pick stays the
+    // ladder's answer and explicit_builder still names the word the file
+    // wrote, while the builder is the machinery member that runs.
+    ASSERT_TRUE(resolved->picked.has_value());
+    EXPECT_EQ(*resolved->picked, BuilderKind::kDirect);
+    EXPECT_TRUE(resolved->explicitBuilder);
+    EXPECT_NE(resolved->warning.find("method.enforce_certified_bound = true"), std::string::npos);
+    EXPECT_NE(resolved->warning.find("fock_builder = \"ri_j_link\""), std::string::npos);
+    EXPECT_NE(resolved->warning.find("machinery member"), std::string::npos);
+    EXPECT_NE(resolved->warning.find("DEMOTED"), std::string::npos);
+    // The record's own why carries the same rewrite, not only stderr.
+    EXPECT_NE(resolved->reasoning.find("explicit fock_builder ri_j_link honored"),
+              std::string::npos);
+    EXPECT_NE(resolved->reasoning.find("DEMOTED"), std::string::npos);
+}
+
+TEST(SelectionResolutionTest, EnforcedBoundDemotesTheAutoLeanDefaultToTheMachineryMember) {
+    // The demotion's reason for existing: the auto-lean path IS the default
+    // at nBasis <= 1000, so refusing the key there would refuse it on every
+    // default run. The rewrite names the ladder as the request it
+    // invalidates and the lean member as the route it moved off.
+    RunInput input = AutoInput();
+    input.method.enforceCertifiedBound = true;
+
+    const auto resolved = ResolveBuilderSelection(SmallInput(DeviceLessTopology(), input));
+    ASSERT_TRUE(resolved.has_value()) << resolved.error().message;
+
+    EXPECT_EQ(resolved->kind, BuilderKind::kDirect);
+    EXPECT_FALSE(resolved->leanMember);
+    ASSERT_TRUE(resolved->picked.has_value());
+    EXPECT_EQ(*resolved->picked, BuilderKind::kDirect);
+    EXPECT_FALSE(resolved->explicitBuilder);
+    EXPECT_NE(resolved->warning.find("method.enforce_certified_bound = true"), std::string::npos);
+    EXPECT_NE(resolved->warning.find("the no-fock_builder size ladder"), std::string::npos);
+    EXPECT_NE(resolved->warning.find("lean member"), std::string::npos);
+    // The no-key opener still leads the reasoning - the key really was
+    // absent - and the demotion follows it.
+    EXPECT_NE(resolved->reasoning.find("no fock_builder given"), std::string::npos);
+    EXPECT_NE(resolved->reasoning.find("DEMOTED"), std::string::npos);
+}
+
+TEST(SelectionResolutionTest, EnforcedBoundDemotesTheExplicitLeanSpelling) {
+    // "lean" is a within-family request, not a family word, but it is still
+    // a request for a member that cannot carry the enforcement - the
+    // demotion names that spelling, not the no-key ladder.
+    RunInput input = AutoInput();
+    input.method.leanDirect = true;
+    input.method.enforceCertifiedBound = true;
+
+    const auto resolved = ResolveBuilderSelection(SmallInput(DeviceLessTopology(), input));
+    ASSERT_TRUE(resolved.has_value()) << resolved.error().message;
+
+    EXPECT_EQ(resolved->kind, BuilderKind::kDirect);
+    EXPECT_FALSE(resolved->leanMember);
+    EXPECT_FALSE(resolved->explicitBuilder);
+    EXPECT_NE(resolved->warning.find("fock_builder = \"lean\""), std::string::npos);
+    EXPECT_NE(resolved->warning.find("DEMOTED"), std::string::npos);
+}
+
+TEST(SelectionResolutionTest, EnforcedBoundDemotesANonHybridKohnShamLadderPick) {
+    // The non-hybrid exception is an ORDERING; it does not exempt the run
+    // from the enforcement key's rewrite. The ladder picks the promoted
+    // ri_j_link tier, the demotion moves it to the machinery member, and
+    // the exception's own disclosure survives into the reasoning.
+    RunInput input = AutoInput(MethodType::kRks);
+    input.method.enforceCertifiedBound = true;
+    SelectionResolutionInput sized = RiJRunnable(200, input);
+    sized.nonHybridKohnSham = true;
+
+    const auto resolved = ResolveBuilderSelection(sized);
+    ASSERT_TRUE(resolved.has_value()) << resolved.error().message;
+
+    EXPECT_EQ(resolved->kind, BuilderKind::kDirect);
+    EXPECT_FALSE(resolved->leanMember);
+    EXPECT_FALSE(resolved->explicitBuilder);
+    EXPECT_NE(resolved->warning.find("the no-fock_builder size ladder"), std::string::npos);
+    EXPECT_NE(resolved->warning.find("DEMOTED"), std::string::npos);
+    EXPECT_NE(resolved->reasoning.find("NON-HYBRID"), std::string::npos);
+    EXPECT_NE(resolved->reasoning.find("DEMOTED"), std::string::npos);
+}
+
+TEST(SelectionResolutionTest, EnforcedBoundDoesNotRewriteAnUnrestrictedRun) {
+    // The per-spin legs carry no enforcement option on any builder, so no
+    // builder rewrite could honour the key - the resolution leaves them
+    // exactly as resolved and the driver refuses by name. The empty warning
+    // is the pin: the demotion does not fire on either leg.
+    for (const MethodType method : {MethodType::kUhf, MethodType::kUks})
+    {
+        RunInput input = AutoInput(method);
+        input.method.builder = BuilderKind::kRiJLink;
+        input.method.enforceCertifiedBound = true;
+        SelectionResolutionInput sized = RiJRunnable(562, input);
+        sized.unrestricted = true;
+
+        const auto resolved = ResolveBuilderSelection(sized);
+        ASSERT_TRUE(resolved.has_value()) << resolved.error().message;
+
+        EXPECT_EQ(resolved->kind, BuilderKind::kRiJLink);
+        EXPECT_FALSE(resolved->leanMember);
+        EXPECT_TRUE(resolved->explicitBuilder);
+        EXPECT_TRUE(resolved->warning.empty());
+        EXPECT_EQ(resolved->reasoning.find("DEMOTED"), std::string::npos);
+    }
+}
+
+TEST(SelectionResolutionTest, EnforcedBoundOnTheMachineryMemberChangesNothing) {
+    // The member that implements the enforcement IS the answer: no rewrite,
+    // no warning, and the explicit request is recorded verbatim.
+    RunInput input = AutoInput();
+    input.method.builder = BuilderKind::kDirect;
+    input.method.enforceCertifiedBound = true;
+
+    const auto resolved = ResolveBuilderSelection(LargeInput(DeviceTopology(), input));
+    ASSERT_TRUE(resolved.has_value()) << resolved.error().message;
+
+    EXPECT_EQ(resolved->kind, BuilderKind::kDirect);
+    EXPECT_FALSE(resolved->leanMember);
+    EXPECT_TRUE(resolved->explicitBuilder);
+    EXPECT_TRUE(resolved->warning.empty());
+    EXPECT_EQ(resolved->reasoning.find("DEMOTED"), std::string::npos);
 }

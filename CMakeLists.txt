@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.27)
-project(qcx VERSION 0.1.0 LANGUAGES CXX)
+project(qcx VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -640,6 +640,7 @@ add_subdirectory(symmetry)
 add_subdirectory(basisset)
 
 add_subdirectory(grid)
+add_subdirectory(dispersion)
 add_subdirectory(integrals)
 add_subdirectory(scf)
 add_subdirectory(response)

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <exception>
 #include <limits>
+#include <span>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -35,22 +36,45 @@ constexpr int kCoarseEnough = 64;
 
 } // namespace
 
-qcx::Result<std::vector<double>> SolveSparseSystem(const std::vector<std::size_t>& rowOffsets,
-                                                   const std::vector<std::size_t>& columnIndices,
-                                                   const std::vector<double>& values,
-                                                   const std::vector<double>& rhs,
-                                                   double tolerance) {
-    const auto n = rhs.size();
+qcx::Result<SparseSolveReport> SolveSparseSystemMultipleRhs(
+    const std::vector<std::size_t>& rowOffsets,
+    const std::vector<std::size_t>& columnIndices,
+    const std::vector<double>& values,
+    RightHandSides rhs,
+    double tolerance) {
+    const std::span<const double> rightHandSides = rhs.values;
+    const std::size_t rhsCount = rhs.count;
+
+    if (rhsCount == 0)
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "a solve needs at least one right-hand side"});
+    }
+
+    if (rowOffsets.empty())
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument, "rowOffsets must have size n + 1"});
+    }
+
+    const std::size_t n = rowOffsets.size() - 1;
 
     if (n == 0)
     {
         return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument, "the system is empty"});
     }
 
-    if (rowOffsets.size() != n + 1)
+    if (rhsCount > std::numeric_limits<std::size_t>::max() / n)
     {
         return std::unexpected(
-            qcx::Error{qcx::ErrorCode::kInvalidArgument, "rowOffsets must have size n + 1"});
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       "rhsCount times the system size overflows the size type"});
+    }
+
+    if (rightHandSides.size() != rhsCount * n)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument, "rhs must hold rhsCount * n values"});
     }
 
     if (rowOffsets.front() != 0 || rowOffsets.back() != values.size() ||
@@ -117,30 +141,74 @@ qcx::Result<std::vector<double>> SolveSparseSystem(const std::vector<std::size_t
 
     try
     {
+        // ONE hierarchy for every right-hand side: the construction is the
+        // expensive half, and the loop below reuses it.
         AmgclSolver solver(std::tie(n, ptr, col, values), params);
-        std::vector<double> solution(n, 0.0);
-        const auto solveResult = solver(rhs, solution);
-        const auto error = std::get<1>(solveResult);
 
-        // NaN is NOT convergence: amgcl reports the relative residual, and
-        // "NaN >= tolerance" is false, so a NaN residual used to sail
-        // through as success with a garbage solution (NaN input or a CG
-        // breakdown). Inf is caught by the comparison; NaN needs the
-        // explicit finiteness check (the documented kConvergenceFailure
-        // contract, sparse_solver.hpp).
-        if (!std::isfinite(error) || error >= tolerance)
+        SparseSolveReport report;
+        report.solution.assign(rhsCount * n, 0.0);
+        std::vector<double> side(n, 0.0);
+        std::vector<double> answer(n, 0.0);
+
+        for (std::size_t k = 0; k < rhsCount; ++k)
         {
-            return std::unexpected(qcx::Error{qcx::ErrorCode::kConvergenceFailure,
-                                              "AMGCL did not reach the requested tolerance"});
+            std::copy(rightHandSides.begin() + static_cast<std::ptrdiff_t>(k * n),
+                      rightHandSides.begin() + static_cast<std::ptrdiff_t>((k + 1) * n),
+                      side.begin());
+            std::fill(answer.begin(), answer.end(), 0.0);
+
+            const auto solveResult = solver(side, answer);
+            const auto error = std::get<1>(solveResult);
+            report.iterations += std::get<0>(solveResult);
+
+            // NaN is NOT convergence: amgcl reports the relative residual, and
+            // "NaN >= tolerance" is false, so a NaN residual used to sail
+            // through as success with a garbage solution (NaN input or a CG
+            // breakdown). Inf is caught by the comparison; NaN needs the
+            // explicit finiteness check (the documented kConvergenceFailure
+            // contract, sparse_solver.hpp).
+            if (!std::isfinite(error) || error >= tolerance)
+            {
+                std::string message = "AMGCL did not reach the requested tolerance";
+
+                if (rhsCount > 1)
+                {
+                    message += " for right-hand side " + std::to_string(k);
+                }
+
+                return std::unexpected(
+                    qcx::Error{qcx::ErrorCode::kConvergenceFailure, std::move(message)});
+            }
+
+            report.worstResidual = std::max(report.worstResidual, static_cast<double>(error));
+            std::copy(answer.begin(),
+                      answer.end(),
+                      report.solution.begin() + static_cast<std::ptrdiff_t>(k * n));
         }
 
-        return solution;
+        return report;
     } catch (const std::exception& exception)
     {
         return std::unexpected(
             qcx::Error{qcx::ErrorCode::kInternalError,
                        std::string("AMGCL setup or solve failed: ") + exception.what()});
     }
+}
+
+qcx::Result<std::vector<double>> SolveSparseSystem(const std::vector<std::size_t>& rowOffsets,
+                                                   const std::vector<std::size_t>& columnIndices,
+                                                   const std::vector<double>& values,
+                                                   const std::vector<double>& rhs,
+                                                   double tolerance) {
+    auto solved = SolveSparseSystemMultipleRhs(
+        rowOffsets, columnIndices, values, RightHandSides{rhs, 1}, tolerance);
+
+    if (!solved.has_value())
+    {
+        return std::unexpected(solved.error());
+    }
+
+    return std::move(solved->solution);
 }
 
 } // namespace qcx::linalg

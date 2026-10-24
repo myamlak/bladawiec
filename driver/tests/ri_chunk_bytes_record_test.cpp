@@ -180,10 +180,12 @@ TEST(RiChunkBytesRecordTest, ForcedDiskRungRunDisclosesTheHonour) {
     // The fixture's explicit universal-J aux carries f shells (L = 3), which is
     // the whole point of the row - the hint is read by the DISK rung's own
     // construction - so a build whose 2e engines stop below L = 3 has no run to
-    // record. Skip there (CI lmax=2), as the driver suite's ri_j_link cells do.
+    // record. Skip there (a reduced-size build; CI builds 6), as the driver
+    // suite's ri_j_link cells do.
     if (!qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL (a "
+                        "reduced-size build; CI builds 6)";
     }
 
     // The honoured case has to be reachable from an input file to be pinned at
@@ -233,12 +235,13 @@ force_disk_ri = true
 }
 
 TEST(RiChunkBytesRecordTest, ARiJLinkLadderFitDropsTheHintTheSiblingBlockCallsFit) {
-    // Same fixture, same f shells, same reason as the sibling above: at lmax=2
-    // the ri_j_link run cannot be built, so neither of the two drop states this
-    // block distinguishes is reachable.
+    // Same fixture, same f shells, same reason as the sibling above: below
+    // kMaxEngineL 3 the ri_j_link run cannot be built, so neither of the two
+    // drop states this block distinguishes is reachable.
     if (!qcx::integrals::SupportsL(3))
     {
-        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL (CI lmax=2)";
+        GTEST_SKIP() << "the universal-J aux f shells exceed this build's kMaxEngineL (a "
+                        "reduced-size build; CI builds 6)";
     }
 
     // The second drop state, and the one that justifies this block NOT reusing

@@ -92,7 +92,7 @@ its line endings are LF.
 ### The JSON document
 
 The same result goes to stdout as one JSON document, indented two spaces, with its keys in
-alphabetical order. It carries `schema_version` (currently **36**), and a reader should key on
+alphabetical order. It carries `schema_version` (currently **41**), and a reader should key on
 that: the document grows as the program grows, and a consumer that ignores unknown keys keeps
 working. The opening entries of one run's document, with the entries between them left out:
 
@@ -107,7 +107,7 @@ working. The opening entries of one run's document, with the entries between the
   "converged": true,
   "method": "rhf",
   "molecule_units": "angstrom",
-  "schema_version": 37,
+  "schema_version": 41,
   ...
 ```
 
@@ -119,15 +119,17 @@ Some keys are **always present** and carry `null` when the run did not compute t
 the record stating that the quantity was not measured — never a fabricated zero.
 
 Other keys are **absent** entirely when the run had nothing to say about them: `functional` and
-`xc_grid` on a Hartree-Fock run, every analysis block under `[properties]` that was not asked for,
-the `symmetry` blocks when the labeling stage did not run, and `term_counters`, `certified_bound`
-and `qfmm_model` outside the runs that fill them. Absent `functional` and `xc_grid` mean no density
-functional was named and no grid was built; an absent `symmetry` block means the labeling stage did
-not run. Read absence as the statement, not as a missing value.
+`xc_grid` on a Hartree-Fock run, `dispersion` when the input wrote no `[dispersion]` block, every
+analysis block under `[properties]` that was not asked for, the `symmetry` blocks when the labeling
+stage did not run, and `term_counters`, `certified_bound` and `qfmm_model` outside the runs that
+fill them. Absent `functional` and `xc_grid` mean no density functional was named and no grid was
+built; an absent `dispersion` block means no correction was evaluated (not that one evaluated to
+zero); an absent `symmetry` block means the labeling stage did not run. Read absence as the
+statement, not as a missing value.
 
 | Group | Keys |
 |---|---|
-| identity | `schema_version`, `molecule_units`, `method`, `functional`, `xc_grid` |
+| identity | `schema_version`, `molecule_units`, `method`, `functional`, `xc_grid`, `dispersion` |
 | builder | `builder_axes`, `resources_resolved` |
 | SCF | `converged`, `iterations`, `total_energy_hartree`, `electronic_energy_hartree`, `energy_delta_hartree`, `rms_density_delta`, `spin_squared`, `num_removed_overlap_directions` |
 | symmetry | `symmetry`, `symmetry_beta`, `symmetry_blocking` |
@@ -146,6 +148,13 @@ gets `legacy_spelling` and `deprecated_key` there, so the record shows which voc
 was written in. The resolution's own reasoning lives under `resources_resolved.selection`, beside
 the caps that were applied (`memory_cap_gib`, `thread_cap`, `in_process_cap_applied`, and
 `cap_note` when the in-process cap was not applied).
+
+`total_energy_hartree` is the electronic energy plus the nuclear repulsion, plus the `dispersion`
+correction when the run wrote a `[dispersion]` block. The electronic energy and the convergence
+residuals never include it: the SCF loop is dispersion-free, so a correction never changes what the
+gate compared. The `dispersion` block records the resolved parameter set the run consumed (form,
+parameter source, the source's name and the form's own values) and its own
+`energy_hartree` — the number added to the total once.
 
 The SCF keys qualify each other. `converged` is a bare boolean and does not say what it stood on,
 so `energy_delta_hartree` and `rms_density_delta` carry the residuals the gate actually compared:

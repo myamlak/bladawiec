@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <limits>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace qcx::integrals {
@@ -322,6 +323,130 @@ inline std::vector<ScreenedQuartet> RetainedQuartets(std::span<const TwoElectron
     }
 
     return retained;
+}
+
+/// A screening structure carried from one geometry to the next: one pair
+/// value bound and one pair derivative bound per canonical pair, the largest
+/// atom motion the caller will allow between the two geometries, and the
+/// threshold the retainer reads (zero keeps the caller's preset threshold).
+///
+/// The two vectors are the BuildFockDerivativeWarmStart product - the raw
+/// columns of ComputeTwoElectronPairBounds - so a caller that already holds a
+/// screening structure holds exactly these numbers. The motion is the
+/// caller's contract: LiftFockDerivativeWarmStart widens each value bound by
+/// the motion it promises, and a motion the actual displacement exceeds makes
+/// the lifted bound no bound at all.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct FockDerivativeWarmStart {
+    std::vector<double> pairValues; ///< The pair value bounds, canonical pair order.
+    std::vector<double> pairDerivatives; ///< The pair derivative bounds, same order.
+    /// The largest displacement, in Bohr, the caller will move any atom
+    /// between the geometry these bounds were built at and the one they are
+    /// lifted to. Zero lifts exactly.
+    double maxAtomMotionBohr = 0.0;
+    /// The screen threshold the retainer reads. Zero (the default) keeps the
+    /// caller's preset threshold; a positive value overrides it.
+    double threshold = 0.0;
+};
+
+/// Builds a screening structure for a geometry: the pair bounds in canonical
+/// pair order plus a threshold override (zero by default).
+/// \param molecule Molecule providing the atom coordinates (Bohr).
+/// \param basisSet Basis set; every shell must satisfy l <= kMaxEngineL
+/// (kUnimplemented otherwise).
+/// \param threshold The screen threshold to carry; zero keeps the consumer's
+/// preset threshold.
+/// \returns The screening structure, or the pair-bound builder's error.
+/// \ingroup qcx-integrals
+inline qcx::Result<FockDerivativeWarmStart> BuildFockDerivativeWarmStart(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basisSet,
+    double threshold = 0.0) {
+    auto bounds = ComputeTwoElectronPairBounds(molecule, basisSet);
+
+    if (!bounds.has_value())
+    {
+        return std::unexpected(bounds.error());
+    }
+
+    FockDerivativeWarmStart warmStart;
+    warmStart.pairValues.reserve(bounds->size());
+    warmStart.pairDerivatives.reserve(bounds->size());
+
+    for (const TwoElectronPairBound& bound : *bounds)
+    {
+        warmStart.pairValues.push_back(bound.value);
+        warmStart.pairDerivatives.push_back(bound.derivative);
+    }
+
+    warmStart.threshold = threshold;
+    return warmStart;
+}
+
+/// Lifts a carried screening structure to a displaced geometry: each pair's
+/// value bound grows by the motion the pair's own centre coordinates allow,
+/// six axes times the pair's derivative bound, while the derivative bound is
+/// carried unchanged.
+///
+/// The lift is first order in the motion: it is a bound only for a motion the
+/// caller's maxAtomMotionBohr actually covers, and a pair whose carried
+/// bounds are infinite (no evaluable diagonal block) stays unbounded. The
+/// derivative arm is not widened - the structure holds no second-derivative
+/// estimate to widen it with - so a caller relying on the derivative arm
+/// alone accepts the same first-order contract.
+/// \param warmStart The carried screening structure.
+/// \param pairCount The canonical pair count of the target geometry.
+/// \returns One bound per canonical pair, or an Error (kInvalidArgument) when
+/// the carried vectors do not carry one entry per pair or the motion and
+/// threshold are not finite and non-negative.
+/// \ingroup qcx-integrals
+inline qcx::Result<std::vector<TwoElectronPairBound>> LiftFockDerivativeWarmStart(
+    const FockDerivativeWarmStart& warmStart, std::size_t pairCount) {
+    if (warmStart.pairValues.size() != pairCount || warmStart.pairDerivatives.size() != pairCount)
+    {
+        return std::unexpected(qcx::Error{
+            qcx::ErrorCode::kInvalidArgument,
+            "the Fock derivative warm start holds " + std::to_string(warmStart.pairValues.size()) +
+                " pair values and " + std::to_string(warmStart.pairDerivatives.size()) +
+                " pair derivatives, not the " + std::to_string(pairCount) +
+                " canonical pairs of this basis set"});
+    }
+
+    if (!std::isfinite(warmStart.maxAtomMotionBohr) || warmStart.maxAtomMotionBohr < 0.0)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       "the Fock derivative warm start's atom motion is not a finite "
+                       "non-negative displacement in Bohr"});
+    }
+
+    if (!std::isfinite(warmStart.threshold) || warmStart.threshold < 0.0)
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "the Fock derivative warm start's threshold is not "
+                                          "finite and non-negative"});
+    }
+
+    std::vector<TwoElectronPairBound> lifted(pairCount);
+
+    for (std::size_t pair = 0; pair < pairCount; ++pair)
+    {
+        const double value = warmStart.pairValues[pair];
+        const double derivative = warmStart.pairDerivatives[pair];
+
+        if (!std::isfinite(value) || !std::isfinite(derivative))
+        {
+            lifted[pair] = TwoElectronPairBound{std::numeric_limits<double>::infinity(),
+                                                std::numeric_limits<double>::infinity()};
+            continue;
+        }
+
+        lifted[pair].value = value + 6.0 * warmStart.maxAtomMotionBohr * std::abs(derivative);
+        lifted[pair].derivative = std::abs(derivative);
+    }
+
+    return lifted;
 }
 
 } // namespace qcx::integrals

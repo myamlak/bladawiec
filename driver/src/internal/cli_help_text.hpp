@@ -106,8 +106,12 @@ input file keys (a key marked required must be written):
     accuracy = "kNormal"            required; kLoose | kNormal | kTight
     enforce_certified_bound = false  optional; enforce the memory-budget bound
                                     over the certified fp32 lane's routing.
-                                    Honoured by the direct family's machinery
-                                    member only, refused on every other route
+                                    Honoured by the restricted direct family's
+                                    machinery member: a restricted run resolved
+                                    to any other builder is demoted to that
+                                    member, and the divergence is reported.
+                                    Refused on uhf and uks, whose wiring
+                                    carries no enforcement on any route
     force_certified_lane = false    optional; ask for the certified fp32 lane
                                     itself. Honoured by the direct family's
                                     machinery member only, and refused at
@@ -133,20 +137,37 @@ input file keys (a key marked required must be written):
                                     = the built-in threshold. Read by
                                     fock_builder = "qfmm"; refused elsewhere
     ri_tensor_mode = "auto"         optional; auto | disk; the RI-J ladder's
-                                    rung: "disk" selects the disk rung, wired
-                                    on the restricted ri_j_link leg, and an
-                                    absent key leaves the rung to the engine's
-                                    own estimate. The retired word "forced_disk"
-                                    is refused here, with [diagnostics]
-                                    force_disk_ri as its remedy
+                                    disk-rung selector, wired on the restricted
+                                    ri_j_link leg. Disk is entered ONLY when a
+                                    run asks for it: an absent key (or "auto")
+                                    never selects it - the engine's own
+                                    estimate chooses between the in-memory
+                                    rungs alone - and force_disk_ri below is
+                                    the other entrance. The retired word
+                                    "forced_disk" is refused here, with
+                                    [diagnostics] force_disk_ri as its remedy
     ri_orbit_expansion = false      optional; the RI-J symmetry orbit expansion
                                     (its 3-center task grid). Read by the
                                     ri_j_link family
     eri_cache_store = ""            optional; a path; the disk-tier ERI store -
                                     a non-empty path stores the run's ERI
-                                    batches there. Read on the restricted lanes'
-                                    direct machinery member; refused on uhf and
-                                    uks
+                                    batches there. Read by the direct family's
+                                    machinery member, restricted and
+                                    unrestricted; demoted, with the reason
+                                    recorded, where that member is not wired;
+                                    refused on an unrestricted run of another
+                                    family
+    eri_cache_bytes = 1073741824    optional; >= 1; the in-memory ERI cache
+                                    budget in bytes. Read by the direct
+                                    family's machinery member, restricted and
+                                    unrestricted: it overrides the grant the
+                                    memory cap derives on the unrestricted
+                                    legs, and turns the cache on for the
+                                    restricted legs, whose default is off.
+                                    Absent = those legs' own defaults.
+                                    Refused on other routes and at
+                                    memory_cap_gib = 0, where no workspace
+                                    budget exists to clamp the grant against
     ri_chunk_bytes = 268435456      optional; >= 1; the disk rung's chunk size
                                     in bytes; absent = 268435456 (256 MiB), the
                                     engine's own target. Dropped, with no
@@ -242,6 +263,29 @@ input file keys (a key marked required must be written):
                                     and is rhf only
     restart_path = ""               a path; the checkpoint to seed from;
                                     required when type = "restart"
+[dispersion]
+    form = "d3"                     d3 | d4; the London dispersion correction
+                                    added to the total energy after the SCF.
+                                    Absent = no correction
+    preset = "b3lyp"                a parameter-set name from the selected
+                                    form's table; one source only, so it is
+                                    refused beside a complete numeric set
+    s6 = 1.0                        optional; finite; the global C6 scale
+    s8 = 1.0                        optional; finite; the C8 scale
+    rs6 = 1.0                       optional; finite; the R^6 damping scale
+    alpha6 = 14.0                   optional; finite; the R^6 damping exponent
+    rs8 = 1.0                       optional; finite; the R^8 damping scale
+    alpha8 = 16.0                   optional; finite; the R^8 damping exponent
+    a1 = 0.0                        optional; finite; the D4 Becke-Johnson
+                                    damping scale
+    a2 = 0.0                        optional; finite; the D4 Becke-Johnson
+                                    damping offset, in Bohr
+    s9 = (refused)                  refused: the shipped D4 energy is the
+                                    Becke-Johnson two-body term (s6, s8, a1,
+                                    a2); a three-body term is not implemented
+    alp = (refused)                 refused: the shipped D4 energy is the
+                                    Becke-Johnson two-body term, which has no
+                                    element-dependent exponent
 [properties]
     hirshfeld = false               bool; Hirshfeld stockholder charges (the
                                     analysis needs Z <= 10)
@@ -264,6 +308,15 @@ input file keys (a key marked required must be written):
                                     exchange-correlation term of the gradient
                                     only: the density is held fixed, so this is
                                     not a total nuclear gradient (Kohn-Sham only)
+    total_gradient = false          bool; the total analytic nuclear gradient of
+                                    a converged closed-shell reference, in
+                                    Hartree/Bohr per atom and direction, with
+                                    the electronic terms, the nuclear repulsion
+                                    and any dispersion correction kept apart.
+                                    rhf only: refused on uhf and the Kohn-Sham
+                                    lanes, when the SCF did not converge, when
+                                    the reference is not stationary, and for a
+                                    d4 dispersion gradient
     nocv_fragments = [[0, 1]]       optional; one atom-index array per fragment
                                     (the indices count the atom rows as
                                     written). ETS-NOCV, closed-shell only

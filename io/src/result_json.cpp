@@ -132,6 +132,28 @@ std::string SerializeRunResultJson(const RunResult& result) {
     // never a block of defaults standing in for a grid that never existed).
     document["method"] = ToString(result.method);
 
+    // The initial guess (schema 42): the requested word when the file wrote
+    // one, the word the run actually ran, and the checkpoint a restart read.
+    // `ran` is always present (every SCF started from a guess); `type` only
+    // when [guess] type was written (an absent key is not a request), and
+    // `restart_path` only when the run seeded from one - the null-honesty
+    // rule, never an empty string standing in for "none".
+    {
+        nlohmann::json block{{"ran", result.guess.ran}};
+
+        if (result.guess.type.has_value())
+        {
+            block["type"] = *result.guess.type;
+        }
+
+        if (result.guess.restartPath.has_value())
+        {
+            block["restart_path"] = *result.guess.restartPath;
+        }
+
+        document["guess"] = block;
+    }
+
     if (result.functional.has_value())
     {
         document["functional"] = *result.functional;
@@ -146,6 +168,27 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                              {"radial_exponent", grid.radialExponent},
                                              {"trim_weight", grid.trimWeight},
                                              {"block_target", grid.blockTarget}};
+    }
+
+    // The dispersion correction (schema 41): the resolved form, the source of
+    // its parameters, the values the kernel consumed and the energy it
+    // contributed to `total_energy_hartree`. Written exactly when the run
+    // applied one - a run that wrote no [dispersion] block has no correction
+    // to record, and an absent key is that statement (the null-honesty rule).
+    if (result.dispersion.has_value())
+    {
+        const auto& dispersion = *result.dispersion;
+        nlohmann::json block{{"form", dispersion.form},
+                             {"parameter_source", dispersion.parameterSource},
+                             {"parameters", dispersion.parameters},
+                             {"energy_hartree", dispersion.energyHartree}};
+
+        if (dispersion.parameterSet.has_value())
+        {
+            block["parameter_set"] = *dispersion.parameterSet;
+        }
+
+        document["dispersion"] = block;
     }
 
     document["converged"] = result.converged;
@@ -311,6 +354,71 @@ std::string SerializeRunResultJson(const RunResult& result) {
             document["xc_gradient"] = nlohmann::json{{"gradient", xcGradient.gradient},
                                                      {"energy_hartree", xcGradient.energyHartree}};
         }
+
+        // The total analytic nuclear gradient (schema 45): absent unless the
+        // run asked for it, so an absent key is "no gradient was computed" and
+        // never "the gradient was zero". Inside the block, the dispersion term
+        // and its energy follow the same rule one level down: a correction
+        // nobody requested is absent, never a zero-filled vector or a
+        // fabricated 0.0 that a consumer could read as a computed
+        // contribution.
+        if (result.properties->totalGradient.has_value())
+        {
+            const auto& total = *result.properties->totalGradient;
+
+            nlohmann::json terms{{"one_electron", total.terms.oneElectron},
+                                 {"nuclear_repulsion", total.terms.nuclearRepulsion},
+                                 {"coulomb", total.terms.coulomb},
+                                 {"exchange", total.terms.exchange},
+                                 {"response", total.terms.response}};
+
+            if (total.terms.dispersion.has_value())
+            {
+                terms["dispersion"] = *total.terms.dispersion;
+            }
+
+            nlohmann::json energies{
+                {"electronic_hartree", total.energies.electronic},
+                {"reconstructed_electronic_hartree", total.energies.reconstructedElectronic},
+                {"nuclear_repulsion_hartree", total.energies.nuclearRepulsion},
+                {"total_hartree", total.energies.total}};
+
+            if (total.energies.dispersion.has_value())
+            {
+                energies["dispersion_hartree"] = *total.energies.dispersion;
+            }
+
+            const nlohmann::json oneElectronCounts{
+                {"orbital_pairs", total.counts.oneElectron.orbitalPairs},
+                {"overlap_tuples", total.counts.oneElectron.overlapTuples},
+                {"kinetic_tuples", total.counts.oneElectron.kineticTuples},
+                {"nuclear_tuples", total.counts.oneElectron.nuclearTuples}};
+            const nlohmann::json twoElectronCounts{
+                {"bra_pairs", total.counts.twoElectron.braPairs},
+                {"ket_pairs", total.counts.twoElectron.ketPairs},
+                {"quartets", total.counts.twoElectron.quartets},
+                {"screened_quartets", total.counts.twoElectron.screenedQuartets}};
+
+            document["total_gradient"] = nlohmann::json{
+                {"gradient", total.gradient},
+                {"terms", terms},
+                {"energies", energies},
+                {"sizes",
+                 nlohmann::json{{"atom_count", total.sizes.atomCount},
+                                {"num_basis_functions", total.sizes.numBasisFunctions},
+                                {"num_occupied", total.sizes.numOccupied},
+                                {"num_virtual", total.sizes.numVirtual}}},
+                {"counts",
+                 nlohmann::json{{"one_electron", oneElectronCounts},
+                                {"two_electron", twoElectronCounts}}},
+                {"response",
+                 nlohmann::json{{"solves", total.response.solves},
+                                {"warm_started", total.response.warmStarted},
+                                {"iterations", total.response.iterations}}},
+                {"stationarity_residual", total.stationarityResidual},
+                {"energy_residual_hartree", total.energyResidualHartree},
+                {"right_hand_side_terms", total.rightHandSideTerms}};
+        }
     } else
     {
         // Same honesty policy as spin_squared: null means "not computed",
@@ -382,10 +490,19 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                                      {"last_call_ha", bound.lastCallHa},
                                                      {"max_call_ha", bound.maxCallHa},
                                                      {"enforced", bound.enforced},
+                                                     {"demoted", bound.demoted},
                                                      {"budget_ha", bound.budgetHa},
                                                      {"routed_ha", bound.routedHa},
                                                      {"routed_quartets", bound.routedQuartets},
                                                      {"fell_back_to_fp64", bound.fellBackToFp64}};
+
+        // The reason rides the verdict, never on its own (the eri_store
+        // block's rule): a reason on a call that was not demoted would be a
+        // sentence with nothing to explain.
+        if (bound.demoted)
+        {
+            document["certified_bound"]["demoted_reason"] = bound.demotedReason;
+        }
     }
 
     // The QFMM model block (schema 29): what the composed-QFMM builder's
@@ -627,6 +744,29 @@ std::string SerializeRunResultJson(const RunResult& result) {
         }
 
         resourcesBlock["eri_store"] = std::move(storeBlock);
+    }
+
+    // The eri_cache request record (schema 43): written exactly when the
+    // input wrote method.eri_cache_bytes. The requested and granted budgets
+    // are always written (a request record that did not say what was asked
+    // for could not pair it with what ran); `effective_bytes` is written
+    // when the engine made a mode decision, 0 included - a fired budget of
+    // 0 is the true "the cache did not engage" reading, never an absence;
+    // `clamped` is always written so the comparison is readable without
+    // re-deriving it.
+    if (resources.eriCache.has_value())
+    {
+        const RunEriCache& cache = *resources.eriCache;
+        nlohmann::json cacheBlock = {{"requested_bytes", cache.requestedBytes},
+                                     {"granted_bytes", cache.grantedBytes},
+                                     {"clamped", cache.clamped}};
+
+        if (cache.effectiveBytes.has_value())
+        {
+            cacheBlock["effective_bytes"] = *cache.effectiveBytes;
+        }
+
+        resourcesBlock["eri_cache"] = std::move(cacheBlock);
     }
 
     // The compute-profile block (schema 20): the hardware input the

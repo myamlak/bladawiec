@@ -89,10 +89,14 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/selection_reporting_test.cpp
         tests/ks_composition_test.cpp
         tests/ks_gradient_test.cpp
+        tests/ks_tau_test.cpp
         tests/ks_input_file_test.cpp
         tests/ri_chunk_bytes_record_test.cpp
         tests/eri_store_record_test.cpp
-        tests/run_input_help_test.cpp)
+        tests/eri_cache_record_test.cpp
+        tests/run_input_help_test.cpp
+        tests/dispersion_input_test.cpp
+        tests/total_gradient_test.cpp)
     # src PRIVATE: ks_composition_test.cpp includes the driver-internal
     # composition header (src/internal/ks_composition.hpp) to pin its
     # arithmetic against halves whose numbers are written down in the test.
@@ -106,8 +110,12 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     # the driver library uses for data/basis, one level up.
     target_compile_definitions(qcx-driver-tests PRIVATE
         QcxSourceDir="${CMAKE_SOURCE_DIR}")
+    # json (the root CMakeLists' nlohmann INTERFACE target) is what
+    # total_gradient_test.cpp parses the emitted document with: the round-trip
+    # claim is about the JSON TEXT a consumer reads, not only the C++ record,
+    # and qcx-io keeps nlohmann PRIVATE, so the target is named here.
     target_link_libraries(qcx-driver-tests PRIVATE
-        qcx-driver qcx-grid qcx-test-fixtures gtest gtest_main)
+        qcx-driver qcx-grid qcx-test-fixtures json gtest gtest_main)
 
     if (QCX_ENABLE_IO)
         # QcxHasStorage comes in through qcx-driver (PUBLIC), but the

@@ -12,12 +12,14 @@
 #include "hf_sto3g.hpp"
 #include "internal/md_batch.hpp"
 #include "internal/md_boys.hpp"
+#include "internal/md_engine.hpp"
 #include "internal/md_one_electron.hpp"
 #include "qcx/backend/cpu_backend.hpp"
 #include "qcx/integrals/eri_batch.hpp"
 #include "qcx/integrals/eri_dense.hpp"
 #include "qcx/integrals/limits.hpp"
 #include "qcx/integrals/one_electron.hpp"
+#include "qcx/integrals/ri_engine.hpp"
 #include "qcx/integrals/shell_pairs.hpp"
 #include "shellset_fixture.hpp"
 #include "unfolded_reference.hpp"
@@ -447,10 +449,12 @@ TEST(EriBatchTest, ShellsetMatchesMpmath) {
 }
 
 TEST(EriBatchTest, HighLSpotMatchesMpmath) {
-    // The high-l spot grid (tools/gen_md_reference.py): the l = 3..6
-    // classes - f/h on H at the origin, g/i on He at (1.4, 0, 0), single
-    // primitives, spherical only - covering the (6,6) i-shell class at a
-    // fixed pattern of function indices per canonical quartet.
+    // The high-l spot grid (tools/gen_md_reference.py): shells f/h on H at
+    // the origin and g/i on He at (1.4, 0, 0), single primitives, spherical
+    // only. The grid uses the f/g/h shells only, so the classes it pins are
+    // (6,6), (7,7), (8,8), (9,9) and (10,10); the i shell is in the basis but
+    // in no grid quartet, and totals 11 and 12 have no independent reference
+    // (FullClassMatrixCoversTheSupportedBound exercises them without one).
     if (qcx::testing::IsFastOnlyMode())
     {
         GTEST_SKIP() << "heavy numerical test: Release-only";
@@ -614,6 +618,201 @@ END
     for (std::size_t i = 0; i < batch->values.size(); ++i)
     {
         EXPECT_EQ(again->values[i], batch->values[i]) << "element " << i;
+    }
+}
+
+TEST(EriBatchTest, FullClassMatrixCoversTheSupportedBound) {
+    // The shipped bound is l = 6: the 2e triangle covers every class
+    // (Lbra <= Lket <= 12) and the 3c RI rectangle every class
+    // (Lket <= 6, Lbra <= 12). The grid tests stop at (10,10), so totals 11
+    // and 12 had no routine exercise at all. There is no independent
+    // numerical reference for those totals; this pins the instantiation
+    // matrix and the dispatch - the reachability a missing class fails -
+    // and computes every triangle class once, checking the values are
+    // finite. The 3c rectangle's tensor adds the metric solve and the
+    // (u,v) symmetry. Release-only: the transform walks are long in Debug.
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    if (!qcx::integrals::SupportsL(6))
+    {
+        GTEST_SKIP() << "this build's kMaxEngineL is below 6";
+    }
+
+    // The instantiation matrix first: every class the capability needs has
+    // a kernel at the shipped ceiling. 91 triangle classes plus 63 rectangle
+    // classes with Lbra > Lket = 154, the shipped count.
+    std::size_t classes = 0;
+
+    for (int lBra = 0; lBra <= 12; ++lBra)
+    {
+        for (int lKet = 0; lKet <= 12; ++lKet)
+        {
+            const bool triangle = lBra <= lKet;
+            const bool rectangle = lKet <= 6;
+
+            if (!triangle && !rectangle)
+            {
+                continue;
+            }
+
+            const qcx::integrals::internal::MdClassFnF64* slot =
+                qcx::integrals::internal::ClassSpecF64(lBra, lKet);
+            ASSERT_NE(slot, nullptr)
+                << "class (" << lBra << "," << lKet << ") is out of table range";
+
+            // The slot itself is what carries the kernel: ClassSpecF64 returns
+            // the address of the table entry whenever the indices are in range,
+            // so a missing class is a null entry, not a null slot pointer.
+            EXPECT_NE(*slot, nullptr) << "class (" << lBra << "," << lKet << ") has no kernel";
+#if defined(QcxIntegralsF32) && (QcxIntegralsF32 == 1)
+            // The certified fp32 lane is part of the shipped program, and its
+            // table carries the same class matrix.
+            const qcx::integrals::internal::MdClassFnF32* slot32 =
+                qcx::integrals::internal::ClassSpecF32(lBra, lKet);
+            ASSERT_NE(slot32, nullptr)
+                << "class (" << lBra << "," << lKet << ") is out of table range";
+            EXPECT_NE(*slot32, nullptr)
+                << "class (" << lBra << "," << lKet << ") has no fp32 kernel";
+#endif
+            ++classes;
+        }
+    }
+
+    EXPECT_EQ(classes, 154u);
+
+    // s..i on both centers: single primitives with distinct exponents, spherical.
+    static constexpr std::string_view kFullBasis = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      2.0000000000E+00       1.0000000000E+00
+H    P
+      1.6000000000E+00       1.0000000000E+00
+H    D
+      1.3000000000E+00       1.0000000000E+00
+H    F
+      1.0000000000E+00       1.0000000000E+00
+H    G
+      8.0000000000E-01       1.0000000000E+00
+H    H
+      6.0000000000E-01       1.0000000000E+00
+H    I
+      4.5000000000E-01       1.0000000000E+00
+He   S
+      1.8000000000E+00       1.0000000000E+00
+He   P
+      1.4000000000E+00       1.0000000000E+00
+He   D
+      1.1000000000E+00       1.0000000000E+00
+He   F
+      9.0000000000E-01       1.0000000000E+00
+He   G
+      7.0000000000E-01       1.0000000000E+00
+He   H
+      5.5000000000E-01       1.0000000000E+00
+He   I
+      4.2000000000E-01       1.0000000000E+00
+END
+)";
+
+    auto basis = qcx::basisset::ParseNwchemText(kFullBasis);
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = qcx::testing::MakeShellsetMolecule();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto pairList = qcx::integrals::BuildShellPairs(*molecule, *basis);
+    ASSERT_TRUE(pairList.has_value()) << pairList.error().message;
+    ASSERT_EQ(pairList->shells.size(), 14u);
+
+    // H carries shells 0..6 (l = 0..6) and He 7..13, in input order.
+    for (int l = 0; l <= 6; ++l)
+    {
+        EXPECT_EQ(pairList->shells[static_cast<std::size_t>(l)].angularMomentum, l);
+        EXPECT_EQ(pairList->shells[static_cast<std::size_t>(7 + l)].angularMomentum, l);
+    }
+
+    // One shell of each l on H gives any bra or ket total 0..12: (T/2,
+    // T - T/2), both halves at most 6.
+    std::vector<qcx::integrals::ShellQuartet> quartets;
+    std::vector<std::pair<int, int>> requested;
+
+    for (int ketL = 0; ketL <= 12; ++ketL)
+    {
+        for (int braL = 0; braL <= ketL; ++braL)
+        {
+            const auto braLo = static_cast<std::size_t>(braL / 2);
+            const auto braHi = static_cast<std::size_t>(braL - braL / 2);
+            const auto ketLo = static_cast<std::size_t>(ketL / 2);
+            const auto ketHi = static_cast<std::size_t>(ketL - ketL / 2);
+            quartets.push_back({braLo, braHi, ketLo, ketHi});
+            requested.emplace_back(braL, ketL);
+        }
+    }
+
+    auto canonical = qcx::integrals::CanonicalizeQuartetOrder(*pairList, quartets);
+    ASSERT_TRUE(canonical.has_value()) << canonical.error().message;
+    ASSERT_EQ(canonical->size(), quartets.size());
+
+    std::vector<std::pair<int, int>> covered;
+
+    for (const qcx::integrals::CanonicalQuartetInfo& info : *canonical)
+    {
+        ASSERT_LE(info.lBra, info.lKet);
+        covered.emplace_back(info.lBra, info.lKet);
+    }
+
+    std::sort(covered.begin(), covered.end());
+    std::sort(requested.begin(), requested.end());
+    EXPECT_EQ(covered, requested);
+    EXPECT_EQ(covered.size(), 91u); // (13 * 14) / 2 classes, 0 <= bra <= ket <= 12.
+
+    auto batch = qcx::integrals::ComputeEriBatch(*molecule, *basis, quartets);
+    ASSERT_TRUE(batch.has_value()) << batch.error().message;
+    ASSERT_EQ(batch->computed.size(), quartets.size());
+
+    std::size_t expectedValues = 0;
+
+    for (const qcx::integrals::ShellQuartet& quartet : batch->computed)
+    {
+        expectedValues += qcx::integrals::ShellFunctionCount(pairList->shells[quartet.i]) *
+                          qcx::integrals::ShellFunctionCount(pairList->shells[quartet.j]) *
+                          qcx::integrals::ShellFunctionCount(pairList->shells[quartet.k]) *
+                          qcx::integrals::ShellFunctionCount(pairList->shells[quartet.l]);
+    }
+
+    ASSERT_EQ(batch->values.size(), expectedValues);
+    ASSERT_GT(batch->values.size(), 0u);
+
+    for (const double value : batch->values)
+    {
+        EXPECT_TRUE(std::isfinite(value));
+    }
+
+    // The 3c rectangle: the same basis as the orbital and the auxiliary set
+    // reaches every class (Lbra <= 12, Lket <= 6). The instantiation check
+    // above covers the kernels; the tensor adds the metric solve and the
+    // element checks below, and refuses by name if a class it needs is absent.
+    qcx::integrals::RiEngineOptions riOptions;
+    riOptions.accuracy = qcx::integrals::AccuracyPreset::kTight;
+    auto riTensor = qcx::integrals::BuildRiTensor(*molecule, *basis, *basis, riOptions);
+    ASSERT_TRUE(riTensor.has_value()) << riTensor.error().message;
+    const auto shape = riTensor->Shape();
+    ASSERT_EQ(shape[0], 98u); // 2 * (1 + 3 + 5 + 7 + 9 + 11 + 13)
+    ASSERT_EQ(shape[1], 98u);
+    ASSERT_EQ(shape[2], 98u);
+
+    for (std::size_t p = 0; p < shape[2]; ++p)
+    {
+        for (std::size_t u = 0; u < shape[0]; ++u)
+        {
+            for (std::size_t v = u; v < shape[1]; ++v)
+            {
+                const double forward = (*riTensor)(u, v, p);
+                EXPECT_TRUE(std::isfinite(forward));
+                EXPECT_NEAR(
+                    forward, (*riTensor)(v, u, p), 1e-12 * std::max(1.0, std::abs(forward)));
+            }
+        }
     }
 }
 

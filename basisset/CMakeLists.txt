@@ -10,6 +10,38 @@ target_precompile_headers(qcx-basisset PRIVATE
     <qcx/basisset/basis_set.hpp>
     <qcx/molecule/elements.hpp>)
 
+# Apple's libc++ provides no usable floating-point std::from_chars: the
+# integer overloads are deleted for floating types (Xcode 16.4). The parser
+# probes its own call instead of reading a feature-test macro, because a
+# library that declares the floating overloads but deletes them still ships
+# <charconv>, so only the call itself answers the question. Where it does not
+# compile, basis_set.cpp parses with std::strtod under the same strictness.
+# -DQCX_HAS_FLOATING_FROM_CHARS=ON|OFF overrides the probe; OFF is how the
+# fallback is exercised on a host whose standard library has the function.
+include(CheckCXXSourceCompiles)
+
+if (NOT DEFINED QCX_HAS_FLOATING_FROM_CHARS)
+    check_cxx_source_compiles("
+#include <charconv>
+#include <system_error>
+int main()
+{
+    double value = 0.0;
+    const auto result = std::from_chars(\"0.5\", \"0.5\" + 3, value);
+    return result.ec == std::errc{} ? 0 : 1;
+}
+" _qcxBasissetFloatingFromChars)
+
+    set(QCX_HAS_FLOATING_FROM_CHARS ${_qcxBasissetFloatingFromChars} CACHE INTERNAL
+        "True when the standard library provides a usable floating-point std::from_chars")
+endif()
+
+if (QCX_HAS_FLOATING_FROM_CHARS)
+    target_compile_definitions(qcx-basisset PRIVATE QCX_HAS_FLOATING_FROM_CHARS=1)
+else()
+    target_compile_definitions(qcx-basisset PRIVATE QCX_HAS_FLOATING_FROM_CHARS=0)
+endif()
+
 if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-basisset-tests tests/basis_set_test.cpp)
     target_link_libraries(qcx-basisset-tests PRIVATE qcx-basisset gtest gtest_main)

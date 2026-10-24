@@ -3362,28 +3362,37 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
                        "the precision ladder does not compose with the class-aware reduction yet"});
     }
 
-    // The enforcement's own route refusals: an option that cannot be
-    // honoured on this route fails loudly instead of being dropped. The
-    // LightPath (the chunked low-memory route) screens per chunk, so its
-    // routed sum is a per-window quantity, not the build's; the engaged
-    // ladder already carries its own budget contract (the schedule's
-    // committed coarse sum against the delivery remainder), and running
-    // both would give one build two budgets.
+    // The enforcement's own route handling: an option that cannot be
+    // honoured on this route is DEMOTED, not refused - the build records why
+    // the comparison is skipped and runs exactly as the option's absence
+    // would produce (the disclosure rule's demote-with-disclosure arm; a
+    // refusal would make the key unusable on the disk rung and on the
+    // ladder). The LightPath (the chunked low-memory route) screens per
+    // chunk, so its routed sum is a per-window quantity, not the build's;
+    // the engaged ladder already carries its own budget contract (the
+    // schedule's committed coarse sum against the delivery remainder), and
+    // running both would give one build two budgets. The record is declared
+    // here because these checks settle it before the comparison block below
+    // runs.
+    CertifiedBudgetOutcome budgetOutcome;
+
     if (state._options.enforceCertifiedBoundBudget && lightMode)
     {
-        return std::unexpected(
-            qcx::Error{qcx::ErrorCode::kUnimplemented,
-                       "the certified-bound budget enforcement does not compose with the "
-                       "LightPath chunk loop yet"});
+        budgetOutcome.demoted = true;
+        budgetOutcome.demotedReason =
+            "the certified-bound budget enforcement does not compose with the LightPath chunk "
+            "loop: the chunk loop screens per chunk, so its routed sum is a per-window "
+            "quantity, not the build's; the comparison is skipped and the build runs exactly "
+            "as an enforcement-off build";
     }
 
     if (state._options.enforceCertifiedBoundBudget && ladderEngaged)
     {
-        return std::unexpected(
-            qcx::Error{qcx::ErrorCode::kUnimplemented,
-                       "the certified-bound budget enforcement does not compose with an "
-                       "engaged precision ladder (the ladder's own budget contract governs "
-                       "this path)"});
+        budgetOutcome.demoted = true;
+        budgetOutcome.demotedReason =
+            "the certified-bound budget enforcement does not compose with an engaged precision "
+            "ladder (the ladder's own budget contract governs this path): the comparison is "
+            "skipped and the build runs exactly as an enforcement-off build";
     }
 
     // The screened canonical quartet list: Schwarz (precomputed as the
@@ -3473,16 +3482,14 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
     // is the only one available before the build runs, and it is the
     // smaller of the two, so the check is the most favorable one the lane
     // can be given.
-    CertifiedBudgetOutcome budgetOutcome;
-
-    if (state._options.enforceCertifiedBoundBudget)
+    if (state._options.enforceCertifiedBoundBudget && !budgetOutcome.demoted)
     {
         budgetOutcome.enforced = true;
 
-        // A lane that is off anyway (kTight's zero gate, the flag, the
-        // ladder) has nothing to enforce: the check runs vacuously and
-        // the sums stay at their observed-zero defaults - which is the
-        // truth for a build that routed no quartet.
+        // A lane that is off anyway (kTight's zero gate, the flag) has
+        // nothing to enforce: the check runs vacuously and the sums stay at
+        // their observed-zero defaults - which is the truth for a build that
+        // routed no quartet.
         if (certifiedLane)
         {
             const auto& offsets = state._neighborPattern->RowOffsets().HostView();

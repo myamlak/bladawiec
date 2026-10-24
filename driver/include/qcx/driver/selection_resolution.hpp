@@ -63,9 +63,24 @@
 /// Kohn-Sham through the same half-mode flags), so the walk always
 /// terminates and nothing refuses here.
 ///
-/// An explicit [method].fock_builder wins verbatim (the ladder
-/// governs the ABSENT case only) and is never demoted - an explicit
-/// ri_j_link without an aux keeps the wiring's own refusal by name. The
+/// THE ONE REQUEST THAT OVERRIDES A BUILDER CHOICE: [method]
+/// enforce_certified_bound. The enforcement is implemented by the direct
+/// family's MACHINERY member alone, and the key is a CLAIM - a restricted
+/// run whose resolved route cannot carry it is DEMOTED onto that member,
+/// with the rewrite stated in the reasoning and the warning, rather than
+/// refused. The demotion is the one case in which the resolution rewrites
+/// an explicit builder request: the key names no builder, so honouring it
+/// costs the resolved route and nothing else, and a refusal would make the
+/// claim unusable on every default (the auto-lean path is the default at
+/// nBasis <= 1000). An UNRESTRICTED run is left exactly as resolved - the
+/// per-spin wiring carries no enforcement field on any route, so no
+/// builder rewrite could honour the key there, and the driver refuses it
+/// by name (SelectionResolutionInput::unrestricted states the fact).
+///
+/// Apart from that key, an explicit [method].fock_builder wins verbatim
+/// (the ladder governs the ABSENT case only) and is never demoted - an
+/// explicit ri_j_link without an aux keeps the wiring's own refusal by
+/// name. The
 /// The device-less fallback GPU auto-fallback survives, retargeted: an explicit "gpu" with no
 /// device falls back to the LADDER's pick with a loud warning instead of
 /// failing the run. The explicit "lean" spelling is a within-family
@@ -206,6 +221,14 @@ struct SelectionResolutionInput {
     bool nonHybridKohnSham = false;
     std::size_t nPairs = 0; ///< Shell-pair count (the pair-store sizing input).
     int effectiveThreads = 1; ///< The threadCap-clamped team.
+    /// True when this run executes the per-spin loop (UHF or UKS). The
+    /// enforce_certified_bound demotion does NOT apply to those legs: their
+    /// wiring never assigns the enforcement option on any builder, so no
+    /// builder rewrite could honour the key and the driver refuses it by
+    /// name instead. Stated by the caller for the same reason as the tier
+    /// runnability fields - this module is pure policy and never re-derives
+    /// the method classification.
+    bool unrestricted = false;
 };
 
 /// Resolves the run's builder (see ResolvedBuilderSelection). Total: the

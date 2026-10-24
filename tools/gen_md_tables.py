@@ -26,8 +26,9 @@ Every table is derived, not measured:
     allowance kClassRounding covers the GEMM/representation terms.
     The full per-quartet bound construction lives in md_vrr.hpp.
   - kMdClassTableF64/kMdClassTableF32: class dispatch. Rows above the
-    configured Lmax (L_ket > 2*QcxIntegralsLMax) are nullptr by #if - no CI
-    configuration ever links the full class matrix.
+    configured build ceiling (L_ket > 2*QcxIntegralsLMax) are nullptr by #if -
+    a reduced-size build never links the full class matrix. The shipped
+    ceiling, and the one CI builds, is 6, which links all of it.
 
 The committed headers must match this script's output byte for byte; the
 regeneration ctest runs `--check`.
@@ -394,7 +395,7 @@ def write_dispatch_header(path):
         f.write("// The per-{L_bra, L_ket}-class function-pointer table; entries whose\n")
         f.write("// class lies outside the instantiation matrix (the 2e triangle UNION\n")
         f.write("// the RI rectangle at the configured QcxIntegralsLMax) are nullptr -\n")
-        f.write("// no CI configuration ever links the full class matrix.\n")
+        f.write("// a reduced-size build never links the full class matrix.\n")
         f.write("#pragma once\n#include \"md_engine.hpp\"\n\n")
         f.write("namespace qcx::integrals::internal {\n\n")
         for lane in ("F64", "F32"):
@@ -415,7 +416,8 @@ def write_dispatch_header(path):
                         # lKet <= L and lBra <= 2*L, so its cap is the larger
                         # of lKet and ceil(lBra/2). (The old ceil(max/2) cap
                         # emitted references to classes a reduced-Lmax build
-                        # never instantiates - the CI Lmax=2 link error.)
+                        # never instantiates - the 2026 reduced-CI-build link
+                        # error.)
                         if lbra <= lket:
                             cap = (lket + 1) // 2
                         else:

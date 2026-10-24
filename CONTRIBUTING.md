@@ -10,8 +10,8 @@ A C++23 quantum-chemistry framework: Gaussian basis sets, one- and
 two-electron integral engines, symmetry detection, DFT integration grids,
 self-consistent field solvers, checkpointed storage and derived properties.
 It is organized as a module DAG — `core → backend → memory → linalg →
-molecule → symmetry → basisset → grid → integrals → scf → storage → io →
-properties → driver` — and the dependency direction is enforced, not merely
+molecule → symmetry → basisset → grid → dispersion → integrals → scf →
+storage → io → properties → driver` — and the dependency direction is enforced, not merely
 documented. See the [README](README.md) for the build and the module map.
 
 ## Ground rules

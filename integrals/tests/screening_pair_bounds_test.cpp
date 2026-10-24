@@ -677,7 +677,7 @@ TEST(ScreeningPairBoundsTest, APairPastTheKernelTableCarriesNoBound) {
     if (!qcx::integrals::SupportsL(4))
     {
         GTEST_SKIP() << "the fixture's f and g shells exceed this build's kMaxEngineL "
-                        "(CI lmax=2)";
+                        "(a reduced-size build; CI builds 6)";
     }
 
     auto molecule = qcx::testing::MakeH2oSto3g();

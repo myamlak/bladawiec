@@ -4,6 +4,7 @@
 #include "qcx/io/validate_input.hpp"
 
 #include "qcx/basisset/basis_set.hpp"
+#include "qcx/dispersion/dispersion.hpp"
 #include "qcx/integrals/aux_basis.hpp"
 #include "qcx/molecule/elements.hpp"
 
@@ -188,6 +189,83 @@ std::optional<XcKeyPolicy> XcKeyPolicyFor(MethodType method) {
 #pragma GCC diagnostic pop
 #endif
 
+// Appends one key name to the comma-separated list in `list`.
+void AppendKeyName(std::string& list, std::string_view name) {
+    if (!list.empty())
+    {
+        list += ", ";
+    }
+
+    list += name;
+}
+
+// The selected form's numeric keys the block did NOT write, in the form's
+// published order; empty when the set is complete. The refusal names every
+// missing key, so a reader repairs the block in one edit.
+std::string MissingDispersionKeys(const qcx::dispersion::DispersionOptions& options,
+                                  qcx::dispersion::DispersionForm form) {
+    std::string missing;
+
+    auto consider = [&missing](std::string_view name, bool written) {
+        if (!written)
+        {
+            AppendKeyName(missing, name);
+        }
+    };
+
+    if (form == qcx::dispersion::DispersionForm::kD3)
+    {
+        consider("s6", options.d3.s6.has_value());
+        consider("s8", options.d3.s8.has_value());
+        consider("rs6", options.d3.rs6.has_value());
+        consider("alpha6", options.d3.alpha6.has_value());
+        consider("rs8", options.d3.rs8.has_value());
+        consider("alpha8", options.d3.alpha8.has_value());
+    } else
+    {
+        consider("s6", options.d4.s6.has_value());
+        consider("s8", options.d4.s8.has_value());
+        consider("a1", options.d4.a1.has_value());
+        consider("a2", options.d4.a2.has_value());
+    }
+
+    return missing;
+}
+
+// The OTHER form's numeric keys the block wrote, in that form's published
+// order; empty when the block kept to the selected form. The parser stores a
+// shared key (s6, s8) in the selected form's request, so every key listed
+// here is one the selected form genuinely does not consume.
+std::string CrossFormDispersionKeys(const qcx::dispersion::DispersionOptions& options,
+                                    qcx::dispersion::DispersionForm form) {
+    std::string written;
+
+    auto consider = [&written](std::string_view name, bool present) {
+        if (present)
+        {
+            AppendKeyName(written, name);
+        }
+    };
+
+    if (form == qcx::dispersion::DispersionForm::kD3)
+    {
+        consider("s6", options.d4.s6.has_value());
+        consider("s8", options.d4.s8.has_value());
+        consider("a1", options.d4.a1.has_value());
+        consider("a2", options.d4.a2.has_value());
+    } else
+    {
+        consider("s6", options.d3.s6.has_value());
+        consider("s8", options.d3.s8.has_value());
+        consider("rs6", options.d3.rs6.has_value());
+        consider("alpha6", options.d3.alpha6.has_value());
+        consider("rs8", options.d3.rs8.has_value());
+        consider("alpha8", options.d3.alpha8.has_value());
+    }
+
+    return written;
+}
+
 } // namespace
 
 ValidationReport ValidateInput(const RunInput& input) {
@@ -311,6 +389,97 @@ ValidationReport ValidateInput(const RunInput& input) {
             "properties.xc_gradient: " + std::string(MethodWord(input.method.method)) +
             " does not take an exchange-correlation gradient (no density functional is "
             "differentiated; the Kohn-Sham methods rks and uks do)");
+    }
+
+    // `[properties] total_gradient` is the closed-shell RHF assembly's key and
+    // not a Kohn-Sham one, so it follows its own rule rather than the
+    // XcKeyPolicy above: it differentiates a CONVERGED RHF reference's energy.
+    // The Kohn-Sham lanes have no Roothaan-Kohn-Sham gradient entry and their
+    // response machinery carries neither an exchange-fraction nor a kernel
+    // seam, so an RHF number under a Kohn-Sham label would be a different
+    // energy's derivative; UHF is closed out for the same reason in the other
+    // direction - the assembly is closed-shell by construction. Refused, never
+    // ignored: an absent `total_gradient` block in the record would read as
+    // "no gradient was computed", which is true, while the file's own request
+    // vanished without a word.
+    if (input.properties.totalGradient && input.method.method != MethodType::kRhf)
+    {
+        report.issues.push_back(
+            "properties.total_gradient: " + std::string(MethodWord(input.method.method)) +
+            " does not take the total analytic gradient (the assembly differentiates a "
+            "converged closed-shell RHF reference; the rhf method is the only lane that "
+            "runs one)");
+    }
+
+    // The `[dispersion]` block's cross-key rules. The module resolves a
+    // request to numbers; the questions here are about the block's SHAPE,
+    // which only this layer can see (it holds the parsed key presence).
+    // Dispersion is method-independent - both forms carry an "hf" set - so,
+    // unlike the Kohn-Sham keys above, there is deliberately no method-family
+    // refusal: an rhf run with a dispersion correction is a supported request.
+    if (input.dispersion.has_value())
+    {
+        const auto& dispersion = *input.dispersion;
+
+        if (!dispersion.form.has_value())
+        {
+            report.issues.push_back(
+                "[dispersion]: form is required when the block is written (d3 | d4); the "
+                "block's parameters belong to a form's set, and no form is ever defaulted");
+        } else
+        {
+            const auto form = *dispersion.form;
+            const std::string_view formWord = qcx::dispersion::ToString(form);
+            const bool selectedAny = form == qcx::dispersion::DispersionForm::kD3
+                                         ? dispersion.d3.Any()
+                                         : dispersion.d4.Any();
+            const bool selectedComplete = form == qcx::dispersion::DispersionForm::kD3
+                                              ? dispersion.d3.Complete()
+                                              : dispersion.d4.Complete();
+
+            if (dispersion.preset.has_value() && selectedAny)
+            {
+                report.issues.push_back(
+                    "[dispersion]: dispersion.preset and the numeric keys are two parameter "
+                    "sources; write the set one way (remove the numeric keys, or remove "
+                    "dispersion.preset and state the selected form's complete numeric set)");
+            }
+
+            const auto crossForm = CrossFormDispersionKeys(dispersion, form);
+
+            if (!crossForm.empty())
+            {
+                report.issues.push_back(
+                    "[dispersion]: form = \"" + std::string(formWord) + "\" does not take " +
+                    crossForm +
+                    "; a block writes only the selected form's parameters (d3: s6, s8, rs6, "
+                    "alpha6, rs8, alpha8; d4: s6, s8, a1, a2)");
+            }
+
+            if (selectedAny && !selectedComplete)
+            {
+                report.issues.push_back(
+                    "[dispersion]: form = \"" + std::string(formWord) +
+                    "\" with a partial numeric set; missing " +
+                    MissingDispersionKeys(dispersion, form) +
+                    " (a numeric set is written whole, or replaced by dispersion.preset, or "
+                    "omitted for the method default)");
+            }
+
+            // The shipped D4 energy evaluates its EEQ charges at total charge
+            // 0, so a charged molecule would receive a number computed at the
+            // wrong charge. Refused here, before any run starts, and refused
+            // again by the module - validation is not the only entrance.
+            if (form == qcx::dispersion::DispersionForm::kD4 && input.molecule.charge != 0)
+            {
+                report.issues.push_back(
+                    "[dispersion]: form = \"d4\" with molecule.charge = " +
+                    std::to_string(input.molecule.charge) +
+                    "; the shipped D4 two-body energy evaluates its EEQ charges at total "
+                    "charge 0, so a charged molecule is refused rather than given a number "
+                    "computed at the wrong charge (remove the charge, or select form = \"d3\")");
+            }
+        }
     }
 
     if (auto issue = UnresolvedBasisIssue(input.basis.orbital); issue.has_value())

@@ -142,7 +142,7 @@ ALLOWED_TOKENS = frozenset({
     "filesystem_error",
     "find_first_not_of", "find_first_of", "find_last_not_of",
     "FmEval_Chebyshev7",
-    "find_if", "float16_t", "format_string_t", "from_chars", "get_scheduler",
+    "find_if", "float16_t", "format_string_t", "from_chars", "get_if", "get_scheduler",
     "hardware_concurrency", "has_value", "hsize_t", "int32_t", "int64_t", "int8_t", "INT_MAX",
     "is_array", "is_object",
     "is_boolean", "is_copy_assignable_v",

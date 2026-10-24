@@ -3,9 +3,11 @@
 #include "qcx/backend/tags.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/error.hpp"
+#include "qcx/integrals/screening.hpp"
 #include "qcx/memory/tensor.hpp"
 #include "qcx/molecule/molecule.hpp"
 
+#include <Eigen/Core>
 #include <array>
 #include <span>
 #include <vector>
@@ -23,6 +25,11 @@ namespace qcx::integrals {
 /// with early charge summation (the Boys seeds are summed over nuclei first
 /// through the 1-center VRR, then one bra contraction runs;
 /// internal/md_one_electron.hpp).
+///
+/// The derivatives of the three matrices with respect to the nuclear
+/// coordinates share that machinery: ComputeOneElectronGradient walks the same
+/// pair data and reads each pair's differentiated blocks from the derivative
+/// tier (internal/md_derivative.hpp), contracting them with a fixed density.
 ///
 /// Every matrix is produced directly into a rank-2 CPU Tensor with
 /// shape {n, n}, where n is the number of functions ordered by canonical
@@ -235,5 +242,187 @@ qcx::Result<std::vector<double>> BuildElectronPotentialAtPoints(
     const qcx::basisset::BasisSet& basisSet,
     const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& density,
     const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& points);
+
+/// What one one-electron derivative walk counted.
+///
+/// The pair set the walk visited, then one column per operator, so the cost of
+/// the three derivative walks this call shares can be read apart: the pairs are
+/// the same for all three, but the coordinate sets are not - the
+/// nuclear-attraction derivative reaches every nucleus, the other two only the
+/// pair's own atoms.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct OneElectronGradientCounts {
+    std::size_t orbitalPairs = 0; ///< Canonical orbital pairs the walk visited.
+    std::size_t overlapTuples = 0; ///< Overlap derivative tuples differentiated.
+    std::size_t kineticTuples = 0; ///< Kinetic-energy derivative tuples differentiated.
+    std::size_t nuclearTuples = 0; ///< Nuclear-attraction derivative tuples differentiated.
+};
+
+/// The S/T/V derivative surface at a fixed density.
+///
+/// With X one of S, T, V and E_X(R; D) = sum_uv D_uv X_uv(R), each gradient is
+/// dE_X/dR and each contraction is the value it differentiates. The density
+/// matrix is held fixed, so the derivative is the skeleton contribution only
+/// [Helgaker2000]; the density's own response to the displacement - the SCF's
+/// business, not this walk's - is not in it.
+///
+/// The contractions are reported beside their gradients because they are the
+/// one number that separates the two ways a gradient can be wrong: one that
+/// differentiates a different contraction differs from the matrix builders
+/// here, whereas one that agrees with its own contraction's finite differences
+/// while the contraction does not move with it differs nowhere else.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct OneElectronGradient {
+    /// dE_S/dR, 3N entries in the overlap contraction's own unit per Bohr,
+    /// atom-major: entry 3*i + d is direction d of atom i, the same ordering
+    /// the nuclear coordinates use.
+    Eigen::VectorXd overlapGradient;
+    /// dE_T/dR, 3N entries in Hartree/Bohr, atom-major (the ordering above).
+    Eigen::VectorXd kineticGradient;
+    /// dE_V/dR, 3N entries in Hartree/Bohr, atom-major (the ordering above).
+    Eigen::VectorXd nuclearGradient;
+    /// The value the overlap gradient differentiates, E_S = sum_uv D_uv S_uv.
+    double overlapContraction = 0.0;
+    /// The kinetic energy at this density, E_T = sum_uv D_uv T_uv (Hartree).
+    double kineticContraction = 0.0;
+    /// The electron-nucleus energy at this density, E_V = sum_uv D_uv V_uv
+    /// (Hartree).
+    double nuclearContraction = 0.0;
+    /// The counted cost of this assembly.
+    OneElectronGradientCounts counts;
+};
+
+/// One one-electron derivative walk's settings.
+/// \ingroup qcx-integrals
+struct OneElectronGradientOptions {
+    /// The cap on materialized pair data per chunk, in bytes. The walk keeps
+    /// the geometry-only pair skeleton resident and builds one chunk of the
+    /// contracted pair data at a time, releasing it before the next - the
+    /// matrix builders' own chunk policy (one_electron.cpp), one value for
+    /// every build-once walk. A pair heavier than the cap is its own chunk:
+    /// the cap is a target, not a bound on a single pair, so zero is a valid
+    /// one-pair-at-a-time walk.
+    std::size_t maxPairChunkBytes = 512 * 1024 * 1024;
+};
+
+/// Assembles the nuclear-coordinate derivatives of the overlap, kinetic-energy
+/// and nuclear-attraction matrices, contracted with a fixed density.
+///
+/// With X one of S, T, V and E_X(R; D) = sum_uv D_uv X_uv(R), the call returns
+/// dE_X/dR for all three operators from ONE walk of the canonical shell pairs:
+/// the pair data is built once and each pair's three derivative blocks are
+/// differentiated in it.
+///
+/// The pair blocks come from the derivative tier of internal/md_derivative.hpp.
+/// The overlap and kinetic derivative operators act only on the centre
+/// carrying their shell, so their requests name the pair's two atoms - a
+/// nucleus carrying neither shell contributes exactly zero - while the
+/// nuclear-attraction operator's centre moves with every nucleus, so its
+/// request names all 3N coordinates. The density enters the value and the
+/// derivative blocks the same way, and no matrix is formed: the walk
+/// accumulates the 3N gradients directly.
+///
+/// \param molecule Molecule providing the atom coordinates (Bohr).
+/// \param basisSet Basis set; every shell must satisfy l <= 6 (the parser cap).
+/// \param density The density matrix, nBasis x nBasis, in the basis set's
+/// function order. An off-diagonal shell pair's block covers one triangle of
+/// the symmetric matrix, so its contraction reads the mirrored density too.
+/// \param options The walk's settings; maxPairChunkBytes bounds the pair data
+/// materialized at once.
+/// \returns The three gradients, the three contractions they differentiate and
+/// the counted cost, or an Error: kInvalidArgument for a density whose shape
+/// does not match the basis set, kUnimplemented for a shell beyond the parser
+/// cap, and the shell-pair and pair-data builders' own errors otherwise.
+/// \ingroup qcx-integrals
+qcx::Result<OneElectronGradient> ComputeOneElectronGradient(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basisSet,
+    const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& density,
+    const OneElectronGradientOptions& options = {});
+
+/// What one derivative Fock-block assembly counted.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct OneElectronFockDerivativeCounts {
+    std::size_t orbitalPairs = 0; ///< Canonical shell pairs walked.
+    std::size_t pairChunks = 0; ///< Pair-data chunks materialized.
+    std::size_t overlapTuples = 0; ///< Overlap derivative tuples built.
+    std::size_t hamiltonianTuples = 0; ///< Kinetic and attraction derivative tuples built.
+};
+
+/// One derivative Fock-block walk's settings.
+/// \ingroup qcx-integrals
+struct OneElectronFockDerivativeOptions {
+    /// The cap on materialized pair data per chunk, in bytes - the matrix
+    /// builders' own chunk policy, exactly as ComputeOneElectronGradient
+    /// reads it. Zero walks one pair at a time.
+    std::size_t maxPairChunkBytes = 512 * 1024 * 1024;
+    /// The screening structure a caller may carry between geometries. This
+    /// walk forms no pair screen - every canonical pair contributes - so the
+    /// field is accepted for the shared options shape of the derivative
+    /// Fock-block entries and does not change a number here.
+    FockDerivativeWarmStart warmStart;
+};
+
+/// The one-electron derivative Fock blocks in the molecular-orbital basis.
+///
+/// The returned blocks are the fixed-density derivatives the coupled-
+/// perturbed SCF's right-hand side reads: the overlap derivative in the
+/// whole MO basis and the core-Hamiltonian (kinetic plus nuclear-attraction)
+/// derivative in the occupied-virtual block.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-integrals
+struct OneElectronFockDerivative {
+    /// C^T dS/dR C: 3N blocks of nMo x nMo, displacement-major and
+    /// row-major inside the block: entry (d * nMo + p) * nMo + q is
+    /// (C^T dS/dR_d C)_pq. nMo is numOccupied + numVirtual; the orbital
+    /// columns are the caller's MO coefficients' columns, in their order.
+    std::vector<double> moOverlapDerivative;
+    /// dH/dR in the occupied-virtual block, H = T + V: row
+    /// (3 * atom + axis) * numVirtual + a, column i, with a the virtual
+    /// orbital numOccupied + a and i the occupied orbital i. Displacement-
+    /// major, one row block per flat coordinate.
+    Eigen::MatrixXd occupiedVirtual;
+    /// The counted cost of this assembly.
+    OneElectronFockDerivativeCounts counts;
+};
+
+/// Assembles the one-electron derivative Fock blocks in the MO basis.
+///
+/// One walk of the canonical shell pairs, in the chunked shape
+/// ComputeOneElectronGradient walks: each pair's overlap, kinetic and
+/// nuclear-attraction derivative blocks come from the one-electron
+/// derivative tier, are scattered into a 3N x nBasis x nBasis AO buffer in
+/// the pair's own triangle (mirrored for an off-diagonal pair, because the
+/// matrices are symmetric), and are transformed once per displacement at the
+/// end, (C^T X' C). The alternative - transforming each pair block as it is
+/// built - costs a pair-sized matrix product per pair per displacement; the
+/// AO buffer costs 2 x 3N x nBasis^2 bytes and one nMo-column transform per
+/// displacement.
+///
+/// The overlap derivative is returned whole because the orthonormality term
+/// reads every occupied-occupied and virtual-virtual entry as well.
+/// \param molecule Molecule providing the atom coordinates (Bohr).
+/// \param basisSet Basis set; every shell must satisfy l <= 6 (the parser cap).
+/// \param moCoefficients The MO coefficients, row-major, nBasis x nMo with
+/// nMo = numOccupied + numVirtual: entry p * nMo + q is C_{p q}.
+/// \param numOccupied The occupied orbital count (the leading columns).
+/// \param numVirtual The virtual orbital count (the following columns).
+/// \param options The walk's settings.
+/// \returns The MO-basis blocks and the counted cost, or an Error:
+/// kInvalidArgument for a coefficient span that is not nBasis x
+/// (numOccupied + numVirtual) or a virtual count that leaves the occupied
+/// block past the basis, and the pair and derivative builders' own errors
+/// otherwise.
+/// \ingroup qcx-integrals
+qcx::Result<OneElectronFockDerivative> ComputeOneElectronFockDerivative(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basisSet,
+    std::span<const double> moCoefficients,
+    std::size_t numOccupied,
+    std::size_t numVirtual,
+    const OneElectronFockDerivativeOptions& options = {});
 
 } // namespace qcx::integrals

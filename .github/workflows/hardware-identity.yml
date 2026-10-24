@@ -1,0 +1,65 @@
+name: Hardware identity
+
+# Answers one question with measured facts rather than runner labels: what CPU and
+# memory does each GitHub-hosted runner actually provide?  It measures nothing else
+# and takes seconds.  Dispatch manually or by pushing a change to this file.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/hardware-identity.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Identify the x64 Linux runner
+        run: |
+          echo "runner=ubuntu-latest"
+          uname -a
+          lscpu
+          nproc
+          free -h
+          grep -m1 'model name' /proc/cpuinfo
+          cat /etc/os-release
+
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Identify the arm64 Linux runner
+        run: |
+          echo "runner=ubuntu-24.04-arm"
+          uname -a
+          lscpu
+          nproc
+          free -h
+          grep -m1 'model name' /proc/cpuinfo || true
+          cat /etc/os-release
+
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Identify the x64 Windows runner
+        shell: pwsh
+        run: |
+          "runner=windows-latest"
+          Get-CimInstance Win32_Processor |
+            Format-List Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed
+          "memory_bytes=" + (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+          (Get-CimInstance Win32_OperatingSystem).Caption
+
+  macos-arm64:
+    runs-on: macos-14
+    steps:
+      - name: Identify the arm64 macOS runner
+        run: |
+          echo "runner=macos-14"
+          uname -a
+          sysctl -n machdep.cpu.brand_string || true
+          sysctl -n hw.ncpu
+          sysctl -n hw.memsize
+          sw_vers

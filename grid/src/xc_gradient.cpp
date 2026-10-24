@@ -55,11 +55,18 @@ std::string_view DerivativeStatusName(excgrid::DerivativeStatus status) noexcept
     return "unrecognised status";
 }
 
-// One spin's density field at a point: the value, its first derivative, and -
-// for a functional that consumes the density gradients - the second.
+// One spin's density field at a point: the value, its first derivative, the
+// kinetic-energy density and - for a functional that consumes the density
+// gradients - the second derivative.
 struct PointField {
     double rho = 0.0;
+    /// 1/2 sum_mu nu D_mu nu grad phi_mu . grad phi_nu, the same contraction
+    /// the energy path runs, so the two paths' kernels see one number.
+    double tau = 0.0;
     std::array<double, 3> gradient{};
+    /// grad tau, written only for a functional that reads tau: the same
+    /// contraction against the AO tier's second derivative.
+    std::array<double, 3> tauGradient{};
     // Row-major symmetric 3x3, written only when the second derivative is asked
     // for: a functional that reads only rho and its gradient never needs it, and
     // the AO tier's cheaper entry point is then the whole cost.
@@ -154,10 +161,15 @@ struct PointContractions {
 };
 
 // One spin's density field at a point, from the point's fetched AO slice.
+// The two flags select independent pieces of the same second-derivative tier:
+// the density's curvature belongs to the sigma pairs, tau's motion to vtau, and
+// a functional that reads neither pays for neither.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 PointField BuildPointField(const Eigen::MatrixXd& density,
                            const AoSlice& aos,
                            PointContractions& contractions,
-                           bool withSecond) {
+                           bool withSecond,
+                           bool withTau) {
     const PointDensity contracted = internal::ContractSelectedSpinDensity(density,
                                                                           aos.values,
                                                                           aos.gradients,
@@ -167,36 +179,59 @@ PointField BuildPointField(const Eigen::MatrixXd& density,
 
     PointField field;
     field.rho = contracted.rho;
+    field.tau = contracted.tau;
     field.gradient = contracted.gradient;
 
-    if (!withSecond)
+    if (!withSecond && !withTau)
     {
         return field;
     }
 
-    // The field's second derivative,
-    //     hess rho = 2 sum_mu [ (D phi)_mu hess phi_mu
-    //                           + grad phi_mu (D grad phi)_mu^T ],
-    // from the two contractions the density already needed and the AO tier's
-    // second derivative. The outer product is not symmetric on its own, so both
-    // of its halves are written and the result is symmetric by construction.
     for (const std::size_t mu : aos.selectedAos)
     {
-        const double value = 2.0 * contractions.value[mu];
-        const std::array<double, 3> gradientMu = {
-            aos.gradients[3 * mu + 0], aos.gradients[3 * mu + 1], aos.gradients[3 * mu + 2]};
         const std::array<double, 3> contractedGradient = {contractions.gradient[3 * mu + 0],
                                                           contractions.gradient[3 * mu + 1],
                                                           contractions.gradient[3 * mu + 2]};
         const std::array<double, 9> curvature = ExpandHessian(aos.hessians, mu);
 
-        for (std::size_t row = 0; row < 3; ++row)
+        if (withSecond)
         {
-            for (std::size_t column = 0; column < 3; ++column)
+            // The field's second derivative,
+            //     hess rho = 2 sum_mu [ (D phi)_mu hess phi_mu
+            //                           + grad phi_mu (D grad phi)_mu^T ],
+            // from the two contractions the density already needed and the AO
+            // tier's second derivative. The outer product is not symmetric on
+            // its own, so both of its halves are written and the result is
+            // symmetric by construction.
+            const double value = 2.0 * contractions.value[mu];
+            const std::array<double, 3> gradientMu = {
+                aos.gradients[3 * mu + 0], aos.gradients[3 * mu + 1], aos.gradients[3 * mu + 2]};
+
+            for (std::size_t row = 0; row < 3; ++row)
             {
-                field.second[3 * row + column] +=
-                    value * curvature[3 * row + column] +
-                    2.0 * gradientMu[row] * contractedGradient[column];
+                for (std::size_t column = 0; column < 3; ++column)
+                {
+                    field.second[3 * row + column] +=
+                        value * curvature[3 * row + column] +
+                        2.0 * gradientMu[row] * contractedGradient[column];
+                }
+            }
+        }
+
+        if (withTau)
+        {
+            //     d_k tau = sum_mu sum_j (D grad phi)_mu^j hess phi_mu[j][k],
+            // with no surviving 1/2: it belongs to tau's definition and to the
+            // potential, not to the field's own derivative. The row runs over
+            // the AO gradient's components, the column over the derivative
+            // direction.
+            for (std::size_t row = 0; row < 3; ++row)
+            {
+                for (std::size_t column = 0; column < 3; ++column)
+                {
+                    field.tauGradient[column] +=
+                        contractedGradient[row] * curvature[3 * row + column];
+                }
             }
         }
     }
@@ -220,22 +255,77 @@ std::array<double, 3> SymmetricTimes(const std::array<double, 9>& matrix,
     return out;
 }
 
+// One point's kernel call, by named component rather than by position: the
+// positional adapter cannot carry tau and reports a refusal as zeros. The seven
+// components the walk supplies are all set, so the input mask is the collinear
+// set; the result's named first derivatives are read back, and a slot the
+// functional did not produce stays at its initial zero. A refusal is returned
+// as an Error naming the status, never as a silent zero energy.
+qcx::Result<excgrid::XcKernelValue> EvaluateKernel(
+    const excgrid::XcFunctional& functional,
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    const PointField& alpha,
+    const PointField& beta) {
+    const Eigen::Vector3d gradientA(alpha.gradient[0], alpha.gradient[1], alpha.gradient[2]);
+    const Eigen::Vector3d gradientB(beta.gradient[0], beta.gradient[1], beta.gradient[2]);
+
+    excgrid::PointInputs inputs;
+    inputs.Set(excgrid::Component::RhoA, alpha.rho);
+    inputs.Set(excgrid::Component::RhoB, beta.rho);
+    inputs.Set(excgrid::Component::SigmaAa, gradientA.dot(gradientA));
+    inputs.Set(excgrid::Component::SigmaAb, gradientA.dot(gradientB));
+    inputs.Set(excgrid::Component::SigmaBb, gradientB.dot(gradientB));
+    inputs.Set(excgrid::Component::TauA, alpha.tau);
+    inputs.Set(excgrid::Component::TauB, beta.tau);
+
+    excgrid::PointResult result;
+    const excgrid::KernelStatus status = functional.EvaluatePoint(inputs, result);
+
+    if (status != excgrid::KernelStatus::kOk)
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kUnimplemented,
+                                          "EvaluateXcGradient: the functional " +
+                                              std::string(excgrid::DescribeStatus(status))});
+    }
+
+    excgrid::XcKernelValue kernel;
+    kernel.exc = result.exc;
+    kernel.vrhoA = result.first[excgrid::IndexOf(excgrid::Component::RhoA)];
+    kernel.vrhoB = result.first[excgrid::IndexOf(excgrid::Component::RhoB)];
+    kernel.vsigmaAa = result.first[excgrid::IndexOf(excgrid::Component::SigmaAa)];
+    kernel.vsigmaAb = result.first[excgrid::IndexOf(excgrid::Component::SigmaAb)];
+    kernel.vsigmaBb = result.first[excgrid::IndexOf(excgrid::Component::SigmaBb)];
+    kernel.vtauA = result.first[excgrid::IndexOf(excgrid::Component::TauA)];
+    kernel.vtauB = result.first[excgrid::IndexOf(excgrid::Component::TauB)];
+
+    return kernel;
+}
+
 // The spatial gradient of the integrand at a point, by the chain rule through
 // the fields:
 //     grad e = sum_s vrho_s grad rho_s
+//            + sum_s vtau_s grad tau_s
 //            + sum_st vsigma_st grad sigma_st,
 //     grad sigma_st = (hess rho_s) grad rho_t + (hess rho_t) grad rho_s.
 // This is the term that makes the grid's motion visible: e is a function of the
 // point, so a point that moves with its atom carries the integrand with it.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::array<double, 3> GradientOfEnergyDensity(const excgrid::XcKernelValue& kernel,
                                               const PointField& alpha,
                                               const PointField& beta,
-                                              bool withSecond) {
+                                              bool withSecond,
+                                              bool withTau) {
     std::array<double, 3> result{};
 
     for (std::size_t axis = 0; axis < 3; ++axis)
     {
         result[axis] = kernel.vrhoA * alpha.gradient[axis] + kernel.vrhoB * beta.gradient[axis];
+
+        if (withTau)
+        {
+            result[axis] +=
+                kernel.vtauA * alpha.tauGradient[axis] + kernel.vtauB * beta.tauGradient[axis];
+        }
     }
 
     if (!withSecond)
@@ -260,25 +350,29 @@ std::array<double, 3> GradientOfEnergyDensity(const excgrid::XcKernelValue& kern
     return result;
 }
 
-// One spin's two density-derivative sums at a point, one entry per atom:
+// One spin's density-derivative sums at a point, one entry per atom:
 //     P^s_A = sum_{mu in A} (D_s phi)_mu grad phi_mu
 //     Q^s_A = sum_{mu in A} [ (D_s grad phi)_mu (x) grad phi_mu
 //                             + (D_s phi)_mu hess phi_mu ]
+//     S^s_A = sum_{mu in A} sum_j (D_s grad phi)_mu^j hess phi_mu[j][.]
 // evaluated over the KEPT slots, because a slot the selection dropped is a term
-// the energy dropped too. These two sums are the whole of the density's
-// dependence on the atomic orbitals' motion, so the functional's chain rule
-// reads them once for rho and once for each sigma pair.
+// the energy dropped too. These are the whole of the density's and the
+// kinetic-energy density's dependence on the atomic orbitals' motion, so the
+// functional's chain rule reads them once for rho, once for each sigma pair,
+// and once for tau.
 struct SpinSums {
     std::vector<std::array<double, 3>> position;
     std::vector<std::array<double, 9>> curvature;
+    std::vector<std::array<double, 3>> tau;
 
     explicit SpinSums(std::size_t atomCount) :
-        position(atomCount, std::array<double, 3>{}),
-        curvature(atomCount, std::array<double, 9>{}) {}
+        position(atomCount, std::array<double, 3>{}), curvature(atomCount, std::array<double, 9>{}),
+        tau(atomCount, std::array<double, 3>{}) {}
 
     void Clear() noexcept {
         std::fill(position.begin(), position.end(), std::array<double, 3>{});
         std::fill(curvature.begin(), curvature.end(), std::array<double, 9>{});
+        std::fill(tau.begin(), tau.end(), std::array<double, 3>{});
     }
 };
 
@@ -288,12 +382,17 @@ struct SpinSums {
 // The second sum is indexed [nuclear coordinate][gradient direction]. Its two
 // terms are not interchangeable: one pairs the AO gradient's nuclear-coordinate
 // component with the contracted gradient's field direction, the other is the
-// AO's own curvature, and only the second is symmetric.
+// AO's own curvature, and only the second is symmetric. The tau sum needs only
+// the second term, read as the contracted gradient along the AO's own row.
+// The two flags select the two sums independently, so a functional that reads
+// tau and not sigma pays for the tau sum alone.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void AccumulateSpinSums(SpinSums& sums,
                         const AoSlice& aos,
                         const PointContractions& contractions,
                         std::span<const std::size_t> atomOfAo,
                         bool withSecond,
+                        bool withTau,
                         std::size_t& terms) {
     for (const std::size_t mu : aos.selectedAos)
     {
@@ -305,7 +404,7 @@ void AccumulateSpinSums(SpinSums& sums,
         const std::array<double, 3> gradientMu = {
             aos.gradients[3 * mu + 0], aos.gradients[3 * mu + 1], aos.gradients[3 * mu + 2]};
         const std::array<double, 9> curvature =
-            withSecond ? ExpandHessian(aos.hessians, mu) : std::array<double, 9>{};
+            (withSecond || withTau) ? ExpandHessian(aos.hessians, mu) : std::array<double, 9>{};
 
         for (std::size_t row = 0; row < 3; ++row)
         {
@@ -318,6 +417,19 @@ void AccumulateSpinSums(SpinSums& sums,
             {
                 sums.curvature[atom][3 * row + column] +=
                     gradientMu[row] * contracted[column] + value * curvature[3 * row + column];
+            }
+        }
+
+        if (withTau)
+        {
+            // S^s_A[k] = sum_j (D grad phi)_mu^j hess phi_mu[j][k]: the row is
+            // the AO gradient's component, the column the derivative direction.
+            for (std::size_t row = 0; row < 3; ++row)
+            {
+                for (std::size_t column = 0; column < 3; ++column)
+                {
+                    sums.tau[atom][column] += contracted[row] * curvature[3 * row + column];
+                }
             }
         }
 
@@ -341,16 +453,22 @@ std::array<double, 3> MatrixTimes(const std::array<double, 9>& matrix,
     return out;
 }
 
-// The orbitals' motion at a point, from the two sums the density's chain rule
-// produces:
+// The orbitals' motion at a point, from the sums the density's and the
+// kinetic-energy density's chain rules produce:
 //     d rho_s / dR_A          = -2 P^s_A
 //     d grad rho_s / dR_A     = -2 Q^s_A
 //     d sigma_st / dR_A       = -2 [ (Q^s_A grad rho_t) + (Q^t_A grad rho_s) ]
+//     d tau_s / dR_A          = -S^s_A
 // and the functional's own chain rule weights them by its partials. Both signs
 // are the same one: the AO moves against the atom's displacement, which is why
-// the term is subtracted rather than added. The two sigma terms are the same
-// matrix-vector product twice, so neither is transposed - a transpose here is
-// invisible whenever the pair is diagonal and wrong on the cross pair.
+// the term is subtracted rather than added. The tau term is the odd one out by
+// a factor of two: the 1/2 in tau's definition cancels the two density index
+// slots, so it carries coefficient 1 beside the same minus, while the rho and
+// sigma terms carry 2 from the two slots of their contraction. Writing it at 2
+// is a factor-2 defect no internally consistent check sees. The two sigma terms
+// are the same matrix-vector product twice, so neither is transposed - a
+// transpose here is invisible whenever the pair is diagonal and wrong on the
+// cross pair.
 void AccumulateOrbitalMotion(Eigen::VectorXd& gradient,
                              const SpinSums& alphaSums,
                              const SpinSums& betaSums,
@@ -364,6 +482,8 @@ void AccumulateOrbitalMotion(Eigen::VectorXd& gradient,
         const std::array<double, 3>& positionBeta = betaSums.position[atom];
         const std::array<double, 9>& curvatureAlpha = alphaSums.curvature[atom];
         const std::array<double, 9>& curvatureBeta = betaSums.curvature[atom];
+        const std::array<double, 3>& tauAlpha = alphaSums.tau[atom];
+        const std::array<double, 3>& tauBeta = betaSums.tau[atom];
         const std::array<double, 3> sigmaAa = MatrixTimes(curvatureAlpha, alpha.gradient);
         const std::array<double, 3> sigmaBb = MatrixTimes(curvatureBeta, beta.gradient);
         const std::array<double, 3> sigmaAb = MatrixTimes(curvatureAlpha, beta.gradient);
@@ -378,8 +498,9 @@ void AccumulateOrbitalMotion(Eigen::VectorXd& gradient,
                                  2.0 * kernel.vsigmaAa * sigmaAa[axis] +
                                  kernel.vsigmaAb * (sigmaAb[axis] + sigmaBa[axis]) +
                                  2.0 * kernel.vsigmaBb * sigmaBb[axis];
+            const double tauValue = kernel.vtauA * tauAlpha[axis] + kernel.vtauB * tauBeta[axis];
             const Eigen::Index component = static_cast<Eigen::Index>(3 * atom + axis);
-            gradient[component] -= 2.0 * weight * value;
+            gradient[component] -= 2.0 * weight * value + weight * tauValue;
         }
     }
 }
@@ -443,7 +564,18 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
     evaluation.thresholds = thresholds;
     evaluation.gradient = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(nuclearCoordinateCount));
 
+    // What the functional reads decides what the walk fetches. Tau needs the AO
+    // gradients and their second derivatives even when sigma is not read, so the
+    // AO TIER's gate is the functional's own gradient flag extended by the two
+    // tau bits; a tau-only functional otherwise gets a zero-size Hessian buffer.
+    // The density's own curvature stays the sigma pairs' business, so the FIELD
+    // gate is UsesGradient() alone: vtau does not weight a second derivative of
+    // rho, only the contracted gradient's motion.
+    const excgrid::ComponentMask required = functional.RequiredMask();
+    const bool usesTau =
+        required.Test(excgrid::Component::TauA) || required.Test(excgrid::Component::TauB);
     const bool usesGradient = functional.UsesGradient();
+    const bool needsHessians = usesGradient || usesTau;
 
     // The per-point scratch, reused across the whole grid: the two
     // contractions a point's density field is built from, and the two spins'
@@ -456,16 +588,17 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
 
     // The batch buffers, sized once for the whole walk rather than per block:
     // one slice of AO values, gradients and - for a functional that consumes the
-    // density gradients - second derivatives per batched point, plus that point's
-    // selection in the two flat lists the fetch and the assembly both walk. The
-    // size is clamped to the largest block, so a batch can never span blocks.
+    // density gradients or the kinetic-energy density - second derivatives per
+    // batched point, plus that point's selection in the two flat lists the fetch
+    // and the assembly both walk. The size is clamped to the largest block, so a
+    // batch can never span blocks.
     const std::size_t bufferPoints =
         batch.pointBatch == 0 ? largestBlock : std::min(batch.pointBatch, largestBlock);
     const std::size_t aoCount = evaluator.AOCount();
 
     std::vector<double> batchValues(bufferPoints * aoCount);
     std::vector<double> batchGradients(bufferPoints * 3 * aoCount);
-    std::vector<double> batchHessians(usesGradient ? bufferPoints * 6 * aoCount : 0);
+    std::vector<double> batchHessians(needsHessians ? bufferPoints * 6 * aoCount : 0);
     std::vector<std::size_t> batchShells(bufferPoints * envelopes.size());
     std::vector<std::size_t> batchAos(bufferPoints * aoCount);
     std::vector<std::size_t> batchShellOffsets(bufferPoints + 1);
@@ -612,7 +745,7 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                     batchShells.data() + batchShellOffsets[index],
                     shellCursor - batchShellOffsets[index]);
 
-                if (usesGradient)
+                if (needsHessians)
                 {
                     const std::span<double> hessians(batchHessians.data() + index * 6 * aoCount,
                                                      6 * aoCount);
@@ -646,15 +779,19 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                 const std::span<const double> values(batchValues.data() + index * aoCount, aoCount);
                 const std::span<const double> gradients(batchGradients.data() + index * 3 * aoCount,
                                                         3 * aoCount);
-                const std::span<const double> hessians(batchHessians.data() + index * 6 * aoCount,
-                                                       6 * aoCount);
+                // Empty when neither sigma nor tau is read: the assembly below
+                // must not read a buffer that was never allocated.
+                const std::span<const double> hessians =
+                    needsHessians ? std::span<const double>(
+                                        batchHessians.data() + index * 6 * aoCount, 6 * aoCount)
+                                  : std::span<const double>();
                 const std::span<const std::size_t> selectedAos(
                     batchAos.data() + batchAoOffsets[index],
                     batchAoOffsets[index + 1] - batchAoOffsets[index]);
                 const AoSlice aos{values, gradients, hessians, selectedAos};
 
                 const PointField fieldA =
-                    BuildPointField(densityAlpha, aos, contractions, usesGradient);
+                    BuildPointField(densityAlpha, aos, contractions, usesGradient, usesTau);
 
                 // The alpha sums read the contractions the alpha field was just
                 // built from, so they are taken before the beta field overwrites
@@ -665,10 +802,11 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                                    contractions,
                                    *atomOfAo,
                                    usesGradient,
+                                   usesTau,
                                    evaluation.counts.aoDerivativeTerms);
 
                 const PointField fieldB =
-                    BuildPointField(densityBeta, aos, contractions, usesGradient);
+                    BuildPointField(densityBeta, aos, contractions, usesGradient, usesTau);
 
                 betaSums.Clear();
                 AccumulateSpinSums(betaSums,
@@ -676,21 +814,18 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                                    contractions,
                                    *atomOfAo,
                                    usesGradient,
+                                   usesTau,
                                    evaluation.counts.aoDerivativeTerms);
 
-                const Eigen::Vector3d gradientA(
-                    fieldA.gradient[0], fieldA.gradient[1], fieldA.gradient[2]);
-                const Eigen::Vector3d gradientB(
-                    fieldB.gradient[0], fieldB.gradient[1], fieldB.gradient[2]);
+                const auto kernel = EvaluateKernel(functional, fieldA, fieldB);
 
-                const excgrid::XcKernelValue kernel = functional.Evaluate(fieldA.rho,
-                                                                          fieldB.rho,
-                                                                          gradientA.dot(gradientA),
-                                                                          gradientA.dot(gradientB),
-                                                                          gradientB.dot(gradientB));
+                if (!kernel.has_value())
+                {
+                    return std::unexpected(kernel.error());
+                }
 
                 const double weight = batchWeights[index];
-                evaluation.energy += weight * kernel.exc;
+                evaluation.energy += weight * kernel->exc;
 
                 // The weight's motion: the quadrature weight is a function of the
                 // geometry, and the integrand rides it.
@@ -699,13 +834,13 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                 for (std::size_t coordinate = 0; coordinate < nuclearCoordinateCount; ++coordinate)
                 {
                     evaluation.gradient[static_cast<Eigen::Index>(coordinate)] +=
-                        kernel.exc * weightRow[coordinate];
+                        kernel->exc * weightRow[coordinate];
                 }
 
                 // The point's motion: the integrand is a function of position, so
                 // a point that moves with its atom carries its own value with it.
                 const std::array<double, 3> energyDensityGradient =
-                    GradientOfEnergyDensity(kernel, fieldA, fieldB, usesGradient);
+                    GradientOfEnergyDensity(*kernel, fieldA, fieldB, usesGradient, usesTau);
                 const double* positionRow =
                     positionFirst.data() + point * 3 * nuclearCoordinateCount;
 
@@ -724,7 +859,7 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
 
                 // The orbitals' motion, from the two sums per spin.
                 AccumulateOrbitalMotion(
-                    evaluation.gradient, alphaSums, betaSums, fieldA, fieldB, kernel, weight);
+                    evaluation.gradient, alphaSums, betaSums, fieldA, fieldB, *kernel, weight);
             }
         }
     }

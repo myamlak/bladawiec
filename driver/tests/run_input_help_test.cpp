@@ -23,8 +23,10 @@
 #include <qcx/storage/disk_ri_fock_build.hpp>
 #endif
 
-#include <charconv>
+#include <cerrno>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <optional>
@@ -33,7 +35,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <vector>
 
 namespace {
@@ -788,6 +789,11 @@ const DefaultClaim kDefaultClaims[] = {
      [](const DefaultPair& documents) {
          return documents.written.properties.xcGradient == documents.omitted.properties.xcGradient;
      }},
+    {"properties.total_gradient",
+     [](const DefaultPair& documents) {
+         return documents.written.properties.totalGradient ==
+                documents.omitted.properties.totalGradient;
+     }},
     // The [grid] keys' defaults live in RunGridInput (mirrored field for field
     // by the engine's own settings), so they are compared against a
     // default-constructed one rather than against RunInput - whose `grid` is an
@@ -888,10 +894,22 @@ const EngineDefaultClaim kEngineDefaultClaims[] = {
 };
 
 std::optional<double> ShownNumber(std::string_view shown) {
-    double value = 0.0;
-    const auto result = std::from_chars(shown.data(), shown.data() + shown.size(), value);
+    // Apple's libc++ has no floating-point std::from_chars, so the test parses
+    // with strtod under the same strictness: the whole token consumed, no range
+    // error, a finite value. The leading-plus and hexadecimal forms strtod alone
+    // accepts are refused, so the help reads the same on every platform.
+    if (shown.empty() || shown.front() == '+' ||
+        (shown.size() >= 2 && shown[0] == '0' && (shown[1] == 'x' || shown[1] == 'X')))
+    {
+        return std::nullopt;
+    }
 
-    if (result.ec != std::errc{} || result.ptr != shown.data() + shown.size())
+    const std::string token(shown);
+    errno = 0;
+    char* parsedEnd = nullptr;
+    const double value = std::strtod(token.c_str(), &parsedEnd);
+
+    if (parsedEnd != token.c_str() + token.size() || errno == ERANGE || !std::isfinite(value))
     {
         return std::nullopt;
     }
@@ -970,6 +988,16 @@ TEST(RunInputHelpTest, TheHelpTextFollowsItsOwnFormat) {
         const std::string key = BlockKey(row);
         EXPECT_FALSE(row.shown.empty()) << key << " shows no value";
         EXPECT_FALSE(row.description.empty()) << key << " has no description";
+
+        // A key the parser reads only to refuse it is marked "(refused)" and
+        // must say so in its description; the accepted-value gate skips it
+        // because no value is accepted.
+        if (row.shown == "(refused)")
+        {
+            EXPECT_EQ(row.description.rfind("refused:", 0), 0u)
+                << key << " is marked refused but its description does not say so";
+        }
+
         EXPECT_TRUE(seen.insert(key).second) << key << " is documented twice";
     }
 }
@@ -1034,6 +1062,11 @@ TEST(RunInputHelpTest, ShowsAValueTheParserAcceptsForEveryKey) {
 
     for (const HelpRow& row : help.rows)
     {
+        if (row.shown == "(refused)")
+        {
+            continue; // a key the parser reads only to refuse it accepts no value
+        }
+
         Values values = base;
         values[BlockKey(row)] = row.shown;
 

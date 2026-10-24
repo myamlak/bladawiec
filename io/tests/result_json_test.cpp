@@ -12,6 +12,9 @@
 // requested the blocking. Schema 34's payload is the run's own physics: the
 // always-present `method` word, and the Kohn-Sham-only `functional` and
 // `xc_grid` pair, whose ABSENCE on a Hartree-Fock record is the statement.
+// Schema 41's top-level `dispersion` block is pinned the same way: the
+// resolved values are recorded when a correction ran, and a run that wrote
+// no [dispersion] block carries no block at all.
 #include "qcx/io/result_json.hpp"
 
 #include <gtest/gtest.h>
@@ -35,7 +38,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsForty) {
+TEST(ResultJsonTest, SchemaVersionIsFortyFive) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -107,7 +110,65 @@ TEST(ResultJsonTest, SchemaVersionIsForty) {
     // DERIVATIVE of an energy the same document carries, which is why the
     // block's own name states the fixed-density limitation rather than leaving
     // a reader to read the vector as a total nuclear gradient.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 40);
+    //
+    // v40 -> v41: the top-level `dispersion` block (RunDispersion) is added:
+    // the form ("d3" | "d4"), the parameter source ("method" | "preset" |
+    // "explicit"), the preset name when one was used, the values the kernel
+    // consumed under the form's own key names, and the energy the correction
+    // contributed. Keys added, so the number moves with them - and the block
+    // moves `total_energy_hartree`'s meaning on the runs that carry it: the
+    // total now includes the correction, while `electronic_energy_hartree`
+    // and the SCF residuals do not. Absent unless the input wrote a
+    // `[dispersion]` block; a request that cannot be honoured is refused
+    // before serialization, never recorded as absent.
+    //
+    // v41 -> v42: the top-level `guess` block (RunGuess) is added: the
+    // requested word (`type`, present exactly when the file wrote
+    // `[guess] type`), the word the run actually RAN (`ran`, always present),
+    // and the checkpoint a restart read (`restart_path`, present exactly when
+    // one was read). Keys added, so the number moves with them. The
+    // type-vs-ran split is the reason a consumer must notice: `core` names the
+    // method's DEFAULT START, which both paths run as the GWH guess, so the
+    // two words legitimately differ on a `type = "core"` run.
+    //
+    // v42 -> v43: the `resources_resolved.eri_cache` block (RunEriCache) is
+    // added: the bytes the input asked for (`method.eri_cache_bytes`), the
+    // per-lane budget the driver handed the engine, the budget the engine's
+    // Create-time decision actually fired (the mode record's cache term
+    // divided by three; absent when no mode decision was made, 0 when the
+    // cache did not engage), and whether the fired budget fell below the
+    // grant. Keys added, so the number moves with them - and the block is
+    // one a consumer must notice for a reason beyond its presence: the two
+    // legs carry DIFFERENT defaults (the unrestricted legs compute a
+    // cap-derived grant, the restricted legs run with the cache off), so
+    // before this block the same budget could appear in a document with no
+    // way to tell a request from an inherited default.
+    //
+    // v43 -> v44: the top-level `certified_bound` block gains `demoted` and
+    // `demoted_reason`. The enforcement key's two non-composing rungs - the
+    // LightPath chunk loop and an engaged precision ladder - no longer
+    // refuse the build; they skip the comparison and record the demotion,
+    // so the build runs exactly as an enforcement-off build. Keys added, so
+    // the number moves with them, and the pair is one a consumer must
+    // notice for a reason beyond presence: `enforced: false` alone would
+    // conflate "the key was not set" with "the key was set and this route
+    // could not carry it".
+    //
+    // v44 -> v45: the `properties` block GAINS `total_gradient`
+    // (RunTotalGradient), the total analytic nuclear gradient at a converged
+    // closed-shell RHF reference: the total vector, the term-by-term
+    // decomposition, the energies, the dimensions, the derivative walks'
+    // counts, the response solve report, both assembly gate residuals and the
+    // wired right-hand-side contribution names. Keys added, so the number
+    // moves with them - and it is the first record member that is the FULL
+    // derivative of the run's total energy (v40's `xc_gradient` is one
+    // fixed-density contribution), so a consumer comparing records across
+    // this change compares a document carrying a total nuclear gradient
+    // against one that could carry none. The block follows the opt-in rule
+    // (absent unless the run asked, never a zero-filled block), and a term
+    // nobody requested - the dispersion correction without a `[dispersion]`
+    // block - is absent inside a present block.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 45);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -182,6 +243,107 @@ TEST(ResultJsonTest, FunctionalAndXcGridAreTheKohnShamOnlyPayloads) {
     // record that built no grid.
     EXPECT_EQ(CountOccurrences(rksJson, "\"radial_points\""), 1);
     EXPECT_EQ(CountOccurrences(rksJson, "\"xc_grid\""), 1);
+}
+
+TEST(ResultJsonTest, DispersionBlockIsEmittedWhenRequested) {
+    // Schema 41: the correction a run applied is recorded with the RESOLVED
+    // values, so the number is reproducible from the document alone - the
+    // source word points at the table and `parameters` carries what the
+    // lookup (or the input) produced.
+    qcx::io::RunResult result;
+    result.method = qcx::io::MethodType::kRks;
+    result.totalEnergyHartree = -100.0123;
+    result.dispersion = qcx::io::RunDispersion{"d3",
+                                               "preset",
+                                               std::string("pbe0"),
+                                               {{"s6", 1.0},
+                                                {"s8", 0.928},
+                                                {"rs6", 1.287},
+                                                {"alpha6", 14.0},
+                                                {"rs8", 1.5},
+                                                {"alpha8", 16.0}},
+                                               -0.0123};
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 1);
+    EXPECT_NE(json.find("\"form\": \"d3\""), std::string::npos);
+    EXPECT_NE(json.find("\"parameter_source\": \"preset\""), std::string::npos);
+    EXPECT_NE(json.find("\"parameter_set\": \"pbe0\""), std::string::npos);
+    EXPECT_NE(json.find("\"s6\": 1.0"), std::string::npos);
+    EXPECT_NE(json.find("\"energy_hartree\": -0.0123"), std::string::npos);
+
+    // An explicit set names no preset: the member is absent, never a null
+    // standing in for a name that does not exist.
+    qcx::io::RunResult explicitRun;
+    explicitRun.dispersion =
+        qcx::io::RunDispersion{"d4",
+                               "explicit",
+                               std::nullopt,
+                               {{"s6", 1.0}, {"s8", 0.0}, {"a1", 0.4}, {"a2", 4.0}},
+                               -0.001};
+
+    const std::string explicitJson = qcx::io::SerializeRunResultJson(explicitRun);
+    EXPECT_EQ(explicitJson.find("\"parameter_set\""), std::string::npos);
+}
+
+TEST(ResultJsonTest, DispersionBlockIsAbsentWhenNotRequested) {
+    // Null honesty: a run that wrote no [dispersion] block carries no block,
+    // never a zero-filled one that would read as a correction measured at
+    // zero.
+    qcx::io::RunResult result;
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(json.find("\"dispersion\""), std::string::npos);
+}
+
+TEST(ResultJsonTest, GuessBlockPublishesRequestAndRunSeparately) {
+    // Schema 42: `type` is the request and `ran` is the run fact, and they
+    // legitimately differ - `core` names the method's default start, which
+    // both paths run as the GWH guess. A record that published only one of
+    // the two could not be read for both.
+    qcx::io::RunResult core;
+    core.guess = qcx::io::RunGuess{"core", "gwh", std::nullopt};
+
+    const std::string coreJson = qcx::io::SerializeRunResultJson(core);
+    EXPECT_EQ(CountOccurrences(coreJson, "\"guess\""), 1);
+    EXPECT_NE(coreJson.find("\"type\": \"core\""), std::string::npos);
+    EXPECT_NE(coreJson.find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(coreJson.find("\"restart_path\""), std::string::npos);
+
+    // No [guess] type in the file: the request member is ABSENT, never a
+    // fabricated default word, while `ran` still says what the run did.
+    qcx::io::RunResult defaulted;
+    defaulted.guess = qcx::io::RunGuess{std::nullopt, "gwh", std::nullopt};
+
+    const std::string defaultedJson = qcx::io::SerializeRunResultJson(defaulted);
+    EXPECT_NE(defaultedJson.find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(defaultedJson.find("\"type\""), std::string::npos);
+    EXPECT_EQ(defaultedJson.find("\"restart_path\""), std::string::npos);
+
+    // A written `gwh` request: both members name the same start.
+    qcx::io::RunResult gwh;
+    gwh.guess = qcx::io::RunGuess{"gwh", "gwh", std::nullopt};
+
+    const std::string gwhJson = qcx::io::SerializeRunResultJson(gwh);
+    EXPECT_NE(gwhJson.find("\"type\": \"gwh\""), std::string::npos);
+    EXPECT_NE(gwhJson.find("\"ran\": \"gwh\""), std::string::npos);
+
+    // A restart run names the checkpoint it read; the member is present
+    // exactly when a file was read, never as an empty string.
+    qcx::io::RunResult restart;
+    restart.guess = qcx::io::RunGuess{"restart", "restart", std::string("h2.chk")};
+
+    const std::string restartJson = qcx::io::SerializeRunResultJson(restart);
+    EXPECT_NE(restartJson.find("\"type\": \"restart\""), std::string::npos);
+    EXPECT_NE(restartJson.find("\"ran\": \"restart\""), std::string::npos);
+    EXPECT_NE(restartJson.find("\"restart_path\": \"h2.chk\""), std::string::npos);
+
+    // The struct's own default is the input's default start (kCore -> the
+    // GWH guess), so a result no driver filled still names a real start.
+    qcx::io::RunResult bare;
+    const std::string bareJson = qcx::io::SerializeRunResultJson(bare);
+    EXPECT_NE(bareJson.find("\"ran\": \"gwh\""), std::string::npos);
+    EXPECT_EQ(bareJson.find("\"type\""), std::string::npos);
 }
 
 TEST(ResultJsonTest, MoleculeUnitsDisclosesTheInterpretedUnit) {
@@ -308,7 +470,7 @@ TEST(ResultJsonTest, CertifiedBoundEnforcementMembersEmitted) {
     // budget, the delivered sum is what the lane's arithmetic cost.
     qcx::io::RunResult result;
     result.certifiedBound =
-        qcx::io::RunCertifiedBound{20, 0.0, 5.96, true, 7.69e-11, 7.51e-5, 0, true};
+        qcx::io::RunCertifiedBound{20, 0.0, 5.96, true, false, "", 7.69e-11, 7.51e-5, 0, true};
 
     const std::string json = qcx::io::SerializeRunResultJson(result);
     EXPECT_NE(json.find("\"enforced\": true"), std::string::npos);
@@ -316,6 +478,40 @@ TEST(ResultJsonTest, CertifiedBoundEnforcementMembersEmitted) {
     EXPECT_NE(json.find("\"routed_ha\""), std::string::npos);
     EXPECT_NE(json.find("\"routed_quartets\": 0"), std::string::npos);
     EXPECT_NE(json.find("\"fell_back_to_fp64\": true"), std::string::npos);
+    // Schema 44: the comparison ran, so nothing was demoted - the verdict
+    // is written and the reason is not.
+    EXPECT_NE(json.find("\"demoted\": false"), std::string::npos);
+    EXPECT_EQ(json.find("demoted_reason"), std::string::npos);
+}
+
+TEST(ResultJsonTest, CertifiedBoundDemotionRecordsTheVerdictAndTheReason) {
+    // Schema 44: the LightPath chunk loop (and an engaged precision ladder)
+    // cannot carry the comparison, so the build is NOT refused - it skips
+    // the comparison and records why. `enforced` stays false because the
+    // comparison did not run; `demoted` is what separates that from the key
+    // never having been set.
+    qcx::io::RunResult result;
+    result.certifiedBound = qcx::io::RunCertifiedBound{
+        20,
+        0.0,
+        0.0,
+        false,
+        true,
+        "the certified-bound budget enforcement does not compose with the LightPath chunk loop",
+        0.0,
+        0.0,
+        0,
+        false};
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(json.find("\"enforced\": false"), std::string::npos);
+    EXPECT_NE(json.find("\"demoted\": true"), std::string::npos);
+    EXPECT_NE(json.find("\"demoted_reason\": \"the certified-bound budget enforcement"),
+              std::string::npos);
+    // The measured members are the enforcement's zero defaults, not
+    // measurements: the comparison was skipped.
+    EXPECT_NE(json.find("\"budget_ha\": 0.0"), std::string::npos);
+    EXPECT_NE(json.find("\"routed_ha\": 0.0"), std::string::npos);
 }
 
 TEST(ResultJsonTest, CertifiedBoundEnforcementMembersDefaultToOff) {
@@ -500,6 +696,125 @@ TEST(ResultJsonTest, XcGradientBlockAbsentWhenNotRequested) {
     qcx::io::RunResult result;
     const std::string json = qcx::io::SerializeRunResultJson(result);
     EXPECT_EQ(json.find("xc_gradient"), std::string::npos);
+}
+
+TEST(ResultJsonTest, TotalGradientBlockEmittedWithEveryReportedMember) {
+    // The total analytic gradient (schema 45): every term is its own key, the
+    // energies, dimensions, counts, solve report and both gate residuals are
+    // written, and the dispersion pair is ABSENT - the run wrote no
+    // [dispersion] block, so the term is not a zero vector and the energy is
+    // not a fabricated 0.0 (the null-honesty rule, one level down).
+    qcx::io::RunResult result;
+    qcx::io::RunProperties properties;
+
+    qcx::io::RunTotalGradient total;
+    total.gradient = {0.125, -0.375};
+    total.terms.oneElectron = {0.25, -0.5};
+    total.terms.nuclearRepulsion = {0.75, -1.25};
+    total.terms.coulomb = {1.5, -2.5};
+    total.terms.exchange = {-3.5, 4.5};
+    total.terms.response = {5.5, -6.5};
+    total.energies.electronic = -8.125;
+    total.energies.reconstructedElectronic = -8.0625;
+    total.energies.nuclearRepulsion = 0.875;
+    total.energies.total = -7.25;
+    total.sizes.atomCount = 2;
+    total.sizes.numBasisFunctions = 3;
+    total.sizes.numOccupied = 1;
+    total.sizes.numVirtual = 2;
+    total.counts.oneElectron.orbitalPairs = 4;
+    total.counts.oneElectron.overlapTuples = 5;
+    total.counts.oneElectron.kineticTuples = 6;
+    total.counts.oneElectron.nuclearTuples = 7;
+    total.counts.twoElectron.braPairs = 8;
+    total.counts.twoElectron.ketPairs = 9;
+    total.counts.twoElectron.quartets = 10;
+    total.counts.twoElectron.screenedQuartets = 11;
+    total.response.solves = 6;
+    total.response.warmStarted = 0;
+    total.response.iterations = 42;
+    total.stationarityResidual = 1e-9;
+    total.energyResidualHartree = 2e-10;
+    total.rightHandSideTerms = {"one-electron", "coulomb", "exchange"};
+    properties.totalGradient = total;
+    result.properties = std::move(properties);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"total_gradient\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"gradient\": ["), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"one_electron\""), 2); // the term and the counts
+    EXPECT_EQ(CountOccurrences(json, "\"nuclear_repulsion\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"coulomb\""), 2); // the term and the RHS name
+    EXPECT_EQ(CountOccurrences(json, "\"exchange\""), 2);
+    EXPECT_EQ(CountOccurrences(json, "\"response\""), 2); // the term and the solve report
+    EXPECT_EQ(CountOccurrences(json, "\"electronic_hartree\": -8.125"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"reconstructed_electronic_hartree\": -8.0625"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"nuclear_repulsion_hartree\": 0.875"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"total_hartree\": -7.25"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"atom_count\": 2"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"num_basis_functions\": 3"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"num_occupied\": 1"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"num_virtual\": 2"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"orbital_pairs\": 4"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"overlap_tuples\": 5"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"kinetic_tuples\": 6"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"nuclear_tuples\": 7"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"bra_pairs\": 8"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"ket_pairs\": 9"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"quartets\": 10"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"screened_quartets\": 11"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"solves\": 6"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"warm_started\": 0"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"iterations\": 42"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"stationarity_residual\":"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"energy_residual_hartree\":"), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"right_hand_side_terms\""), 1);
+    EXPECT_NE(json.find("\"one-electron\""), std::string::npos);
+
+    // The dispersion pair inside the block: absent, not zero.
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 0);
+    EXPECT_EQ(json.find("dispersion_hartree"), std::string::npos);
+}
+
+TEST(ResultJsonTest, TotalGradientDispersionTermIsPresentOnlyWhenRequested) {
+    // The same block with a [dispersion] block behind it: the term vector and
+    // its energy appear, under their own keys, and the totals still sum the
+    // documented way. Presence is the request's, so this is the only shape in
+    // which the pair is written.
+    qcx::io::RunResult result;
+    qcx::io::RunProperties properties;
+
+    qcx::io::RunTotalGradient total;
+    total.gradient = {0.125, -0.375};
+    total.terms.oneElectron = {0.25, -0.5};
+    total.terms.nuclearRepulsion = {0.75, -1.25};
+    total.terms.coulomb = {1.5, -2.5};
+    total.terms.exchange = {-3.5, 4.5};
+    total.terms.response = {5.5, -6.5};
+    total.terms.dispersion = std::vector<double>{-7.5, 8.5};
+    total.energies.electronic = -8.125;
+    total.energies.reconstructedElectronic = -8.0625;
+    total.energies.nuclearRepulsion = 0.875;
+    total.energies.dispersion = -0.03125;
+    total.energies.total = -7.28125;
+    total.rightHandSideTerms = {"one-electron", "coulomb", "exchange"};
+    properties.totalGradient = total;
+    result.properties = std::move(properties);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion_hartree\": -0.03125"), 1);
+    EXPECT_EQ(CountOccurrences(json, "-7.5"), 1);
+    EXPECT_EQ(CountOccurrences(json, "8.5"), 1);
+}
+
+TEST(ResultJsonTest, TotalGradientBlockAbsentWhenNotRequested) {
+    // Absent, never a zero-filled block: a record without the key states that
+    // no gradient was computed, which a block of zeros would misstate as a
+    // computed zero.
+    qcx::io::RunResult result;
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(json.find("total_gradient"), std::string::npos);
 }
 
 TEST(ResultJsonTest, SelectionBlockEmittedWhenPresent) {
@@ -969,6 +1284,67 @@ TEST(ResultJsonTest, EriStoreBlockDisclosesWhatRanNotWhatWasAsked) {
     qcx::io::RunResult omitted;
     const std::string omittedJson = qcx::io::SerializeRunResultJson(omitted);
     EXPECT_EQ(omittedJson.find("eri_store"), std::string::npos);
+}
+
+TEST(ResultJsonTest, EriCacheBlockPairsTheRequestWithTheFiredBudget) {
+    // The requested-vs-ran pairing of the in-memory ERI cache budget (schema
+    // 43). The request is the input's, but what FIRED is the engine's
+    // Create-time decision, so the block writes both and never presents one
+    // as the other: a run that asked for a budget the workspace could not
+    // hold is the substitution this block makes unreportable.
+    //
+    // Three states on the EMITTED text: the grant fired whole, the grant was
+    // clamped, and the key was never named.
+    qcx::io::RunResult fired;
+    qcx::io::RunEriCache cache;
+    cache.requestedBytes = 1073741824;
+    cache.grantedBytes = 1073741824;
+    cache.effectiveBytes = 1073741824;
+    cache.clamped = false;
+    fired.resourcesResolved.eriCache = cache;
+
+    const std::string firedJson = qcx::io::SerializeRunResultJson(fired);
+    EXPECT_NE(firedJson.find("\"eri_cache\""), std::string::npos);
+    EXPECT_NE(firedJson.find("\"requested_bytes\": 1073741824"), std::string::npos);
+    EXPECT_NE(firedJson.find("\"granted_bytes\": 1073741824"), std::string::npos);
+    EXPECT_NE(firedJson.find("\"effective_bytes\": 1073741824"), std::string::npos);
+    EXPECT_NE(firedJson.find("\"clamped\": false"), std::string::npos);
+
+    // The clamped arm: the engine's sure-fit gate shrank the grant (or a path
+    // that cannot serve the cache fired 0), and the record says so rather
+    // than letting the requested number stand as the ran one. `effective_bytes`
+    // is 0 here - the true fired budget - never omitted.
+    qcx::io::RunResult clamped;
+    qcx::io::RunEriCache shrank;
+    shrank.requestedBytes = 8589934592;
+    shrank.grantedBytes = 8589934592;
+    shrank.effectiveBytes = 0;
+    shrank.clamped = true;
+    clamped.resourcesResolved.eriCache = shrank;
+
+    const std::string clampedJson = qcx::io::SerializeRunResultJson(clamped);
+    EXPECT_NE(clampedJson.find("\"requested_bytes\": 8589934592"), std::string::npos);
+    EXPECT_NE(clampedJson.find("\"effective_bytes\": 0"), std::string::npos);
+    EXPECT_NE(clampedJson.find("\"clamped\": true"), std::string::npos);
+
+    // The no-mode-decision arm (a state an honoured request cannot reach, and
+    // one the serializer must still shape honestly): the effective budget is
+    // absent, never a fabricated zero.
+    qcx::io::RunResult undecided;
+    qcx::io::RunEriCache noDecision;
+    noDecision.requestedBytes = 1024;
+    noDecision.grantedBytes = 1024;
+    undecided.resourcesResolved.eriCache = noDecision;
+
+    const std::string undecidedJson = qcx::io::SerializeRunResultJson(undecided);
+    EXPECT_EQ(undecidedJson.find("effective_bytes"), std::string::npos);
+    EXPECT_NE(undecidedJson.find("\"clamped\": false"), std::string::npos);
+
+    // And the omitted key: no block at all, so an inherited default cannot
+    // read as a request.
+    qcx::io::RunResult omitted;
+    const std::string omittedJson = qcx::io::SerializeRunResultJson(omitted);
+    EXPECT_EQ(omittedJson.find("eri_cache"), std::string::npos);
 }
 
 TEST(ResultJsonTest, SymmetryBlockEmittedWhenPresent) {

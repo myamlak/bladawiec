@@ -9,7 +9,8 @@ C++23, C++ Core Guidelines, native Windows/MSVC as the primary build target (Lin
 ## Module DAG
 
 ```
-core -> backend -> memory -> linalg -> molecule -> symmetry -> basisset
+core -> backend -> memory -> linalg -> molecule -> symmetry -> basisset -> grid
+     -> dispersion -> integrals -> scf -> response -> storage -> io -> properties -> driver
 ```
 
 Upward/sideways dependencies fail the build — enforced by `tools/check_dag.py`

@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "qcx/dispersion/options.hpp"
 #include "qcx/integrals/accuracy.hpp"
 
 #include <optional>
@@ -499,6 +500,25 @@ struct RunMethodInput {
     /// ran, so a request that was demoted is disclosed rather than silently
     /// substituted.
     std::string eriCacheStore;
+    /// The in-memory ERI cache budget request (schema 43): the per-lane
+    /// payload budget the direct family's batch engine may hold, in BYTES
+    /// (the FockBuildOptions::maxCacheBytes passthrough). Absent preserves
+    /// the run's existing disposition - on the unrestricted legs the
+    /// cap-derived grant DirectFamilyCacheBytes computes, on the restricted
+    /// legs no cache at all - so no run that does not write the key moves.
+    /// Present must be >= 1 and OVERRIDES the cap-derived grant on the
+    /// routes that own the knob: the direct family's machinery member on
+    /// both the restricted and the unrestricted legs (and the Kohn-Sham
+    /// composition built from the same options). Every other route - the
+    /// lean member, ri_j_link, ri_jk, qfmm, gpu - has no maxCacheBytes at
+    /// all, so the driver REFUSES the key there by name rather than
+    /// dropping it; it also refuses it at memory_cap_gib = 0, where the
+    /// workspace-budget path (and with it the engine's Create-time
+    /// sure-fit clamp) does not exist. The run record's
+    /// resources_resolved.eri_cache pairs the request with the budget the
+    /// engine actually fired. Appended last so the aggregate's earlier
+    /// fields keep their positions.
+    std::optional<std::size_t> eriCacheBytes;
 };
 
 /// The [scf] block; every field optional with the SCF defaults.
@@ -727,6 +747,25 @@ struct RunPropertiesInput {
     /// rule). Appended last so the aggregate's earlier fields keep their
     /// positions.
     bool xcGradient = false;
+    /// The `total_gradient` request: true makes an RHF run assemble the total
+    /// analytic nuclear gradient at its converged reference, with the
+    /// electronic terms, the nuclear repulsion and any requested dispersion
+    /// correction kept apart in the record.
+    ///
+    /// It is RHF-only, and the key is REFUSED by name on `uhf`, `rks` and
+    /// `uks` rather than ignored (validate_input.cpp). The assembly
+    /// differentiates a converged closed-shell RHF reference: the Kohn-Sham
+    /// lanes' response machinery carries no exchange-fraction or kernel seam,
+    /// so an RHF number under a Kohn-Sham label would be a different energy's
+    /// derivative, and the closed-shell density the reference is validated
+    /// against is the RHF convention. A non-converged SCF is refused at run
+    /// time as well: a last iterate's gradient differentiates an energy the
+    /// density is not the minimum of.
+    ///
+    /// False (the default) keeps the zero-cost path: no reference is
+    /// extracted, no dense tensor is built, and the record carries no
+    /// `total_gradient` block - absent, never null and never zero-filled.
+    bool totalGradient = false;
 };
 
 /// The initial-guess selection. kGwh serves RHF and UHF (the RHF gwh
@@ -749,6 +788,16 @@ enum class GuessKind {
     kSad, ///< Superposition of atomic densities (UHF).
     kRestart, ///< Seed from a saved SCF state (RHF; checkpoint file).
 };
+
+/// The guess word for one GuessKind (schema 42); the inverse of the parser
+/// mapping (parse_input.cpp ParseGuess), so `[guess] type` and the record's
+/// `guess.type` key are one vocabulary. It names the REQUEST only: kCore is
+/// recorded as "core" even though the default start RUNS the GWH guess on
+/// RHF - the word `ran` in the record is the separate run fact.
+/// \param kind The guess selection.
+/// \returns "core" | "gwh" | "sad" | "restart".
+/// \ingroup qcx-io
+std::string_view ToString(GuessKind kind) noexcept;
 
 // ---------------------------------------------------------------------------
 // THE BUILDER SELECTION'S ORTHOGONAL AXES.
@@ -1102,6 +1151,25 @@ struct RunInput {
     /// `[method] fock_builder` key or from the size ladder. Appended last so the
     /// aggregate's earlier fields keep their positions.
     RunBuilderInput builder;
+    /// The `[dispersion]` block: the geometry-only London dispersion
+    /// correction the run adds to its total energy. Absent when the file
+    /// wrote no block (or wrote an empty one), in which case no correction is
+    /// evaluated and the record carries no `dispersion` block. Within a
+    /// present block `form` is required by the validator, and the parameter
+    /// source is exactly one of a preset, the selected form's complete
+    /// numeric set, or the run method's own family. Dispersion is
+    /// method-independent (both forms carry an "hf" preset), so unlike the
+    /// Kohn-Sham key family it is NOT refused on the Hartree-Fock lanes.
+    /// Appended after builder so the aggregate's earlier fields keep their
+    /// positions.
+    std::optional<qcx::dispersion::DispersionOptions> dispersion;
+    /// True when the file WROTE `[guess] type` (schema 42). The guess itself
+    /// always resolves (`guess`, defaulting to kCore), so the resolved enum
+    /// cannot say whether "core" was asked for or merely defaulted - and the
+    /// run record's `guess.type` key follows the request, present exactly when
+    /// one was written (the schema-19 null-honesty rule). Appended last so the
+    /// aggregate's earlier fields keep their positions.
+    bool guessExplicit = false;
 };
 
 /// \}
