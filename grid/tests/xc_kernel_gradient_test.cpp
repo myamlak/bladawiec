@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <excgrid/grid_derivatives.hpp>
+#include <excgrid/kernel.hpp>
 #include <gtest/gtest.h>
 #include <memory>
 #include <optional>
@@ -341,22 +342,19 @@ TEST(XcKernelGradientTest, TheBlockMatchesTheDisplacedPotentialForATauFunctional
     CheckFunctional("tau_x");
 }
 
-TEST(XcKernelGradientTest, AFunctionalWithoutATierIsRefusedByName) {
-    const auto fixture = MakeGradientFixture("lyp");
-    ASSERT_TRUE(fixture.has_value());
+TEST(XcKernelGradientTest, EveryShippedFunctionalCarriesATierThatSpansItsMask) {
+    for (const std::string_view name : excgrid::FunctionalNames())
+    {
+        const excgrid::XcFunctional* functional = excgrid::FindFunctional(name);
+        ASSERT_NE(functional, nullptr) << name;
 
-    const auto block = EvaluateXcKernelDerivativeBlock(fixture->engine,
-                                                       *fixture->provider,
-                                                       fixture->orbitals,
-                                                       fixture->density,
-                                                       fixture->numOccupied,
-                                                       fixture->numVirtual,
-                                                       XcKernelSettings{kScreeningTolerance});
+        const excgrid::ComponentMask required = functional->RequiredMask();
+        const excgrid::ComponentMask spanned = functional->SecondDerivativeMask();
 
-    ASSERT_FALSE(block.has_value());
-    EXPECT_EQ(block.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(block.error().message.find("no second-derivative tier"), std::string::npos)
-        << block.error().message;
+        EXPECT_EQ(excgrid::SecondDerivativeStatus(required, required, spanned),
+                  excgrid::KernelStatus::kOk)
+            << name;
+    }
 }
 
 TEST(XcKernelGradientTest, AShapeMismatchIsRefused) {

@@ -53,9 +53,9 @@ std::string Scientific(double value) {
     return buffer;
 }
 
-// The names this excgrid pin ships a second-derivative tier for. The remaining
-// registry entries refuse the tier by name; they are recorded by the scan and
-// re-open as a gate when the pin moves, not here.
+// The names the acceptance runs its displaced-potential blocks on. The registry
+// scan below checks every shipped name; these seven are the ones the block
+// comparison exercises.
 constexpr std::array<std::string_view, 7> kTieredNames = {
     "slater", "becke88", "pbe", "revpbe", "rpbe", "mpw91", "tau_x"};
 
@@ -264,29 +264,20 @@ TEST(XcKernelActionTest, ThePinnedRegistryCarriesTheKnownSecondDerivativeTiers) 
             << name << ": the tier this acceptance runs on is missing";
     }
 
-    // Recorded, not asserted: at this pin the composite and correlation names
-    // refuse the tier, and the acceptance runs on the tiered pure components.
-    // The full scan becomes a gate when the pin moves to the generation that
-    // carries all twenty-four.
-    std::string untiered;
-
+    // Every shipped name carries a tier that spans its own required components.
     for (const std::string_view name : excgrid::FunctionalNames())
     {
         const excgrid::XcFunctional* functional = excgrid::FindFunctional(name);
         ASSERT_NE(functional, nullptr) << name;
 
-        if (functional->SecondDerivativeMask().bits == 0)
-        {
-            if (!untiered.empty())
-            {
-                untiered += ", ";
-            }
+        const excgrid::ComponentMask required = functional->RequiredMask();
+        const excgrid::ComponentMask spanned = functional->SecondDerivativeMask();
 
-            untiered += std::string(name);
-        }
+        EXPECT_NE(spanned.bits, 0U) << name << ": the tier this acceptance runs on is missing";
+        EXPECT_EQ(excgrid::SecondDerivativeStatus(required, required, spanned),
+                  excgrid::KernelStatus::kOk)
+            << name << ": the tier does not span the functional's own mask";
     }
-
-    RecordProperty("untiered names at this excgrid pin", untiered);
 }
 
 TEST(XcKernelActionTest, AFunctionalWithNoTierIsRefusedByName) {
