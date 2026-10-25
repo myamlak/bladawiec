@@ -205,7 +205,9 @@ qcx::Result<ResponseReferenceIdentity> ValidateReference(const ResponseStateRefe
 
 ResponseState::ResponseState() = default;
 
-qcx::Result<void> ResponseState::Install(ResponseStateReference reference) {
+qcx::Result<void> ResponseState::Install(ResponseStateReference reference,
+                                         double exchangeFraction,
+                                         std::optional<KohnShamKernelTerm> kernel) {
     // The copies are built first and the operator is created against them, so
     // a refusal leaves the state exactly as it was; the vectors are then moved
     // into their members, which transfers the same buffers the operator's
@@ -223,14 +225,37 @@ qcx::Result<void> ResponseState::Install(ResponseStateReference reference) {
 
     const ResponseLayout layout{reference.numOccupied, reference.numVirtual};
     // The class's own OrbitalEnergies accessor shadows the type name here.
-    auto action = OrbitalHessianOperator::Create(
-        layout,
-        qcx::response::OrbitalEnergies{std::span<const double>(energies)},
-        MoTwoElectronTensor{std::span<const double>(moTwoElectron)});
+    const qcx::response::OrbitalEnergies energiesView{std::span<const double>(energies)};
+    const MoTwoElectronTensor tensorView{std::span<const double>(moTwoElectron)};
 
-    if (!action.has_value())
+    // The operator the state installs is the method's: the kernel term turns
+    // the Hartree-Fock action into the Kohn-Sham one, and its absent case is
+    // today's operator, unchanged.
+    std::optional<OrbitalHessianOperator> action;
+    std::optional<KohnShamOrbitalHessian> kernelAction;
+
+    if (kernel.has_value())
     {
-        return std::unexpected(action.error());
+        auto built = KohnShamOrbitalHessian::Create(
+            layout, energiesView, tensorView, exchangeFraction, std::move(*kernel));
+
+        if (!built.has_value())
+        {
+            return std::unexpected(built.error());
+        }
+
+        kernelAction.emplace(std::move(*built));
+    } else
+    {
+        auto built =
+            OrbitalHessianOperator::Create(layout, energiesView, tensorView, exchangeFraction);
+
+        if (!built.has_value())
+        {
+            return std::unexpected(built.error());
+        }
+
+        action.emplace(std::move(*built));
     }
 
     _layout = layout;
@@ -241,14 +266,17 @@ qcx::Result<void> ResponseState::Install(ResponseStateReference reference) {
     _density = std::move(density);
     _fock = std::move(fock);
     _moTwoElectron = std::move(moTwoElectron);
-    _operator.emplace(std::move(*action));
+    _operator = std::move(action);
+    _ksOperator = std::move(kernelAction);
 
     return {};
 }
 
 qcx::Result<ResponseState> ResponseState::Create(ResponseStateReference reference,
                                                  ResponseScreening screening,
-                                                 ResponseSolveOptions solverOptions) {
+                                                 ResponseSolveOptions solverOptions,
+                                                 double exchangeFraction,
+                                                 std::optional<KohnShamKernelTerm> kernel) {
     auto identity = ValidateReference(reference, screening);
 
     if (!identity.has_value())
@@ -262,7 +290,7 @@ qcx::Result<ResponseState> ResponseState::Create(ResponseStateReference referenc
     state._screening = std::move(screening);
     state._history = reference.history;
 
-    auto installed = state.Install(reference);
+    auto installed = state.Install(reference, exchangeFraction, std::move(kernel));
 
     if (!installed.has_value())
     {
@@ -281,7 +309,9 @@ qcx::Result<ResponseState> ResponseState::Create(ResponseStateReference referenc
 }
 
 qcx::Result<void> ResponseState::Rebase(ResponseStateReference reference,
-                                        ResponseScreening screening) {
+                                        ResponseScreening screening,
+                                        double exchangeFraction,
+                                        std::optional<KohnShamKernelTerm> kernel) {
     auto identity = ValidateReference(reference, screening);
 
     if (!identity.has_value())
@@ -323,7 +353,7 @@ qcx::Result<void> ResponseState::Rebase(ResponseStateReference reference,
 
     // Install copies and rebuilds first, so a refusal leaves the state
     // untouched; only a successful install replaces the reference record.
-    auto installed = Install(reference);
+    auto installed = Install(reference, exchangeFraction, std::move(kernel));
 
     if (!installed.has_value())
     {
@@ -390,8 +420,13 @@ qcx::Result<ResponseStateSolution> ResponseState::SolveDisplacement(
     request.moCoefficients = _moCoefficients;
     request.density = _density;
 
+    // The Kohn-Sham operator carries the kernel term inside its base action,
+    // so the solve reads one operator whichever form the state installed.
+    const OrbitalHessianOperator& hessian =
+        _ksOperator.has_value() ? _ksOperator->BaseOperator() : *_operator;
+
     auto solved = SolveNuclearDisplacementResponse(
-        *_operator, rightHandSide, request, moOverlapDerivative, _identity, _solvers[ordinal]);
+        hessian, rightHandSide, request, moOverlapDerivative, _identity, _solvers[ordinal]);
 
     if (!solved.has_value())
     {

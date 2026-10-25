@@ -13,13 +13,21 @@
 // engine's own value builders, exactly as response_gradient_test.cpp does. The
 // invariants below therefore check the state - its ownership, its per-ordinal
 // solver set and its reuse - not the differentiation.
+//
+// The Kohn-Sham leg checks the other operator the state can install: a state
+// handed a density functional's kernel term solves against the Kohn-Sham
+// Hessian, while the default state still reproduces the Hartree-Fock answer
+// element for element.
 
 #include "h2o_sto3g.hpp"
 #include "qcx/error.hpp"
+#include "qcx/grid/xc_grid_engine.hpp"
+#include "qcx/grid/xc_kernel_action.hpp"
 #include "qcx/integrals/eri_dense.hpp"
 #include "qcx/integrals/one_electron.hpp"
 #include "qcx/memory/tensor.hpp"
 #include "qcx/molecule/molecule.hpp"
+#include "qcx/response/response_kernel.hpp"
 #include "qcx/response/response_state.hpp"
 #include "qcx/scf/rhf.hpp"
 #include "tensor_conversions.hpp"
@@ -31,8 +39,11 @@
 #include <cstddef>
 #include <gtest/gtest.h>
 #include <iostream>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -40,6 +51,7 @@ namespace {
 
 using qcx::response::FockDerivativeContributionFn;
 using qcx::response::FockDerivativeRequest;
+using qcx::response::KohnShamKernelTerm;
 using qcx::response::NuclearDisplacement;
 using qcx::response::NuclearDisplacementRightHandSide;
 using qcx::response::ResponseLayout;
@@ -787,6 +799,258 @@ TEST(ResponseStateTest, TheStatesDensitySeedsTheNextGeometryScf) {
     EXPECT_NEAR(seeded->totalEnergy, secondReference->totalEnergy, 1e-10);
     EXPECT_NEAR(fresh->totalEnergy, secondReference->totalEnergy, 1e-10);
     EXPECT_LE(seeded->iterations, fresh->iterations);
+}
+
+// --- the Kohn-Sham operator ------------------------------------------------
+
+namespace {
+
+// The grid the kernel term integrates on: response_kernel_test's settings,
+// small enough that this stays a state test.
+constexpr std::size_t kKernelRadialPoints = 20;
+constexpr std::size_t kKernelAngularPoints = 50;
+
+// Keep every shell: the kernel must read the same field the reference
+// describes.
+constexpr double kKernelScreeningTolerance = -1.0;
+
+// A response difference below this would not be a kernel contribution: the
+// solves converge to 1e-8 relative, and the kernel moves the answer far more.
+constexpr double kKernelDifferenceFloor = 1e-6;
+
+/// The kernel term and the grid pieces its callback reads.
+///
+/// The state copies the callback, not the engine or the action, so the caller
+/// keeps both alive beside the state - the response_kernel_test pattern.
+struct KernelFixture {
+    std::shared_ptr<qcx::grid::XcGridEngine> engine;
+    std::shared_ptr<qcx::grid::XcKernelAction> action;
+    KohnShamKernelTerm term;
+};
+
+/// Builds a Slater kernel term over the reference's own orbitals and density.
+/// \param state The reference.
+/// \param basis The basis set.
+/// \returns The fixture, or an Error.
+qcx::Result<KernelFixture> BuildKernelFixture(const ReferenceState& state,
+                                              const qcx::basisset::BasisSet& basis) {
+    const auto molecule = MakeMolecule(state.geometry);
+
+    if (!molecule.has_value())
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInternalError, "the fixture did not build"});
+    }
+
+    const qcx::grid::XcGridSettings settings{kKernelRadialPoints, kKernelAngularPoints};
+    auto engine = qcx::grid::XcGridEngine::Create(*molecule, basis, "slater", settings);
+
+    if (!engine.has_value())
+    {
+        return std::unexpected(engine.error());
+    }
+
+    auto sharedEngine = std::make_shared<qcx::grid::XcGridEngine>(std::move(*engine));
+
+    auto action =
+        qcx::grid::XcKernelAction::Create(*sharedEngine,
+                                          state.coefficients,
+                                          state.density,
+                                          state.layout.numOccupied,
+                                          state.layout.numVirtual,
+                                          qcx::grid::XcKernelSettings{kKernelScreeningTolerance});
+
+    if (!action.has_value())
+    {
+        return std::unexpected(action.error());
+    }
+
+    auto sharedAction = std::make_shared<qcx::grid::XcKernelAction>(std::move(*action));
+
+    KernelFixture fixture;
+    fixture.engine = sharedEngine;
+    fixture.action = sharedAction;
+    fixture.term.name = "slater";
+    fixture.term.apply = [sharedAction](std::span<const double> trial, std::span<double> result) {
+        return sharedAction->Apply(trial, result);
+    };
+    return fixture;
+}
+
+/// The reference quantities the free solve entry takes, built exactly as the
+/// state builds its own, so a direct solve compares like with like.
+/// \param state The reference.
+/// \param displacement The displacement.
+/// \returns The request.
+FockDerivativeRequest MakeSolveRequest(const ReferenceState& state,
+                                       NuclearDisplacement displacement) {
+    FockDerivativeRequest request;
+    request.layout = state.layout;
+    request.displacement = displacement;
+    request.numBasisFunctions = state.numBasis;
+    request.moCoefficients = state.moCoefficients;
+    request.density = state.densityRowMajor;
+    return request;
+}
+
+} // namespace
+
+TEST(ResponseStateTest, AKernelTermMakesTheStateSolveAgainstTheKohnShamOperator) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+
+    const Geometry geometry;
+    const auto reference = BuildReference(geometry, *basis);
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    auto screening = MakeScreening(*reference);
+    ASSERT_TRUE(screening.has_value()) << screening.error().message;
+
+    const NuclearDisplacement displacement{0, 0};
+
+    auto rightHandSide = BuildRightHandSide(*reference, *basis, kDerivativeStep);
+    ASSERT_TRUE(rightHandSide.has_value()) << rightHandSide.error().message;
+
+    const auto overlap = BuildMoOverlapDerivative(*reference, *basis, 0, 0, kDerivativeStep);
+    ASSERT_TRUE(overlap.has_value()) << overlap.error().message;
+    const std::span<const double> overlapDerivative(overlap->data(), overlap->size());
+
+    // The default state is the Hartree-Fock one: no kernel, unscaled exchange.
+    auto defaultState = ResponseState::Create(MakeStateReference(*reference), *screening);
+    ASSERT_TRUE(defaultState.has_value()) << defaultState.error().message;
+    EXPECT_FALSE(defaultState->HasKernel());
+    EXPECT_TRUE(defaultState->KernelName().empty());
+    EXPECT_EQ(defaultState->ExchangeFraction(), 1.0);
+
+    auto defaultSolution =
+        defaultState->SolveDisplacement(displacement, *rightHandSide, overlapDerivative);
+    ASSERT_TRUE(defaultSolution.has_value()) << defaultSolution.error().message;
+
+    // Spelling the defaults out changes nothing: the state builds the same
+    // operator and solves the same answer.
+    auto explicitState =
+        ResponseState::Create(MakeStateReference(*reference), *screening, {}, 1.0, std::nullopt);
+    ASSERT_TRUE(explicitState.has_value()) << explicitState.error().message;
+    auto explicitSolution =
+        explicitState->SolveDisplacement(displacement, *rightHandSide, overlapDerivative);
+    ASSERT_TRUE(explicitSolution.has_value()) << explicitSolution.error().message;
+    EXPECT_DOUBLE_EQ(
+        MaxDifference(explicitSolution->response.amplitudes, defaultSolution->response.amplitudes),
+        0.0);
+    EXPECT_DOUBLE_EQ(MaxDifference(explicitSolution->response.perturbedDensity,
+                                   defaultSolution->response.perturbedDensity),
+                     0.0);
+
+    // The old result, reached without the state: the three-argument operator
+    // the state built before the kernel seam existed, solved through the free
+    // entry with a fresh solver of the same options.
+    const qcx::response::OrbitalEnergies energies{reference->orbitalEnergies};
+    const qcx::response::MoTwoElectronTensor moTwoElectron{reference->moEri};
+    auto bareOperator =
+        qcx::response::OrbitalHessianOperator::Create(reference->layout, energies, moTwoElectron);
+    ASSERT_TRUE(bareOperator.has_value()) << bareOperator.error().message;
+
+    const auto identity = qcx::response::MakeResponseReferenceIdentity(
+        reference->geometry.coordinates, reference->densityRowMajor);
+    ASSERT_TRUE(identity.has_value()) << identity.error().message;
+
+    const FockDerivativeRequest request = MakeSolveRequest(*reference, displacement);
+
+    qcx::response::ResponseSolver<qcx::response::OrbitalHessianOperator> bareSolver;
+    const auto bareSolution = qcx::response::SolveNuclearDisplacementResponse(
+        *bareOperator, *rightHandSide, request, overlapDerivative, *identity, bareSolver);
+    ASSERT_TRUE(bareSolution.has_value()) << bareSolution.error().message;
+
+    EXPECT_DOUBLE_EQ(MaxDifference(defaultSolution->response.amplitudes, bareSolution->amplitudes),
+                     0.0);
+    EXPECT_DOUBLE_EQ(
+        MaxDifference(defaultSolution->response.perturbedDensity, bareSolution->perturbedDensity),
+        0.0);
+
+    // The Kohn-Sham state: the same reference, the same right-hand side, with
+    // the density functional's kernel term in the operator.
+    auto kernelFixture = BuildKernelFixture(*reference, *basis);
+    ASSERT_TRUE(kernelFixture.has_value()) << kernelFixture.error().message;
+
+    auto ksState = ResponseState::Create(
+        MakeStateReference(*reference), *screening, {}, 1.0, kernelFixture->term);
+    ASSERT_TRUE(ksState.has_value()) << ksState.error().message;
+    EXPECT_TRUE(ksState->HasKernel());
+    EXPECT_EQ(ksState->KernelName(), std::string_view("slater"));
+    EXPECT_EQ(ksState->ExchangeFraction(), 1.0);
+
+    auto ksSolution = ksState->SolveDisplacement(displacement, *rightHandSide, overlapDerivative);
+    ASSERT_TRUE(ksSolution.has_value()) << ksSolution.error().message;
+
+    const double amplitudeDifference =
+        MaxDifference(ksSolution->response.amplitudes, defaultSolution->response.amplitudes);
+    const double densityDifference = MaxDifference(ksSolution->response.perturbedDensity,
+                                                   defaultSolution->response.perturbedDensity);
+    std::cout << "[ks state] worst |amplitude difference| " << amplitudeDifference
+              << " and |density difference| " << densityDifference
+              << " against the Hartree-Fock answer\n";
+
+    EXPECT_GT(amplitudeDifference, kKernelDifferenceFloor);
+    EXPECT_GT(densityDifference, kKernelDifferenceFloor);
+
+    // The state's answer is the Kohn-Sham operator's own: a direct solve
+    // against the operator built by hand agrees element for element, which is
+    // what makes "the solve path uses the KS operator" assertable rather than
+    // inferred from a difference.
+    auto ksOperator = qcx::response::KohnShamOrbitalHessian::Create(
+        reference->layout, energies, moTwoElectron, 1.0, kernelFixture->term);
+    ASSERT_TRUE(ksOperator.has_value()) << ksOperator.error().message;
+
+    qcx::response::ResponseSolver<qcx::response::OrbitalHessianOperator> ksSolver;
+    const auto directKs =
+        qcx::response::SolveNuclearDisplacementResponse(ksOperator->BaseOperator(),
+                                                        *rightHandSide,
+                                                        request,
+                                                        overlapDerivative,
+                                                        *identity,
+                                                        ksSolver);
+    ASSERT_TRUE(directKs.has_value()) << directKs.error().message;
+
+    EXPECT_DOUBLE_EQ(MaxDifference(ksSolution->response.amplitudes, directKs->amplitudes), 0.0);
+    EXPECT_DOUBLE_EQ(
+        MaxDifference(ksSolution->response.perturbedDensity, directKs->perturbedDensity), 0.0);
+}
+
+TEST(ResponseStateTest, ARebaseUsesTheOperatorArgumentsItIsHanded) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+
+    const Geometry geometry;
+    const auto reference = BuildReference(geometry, *basis);
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    auto screening = MakeScreening(*reference);
+    ASSERT_TRUE(screening.has_value()) << screening.error().message;
+
+    auto kernelFixture = BuildKernelFixture(*reference, *basis);
+    ASSERT_TRUE(kernelFixture.has_value()) << kernelFixture.error().message;
+
+    auto state = ResponseState::Create(
+        MakeStateReference(*reference), *screening, {}, 1.0, kernelFixture->term);
+    ASSERT_TRUE(state.has_value()) << state.error().message;
+    EXPECT_TRUE(state->HasKernel());
+    EXPECT_EQ(state->KernelName(), std::string_view("slater"));
+
+    // A rebase that names the kernel rebuilds the Kohn-Sham operator.
+    auto rebased =
+        state->Rebase(MakeStateReference(*reference), *screening, 1.0, kernelFixture->term);
+    ASSERT_TRUE(rebased.has_value()) << rebased.error().message;
+    EXPECT_TRUE(state->HasKernel());
+    EXPECT_EQ(state->KernelName(), std::string_view("slater"));
+
+    // The operator arguments are the sweep's method, not a property of the
+    // reference, so a rebase that omits them rebuilds the Hartree-Fock
+    // operator. A Kohn-Sham sweep passes them to every rebase.
+    auto plain = state->Rebase(MakeStateReference(*reference), *screening);
+    ASSERT_TRUE(plain.has_value()) << plain.error().message;
+    EXPECT_FALSE(state->HasKernel());
+    EXPECT_TRUE(state->KernelName().empty());
+    EXPECT_EQ(state->ExchangeFraction(), 1.0);
 }
 
 // --- the refusals and the structure -----------------------------------------
