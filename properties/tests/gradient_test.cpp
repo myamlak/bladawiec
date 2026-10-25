@@ -20,6 +20,7 @@
 // grid term it adds each have an assembly to disagree with that shares none of
 // their code.
 
+#include "fast_test_mode.hpp"
 #include "h2o_sto3g.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/dispersion/dispersion.hpp"
@@ -1376,6 +1377,11 @@ TEST(TotalGradientTest, TheKohnShamRouteRebuildsTheReferenceFock) {
 // term against the derivative walk's skeleton at the functional's fraction, and
 // the reconstruction gate against the reference's electronic energy.
 TEST(TotalGradientTest, TheKohnShamXcTermIsTheGridWalksOwnGradientAndEnergy) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "grid finite differences over an XC walk: Release-only";
+    }
+
     const auto basis = MakeH2oSto3gBasis();
     ASSERT_TRUE(basis.has_value()) << basis.error().message;
     const auto molecule = MakeMolecule(Geometry{});
