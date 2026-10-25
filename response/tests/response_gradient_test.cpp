@@ -25,7 +25,11 @@
 
 // The nuclear-displacement right-hand side, checked on a real H3+/STO-3G
 // reference at a scalene, off-axis geometry so that neither the derivative Fock
-// block nor any gradient component is zero by symmetry.
+// block nor any gradient component is zero by symmetry. The applied electric
+// field's right-hand side is checked beside it: its MO transform against the
+// four-index definition, and its refusals. Its physics is pinned end to end by
+// the finite-field anchors in response_solver_test.cpp and in
+// response_kernel_test.cpp.
 //
 // The derivative integrals are NOT this module's - they belong to the integral
 // engine, and this tree has no public API for them. They are therefore built
@@ -38,6 +42,9 @@
 
 namespace {
 
+using qcx::response::ElectricField;
+using qcx::response::ElectricFieldRequest;
+using qcx::response::ElectricFieldRightHandSide;
 using qcx::response::EnergyWeightedTerm;
 using qcx::response::FockDerivativeContributionFn;
 using qcx::response::FockDerivativeRequest;
@@ -983,6 +990,167 @@ TEST(ResponseGradientTest, AStaleHandleMissesRatherThanReturningTheOldAnswer) {
     cache.Invalidate();
     EXPECT_EQ(cache.Size(), 0u);
     EXPECT_EQ(cache.Lookup(handle), nullptr);
+}
+
+// --- the applied-field right-hand side --------------------------------------
+
+// The field's block on a matrix whose MO transform is checked by the
+// four-index definition, not by a second implementation of the same two
+// passes: distinct coefficients and three distinct matrices, so a swapped
+// component or a transposed transform cannot cancel to the same numbers. The
+// basis count exceeds the orbital count so that the two strides - rows of the
+// AO matrix, rows of the MO coefficients - cannot be confused silently.
+TEST(ResponseGradientTest, TheElectricFieldRightHandSideAssemblesTheMOBlock) {
+    constexpr std::size_t kNumBasis = 4;
+    constexpr std::size_t kNumOccupied = 1;
+    constexpr std::size_t kNumVirtual = 2;
+    const std::size_t numOrbitals = kNumOccupied + kNumVirtual;
+    const ResponseLayout layout{kNumOccupied, kNumVirtual};
+
+    std::vector<double> coefficients(kNumBasis * numOrbitals, 0.0);
+
+    for (std::size_t mu = 0; mu < kNumBasis; ++mu)
+    {
+        for (std::size_t p = 0; p < numOrbitals; ++p)
+        {
+            coefficients[mu * numOrbitals + p] =
+                std::sin(0.3 + static_cast<double>(mu) + 0.7 * static_cast<double>(p));
+        }
+    }
+
+    std::array<std::vector<double>, 3> matrices;
+
+    for (std::size_t direction = 0; direction < matrices.size(); ++direction)
+    {
+        matrices[direction].assign(kNumBasis * kNumBasis, 0.0);
+
+        for (std::size_t mu = 0; mu < kNumBasis; ++mu)
+        {
+            for (std::size_t nu = 0; nu < kNumBasis; ++nu)
+            {
+                matrices[direction][mu * kNumBasis + nu] =
+                    0.1 + 0.5 * static_cast<double>(direction) + 0.3 * static_cast<double>(mu) -
+                    0.2 * static_cast<double>(nu);
+            }
+        }
+    }
+
+    const auto rightHandSide =
+        ElectricFieldRightHandSide::Create(layout,
+                                           kNumBasis,
+                                           {std::span<const double>(matrices[0]),
+                                            std::span<const double>(matrices[1]),
+                                            std::span<const double>(matrices[2])});
+    ASSERT_TRUE(rightHandSide.has_value()) << rightHandSide.error().message;
+    EXPECT_EQ(rightHandSide->NumBasisFunctions(), kNumBasis);
+    EXPECT_EQ(rightHandSide->Dimension(), layout.Dimension());
+
+    double worst = 0.0;
+
+    for (std::size_t direction = 0; direction < matrices.size(); ++direction)
+    {
+        ElectricFieldRequest request;
+        request.layout = layout;
+        request.field = ElectricField{direction};
+        request.numBasisFunctions = kNumBasis;
+        request.moCoefficients = coefficients;
+
+        std::vector<double> block(layout.Dimension(), 0.0);
+        ASSERT_TRUE(rightHandSide->Assemble(request, block).has_value());
+
+        for (std::size_t i = 0; i < kNumOccupied; ++i)
+        {
+            for (std::size_t a = 0; a < kNumVirtual; ++a)
+            {
+                double expected = 0.0;
+
+                for (std::size_t mu = 0; mu < kNumBasis; ++mu)
+                {
+                    for (std::size_t nu = 0; nu < kNumBasis; ++nu)
+                    {
+                        expected += coefficients[mu * numOrbitals + kNumOccupied + a] *
+                                    matrices[direction][mu * kNumBasis + nu] *
+                                    coefficients[nu * numOrbitals + i];
+                    }
+                }
+
+                worst = std::max(worst, std::abs(block[i * kNumVirtual + a] - expected));
+            }
+        }
+    }
+
+    EXPECT_LT(worst, 1e-14);
+}
+
+TEST(ResponseGradientTest, AnElectricFieldRightHandSideRefusesWhatItCannotAssemble) {
+    constexpr std::size_t kNumBasis = 3;
+    const ResponseLayout layout{1, 2};
+    const std::vector<double> matrix(kNumBasis * kNumBasis, 0.5);
+    const std::vector<double> coefficients(kNumBasis * 3, 0.0);
+    const std::array<std::span<const double>, 3> complete{std::span<const double>(matrix),
+                                                          std::span<const double>(matrix),
+                                                          std::span<const double>(matrix)};
+
+    const auto rightHandSide = ElectricFieldRightHandSide::Create(layout, kNumBasis, complete);
+    ASSERT_TRUE(rightHandSide.has_value()) << rightHandSide.error().message;
+
+    // The factory's refusals: a zero block, an AO count below the orbital
+    // count, and a matrix of the wrong side.
+    for (const ResponseLayout empty : {ResponseLayout{0, 2}, ResponseLayout{1, 0}})
+    {
+        const auto refused = ElectricFieldRightHandSide::Create(empty, kNumBasis, complete);
+        ASSERT_FALSE(refused.has_value());
+        EXPECT_EQ(refused.error().code, qcx::ErrorCode::kInvalidArgument);
+    }
+
+    EXPECT_FALSE(ElectricFieldRightHandSide::Create(layout, 2, complete).has_value());
+
+    const std::vector<double> shortMatrix(kNumBasis * kNumBasis - 1, 0.0);
+    const auto wrongSide = ElectricFieldRightHandSide::Create(layout,
+                                                              kNumBasis,
+                                                              {std::span<const double>(shortMatrix),
+                                                               std::span<const double>(matrix),
+                                                               std::span<const double>(matrix)});
+    ASSERT_FALSE(wrongSide.has_value());
+    EXPECT_EQ(wrongSide.error().code, qcx::ErrorCode::kInvalidArgument);
+
+    // The assembly's own refusals: a request of another layout, a direction no
+    // axis answers to, coefficients of the wrong length, and a block of the
+    // wrong size.
+    ElectricFieldRequest request;
+    request.layout = layout;
+    request.field = ElectricField{0};
+    request.numBasisFunctions = kNumBasis;
+    request.moCoefficients = coefficients;
+
+    std::vector<double> block(layout.Dimension(), 0.0);
+    ASSERT_TRUE(rightHandSide->Assemble(request, block).has_value());
+
+    ElectricFieldRequest wrongLayout = request;
+    wrongLayout.layout = ResponseLayout{1, 1};
+    EXPECT_FALSE(rightHandSide->Assemble(wrongLayout, block).has_value());
+
+    ElectricFieldRequest otherBasis = request;
+    otherBasis.numBasisFunctions = kNumBasis + 1;
+    EXPECT_FALSE(rightHandSide->Assemble(otherBasis, block).has_value());
+
+    ElectricFieldRequest offAxis = request;
+    offAxis.field = ElectricField{3};
+    EXPECT_FALSE(rightHandSide->Assemble(offAxis, block).has_value());
+
+    ElectricFieldRequest shortCoefficients = request;
+    shortCoefficients.moCoefficients = std::span<const double>(coefficients).first(2);
+    EXPECT_FALSE(rightHandSide->Assemble(shortCoefficients, block).has_value());
+
+    std::vector<double> shortBlock(layout.Dimension() - 1, 0.0);
+    EXPECT_FALSE(rightHandSide->Assemble(request, shortBlock).has_value());
+}
+
+TEST(ResponseGradientTest, AnElectricFieldIsNamedByItsAxis) {
+    EXPECT_EQ(qcx::response::ToString(ElectricField{0}), "field-x");
+    EXPECT_EQ(qcx::response::ToString(ElectricField{1}), "field-y");
+    EXPECT_EQ(qcx::response::ToString(ElectricField{2}), "field-z");
+    EXPECT_EQ(qcx::response::ToString(ElectricField{3}), "field-?");
 }
 
 // --- the invariants, in the order the decomposition puts them in ------------
