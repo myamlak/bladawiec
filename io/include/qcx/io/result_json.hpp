@@ -227,7 +227,7 @@ struct RunXcGradient {
     double energyHartree = 0.0;
 };
 
-/// The terms of a total analytic nuclear gradient (schema 45), each a 3N
+/// The terms of a total analytic nuclear gradient (schema 46), each a 3N
 /// vector in Hartree/Bohr, atom-major, in the molecule's canonical atom
 /// order.
 ///
@@ -246,6 +246,12 @@ struct RunTotalGradientTerms {
     std::vector<double> exchange;
     /// `Tr(F D(1))`, the orbital response's energy-weighted term.
     std::vector<double> response;
+    /// `dE_xc/dR` at the fixed reference density, the exchange-correlation
+    /// skeleton term. PRESENT exactly when the reference integrates a density
+    /// functional (`rks`) and ABSENT on `rhf`, where no such term exists: a
+    /// term nobody computed is absent, never a zero vector a consumer could
+    /// read as a computed contribution.
+    std::optional<std::vector<double>> xc;
     /// `dE_disp/dR`. PRESENT exactly when the input wrote a `[dispersion]`
     /// block and ABSENT otherwise: a term nobody requested is absent, never a
     /// zero vector a consumer could read as a computed contribution.
@@ -314,13 +320,14 @@ struct RunTotalGradientResponse {
     std::size_t iterations = 0; ///< Conjugate-gradient iterations in total.
 };
 
-/// The total analytic nuclear gradient at a converged closed-shell RHF
-/// reference (schema 45), serialized as `total_gradient`.
+/// The total analytic nuclear gradient at a converged closed-shell reference
+/// (schema 46), serialized as `total_gradient`.
 ///
 /// **What the block is.** `gradient` is `dE/dR` for the run's own total
 /// energy, with each contribution kept apart under `terms` in the order the
 /// total accumulates them: the one-electron skeleton, the nuclear repulsion,
-/// the Coulomb and exchange skeletons, the orbital response, and the
+/// the Coulomb and exchange skeletons, the exchange-correlation skeleton when
+/// the reference integrates a functional, the orbital response, and the
 /// dispersion correction when one was requested. The total is the terms
 /// summed, not an independently assembled number, so the decomposition and
 /// the total cannot disagree.
@@ -328,10 +335,10 @@ struct RunTotalGradientResponse {
 /// **Presence.** Absent unless the run asked (`[properties] total_gradient`),
 /// so a record without the block states that no gradient was computed and not
 /// that it was zero - the null-honesty rule the opt-in blocks beside it
-/// follow. The block is written on the `rhf` lane only, because the assembly
-/// differentiates a closed-shell RHF reference; a request on any other method
-/// word is refused by the validator rather than recorded as absent, and a
-/// non-converged SCF is refused at run time.
+/// follow. The block is written on the closed-shell lanes (`rhf` and `rks`)
+/// only, because the assembly differentiates a closed-shell reference; a
+/// request on an unrestricted method word is refused by the validator rather
+/// than recorded as absent, and a non-converged SCF is refused at run time.
 /// \ingroup qcx-io
 struct RunTotalGradient {
     /// The total gradient, 3N entries in Hartree/Bohr, atom-major, in the
@@ -1937,7 +1944,16 @@ struct RunResult {
     /// name rather than being recorded as an absent block, and a term nobody
     /// requested (the dispersion correction without a `[dispersion]` block)
     /// is absent inside the block, never a zero-filled vector.
-    static constexpr int kSchemaVersion = 45;
+    ///
+    /// Schema 46 ADDS the optional `total_gradient.terms.xc` member: the
+    /// exchange-correlation skeleton term of the total analytic nuclear
+    /// gradient, present on a run whose reference integrates a density
+    /// functional (`rks`) and absent on `rhf`. A key added, so the number
+    /// moved with it. The RHF document is byte-identical under the change -
+    /// the member is absent, not zero - and a consumer that reads the member
+    /// on an RHF record learns the run had no exchange-correlation term, not
+    /// that one was computed as zero.
+    static constexpr int kSchemaVersion = 46;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.

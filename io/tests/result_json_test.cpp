@@ -38,7 +38,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsFortyFive) {
+TEST(ResultJsonTest, SchemaVersionIsFortySix) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -168,7 +168,15 @@ TEST(ResultJsonTest, SchemaVersionIsFortyFive) {
     // (absent unless the run asked, never a zero-filled block), and a term
     // nobody requested - the dispersion correction without a `[dispersion]`
     // block - is absent inside a present block.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 45);
+    //
+    // v45 -> v46: `total_gradient.terms` GAINS the optional `xc` member, the
+    // exchange-correlation skeleton term of the total gradient, present on a
+    // run whose reference integrates a density functional (`rks`) and absent
+    // on `rhf`. A key added, so the number moves with it. The RHF document is
+    // byte-identical under the change - the member is absent, not a zero
+    // vector - and a consumer reading it on an RHF record learns that run had
+    // no exchange-correlation term rather than that one was computed as zero.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 46);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -699,11 +707,12 @@ TEST(ResultJsonTest, XcGradientBlockAbsentWhenNotRequested) {
 }
 
 TEST(ResultJsonTest, TotalGradientBlockEmittedWithEveryReportedMember) {
-    // The total analytic gradient (schema 45): every term is its own key, the
+    // The total analytic gradient (schema 46): every term is its own key, the
     // energies, dimensions, counts, solve report and both gate residuals are
-    // written, and the dispersion pair is ABSENT - the run wrote no
-    // [dispersion] block, so the term is not a zero vector and the energy is
-    // not a fabricated 0.0 (the null-honesty rule, one level down).
+    // written, and the exchange-correlation and dispersion terms are ABSENT -
+    // an RHF run integrates no functional and this run wrote no [dispersion]
+    // block, so neither term is a zero vector and no energy is a fabricated
+    // 0.0 (the null-honesty rule, one level down).
     qcx::io::RunResult result;
     qcx::io::RunProperties properties;
 
@@ -771,9 +780,49 @@ TEST(ResultJsonTest, TotalGradientBlockEmittedWithEveryReportedMember) {
     EXPECT_EQ(CountOccurrences(json, "\"right_hand_side_terms\""), 1);
     EXPECT_NE(json.find("\"one-electron\""), std::string::npos);
 
+    // The exchange-correlation term is absent on an RHF-shaped block: the
+    // run's reference integrated no functional, so the key is missing rather
+    // than a zero vector.
+    EXPECT_EQ(CountOccurrences(json, "\"xc\""), 0);
+
     // The dispersion pair inside the block: absent, not zero.
     EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 0);
     EXPECT_EQ(json.find("dispersion_hartree"), std::string::npos);
+}
+
+TEST(ResultJsonTest, TotalGradientXcTermIsPresentOnlyOnADensityFunctionalReference) {
+    // The same block behind a density-functional reference: the
+    // exchange-correlation skeleton term appears under its own key, with the
+    // vector written element for element. Presence is the reference's, so this
+    // is the only shape in which the key is written.
+    qcx::io::RunResult result;
+    qcx::io::RunProperties properties;
+
+    qcx::io::RunTotalGradient total;
+    total.gradient = {0.125, -0.375};
+    total.terms.oneElectron = {0.25, -0.5};
+    total.terms.nuclearRepulsion = {0.75, -1.25};
+    total.terms.coulomb = {1.5, -2.5};
+    total.terms.exchange = {-3.5, 4.5};
+    total.terms.xc = std::vector<double>{-9.5, 10.5};
+    total.terms.response = {5.5, -6.5};
+    total.energies.electronic = -8.125;
+    total.energies.reconstructedElectronic = -8.0625;
+    total.energies.nuclearRepulsion = 0.875;
+    total.energies.total = -7.25;
+    total.rightHandSideTerms = {"one-electron", "coulomb", "exchange"};
+    properties.totalGradient = total;
+    result.properties = std::move(properties);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"xc\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"xc\": ["), 1);
+    EXPECT_EQ(CountOccurrences(json, "-9.5"), 1);
+    EXPECT_EQ(CountOccurrences(json, "10.5"), 1);
+
+    // The dispersion term stays absent: adding the XC key did not widen the
+    // dispersion rule.
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 0);
 }
 
 TEST(ResultJsonTest, TotalGradientDispersionTermIsPresentOnlyWhenRequested) {

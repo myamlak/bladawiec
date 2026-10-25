@@ -355,13 +355,13 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                                      {"energy_hartree", xcGradient.energyHartree}};
         }
 
-        // The total analytic nuclear gradient (schema 45): absent unless the
+        // The total analytic nuclear gradient (schema 46): absent unless the
         // run asked for it, so an absent key is "no gradient was computed" and
-        // never "the gradient was zero". Inside the block, the dispersion term
-        // and its energy follow the same rule one level down: a correction
-        // nobody requested is absent, never a zero-filled vector or a
-        // fabricated 0.0 that a consumer could read as a computed
-        // contribution.
+        // never "the gradient was zero". Inside the block, the
+        // exchange-correlation skeleton term and the dispersion term and its
+        // energy follow the same rule one level down: a term nobody computed
+        // or requested is absent, never a zero-filled vector or a fabricated
+        // 0.0 that a consumer could read as a computed contribution.
         if (result.properties->totalGradient.has_value())
         {
             const auto& total = *result.properties->totalGradient;
@@ -371,6 +371,11 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                  {"coulomb", total.terms.coulomb},
                                  {"exchange", total.terms.exchange},
                                  {"response", total.terms.response}};
+
+            if (total.terms.xc.has_value())
+            {
+                terms["xc"] = *total.terms.xc;
+            }
 
             if (total.terms.dispersion.has_value())
             {
