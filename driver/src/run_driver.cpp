@@ -1427,6 +1427,11 @@ std::vector<std::string> PresentQfmmKnobNames(const qcx::io::RunInput& input) {
         names.emplace_back("method.crossover_basis_function_count");
     }
 
+    if (input.method.qfmmNearFieldCertifiedLane.has_value())
+    {
+        names.emplace_back("method.qfmm_near_field_certified_lane");
+    }
+
     return names;
 }
 
@@ -1902,12 +1907,16 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     // the label it carried - and the side a key falls on is judged by what
     // the key NAMES, not by how strongly it is worded.
     //
-    // This rule covers the four QFMM knobs: method.theta, method.l_mult,
-    // method.max_leaf_size and method.crossover_basis_function_count name the
+    // This rule covers the five QFMM knobs: method.theta, method.l_mult,
+    // method.max_leaf_size, method.crossover_basis_function_count and
+    // method.qfmm_near_field_certified_lane name the
     // composed-QFMM builder's own tuning. theta is an accuracy control, not a
     // performance knob - it decides which pairs the near/far split computes
     // exactly (integrals/src/qfmm_fock_build.cpp) - so a run that dropped it
-    // would compute at a screening the document does not ask for.
+    // would compute at a screening the document does not ask for. The lane key
+    // names the near field's precision policy, which the preset's advertised
+    // budget does not cover (schema section 3.10), so it is a mechanism key
+    // too.
     //
     // The far-field model parameters (the extent model, the separation mode and
     // the surface-ball buffer, QfmmOptions::extentModel / separationMode /
@@ -1974,8 +1983,9 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
                     " whose fock_builder is not \"qfmm\": this run "
                     "is on " +
                     FamilyNameForRefusal(input) +
-                    ". The four QFMM knobs (theta, l_mult, max_leaf_size, "
-                    "crossover_basis_function_count) are consumed by fock_builder = \"qfmm\" "
+                    ". The five QFMM knobs (theta, l_mult, max_leaf_size, "
+                    "crossover_basis_function_count, qfmm_near_field_certified_lane) are "
+                    "consumed by fock_builder = \"qfmm\" "
                     "alone, and no other family in this build reads them, so the request is "
                     "refused rather than run as if the key had not been written - theta is an "
                     "accuracy control (it decides which pairs the near/far split computes "
@@ -5069,6 +5079,13 @@ qcx::Result<UhfRun> RunQfmmUhfScf(
     {
         qfmmOptions.crossoverBasisFunctionCount = *input.method.crossoverBasisFunctionCount;
     }
+
+    // The near-field lane's REQUEST: the one input that reaches
+    // QfmmOptions::useCertifiedMixedPrecision. An absent key keeps the engine
+    // default (QfmmOptions{}); the same option feeds the nested exchange half
+    // (qfmm_hf_build.cpp), so both halves run one policy.
+    qfmmOptions.useCertifiedMixedPrecision = input.method.qfmmNearFieldCertifiedLane.value_or(
+        qcx::integrals::QfmmOptions{}.useCertifiedMixedPrecision);
 
     // The adaptive seam (the budget path), wired like the direct runner above: the
     // cap is the workspace budget shared with the composed builder - each
@@ -8593,6 +8610,13 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
         {
             qfmmOptions.crossoverBasisFunctionCount = *input.method.crossoverBasisFunctionCount;
         }
+
+        // The near-field lane's REQUEST: the one input that reaches
+        // QfmmOptions::useCertifiedMixedPrecision. An absent key keeps the
+        // engine default (QfmmOptions{}); the same option feeds the nested
+        // exchange half (qfmm_hf_build.cpp), so both halves run one policy.
+        qfmmOptions.useCertifiedMixedPrecision = input.method.qfmmNearFieldCertifiedLane.value_or(
+            qcx::integrals::QfmmOptions{}.useCertifiedMixedPrecision);
 
         // The adaptive seam (the budget path), wired like the direct branch below:
         // the cap is the workspace budget shared with the composed builder -

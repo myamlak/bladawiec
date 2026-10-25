@@ -99,6 +99,7 @@ reaches that builder it resolves an auxiliary basis itself.
 | `l_mult` | integer | — | `-1` for the accuracy preset's order, `0`–`8` for an explicit one |
 | `max_leaf_size` | integer | — | at least 1 |
 | `crossover_basis_function_count` | integer | — | at least 0 |
+| `qfmm_near_field_certified_lane` | bool | `true` | the composed QFMM near field's certified lane; `false` runs it in double precision |
 | `enforce_certified_bound` | bool | `false` | enforce the certified mixed-precision budget |
 | `force_certified_lane` | bool | `false` | force the certified single-precision lane on |
 | `ri_tensor_mode` | string | — | `auto` or `disk`; the disk rung of the RI-J ladder |
@@ -106,11 +107,14 @@ reaches that builder it resolves an auxiliary basis itself.
 | `ri_orbit_expansion` | bool | `false` | the RI-J orbit-expansion opt-in |
 | `eri_cache_store` | string | — | a non-empty path requests the disk-tier ERI store |
 
-The four keys `theta`, `l_mult`, `max_leaf_size` and `crossover_basis_function_count` are the
+The five keys `theta`, `l_mult`, `max_leaf_size`, `crossover_basis_function_count` and
+`qfmm_near_field_certified_lane` are the
 composed fast-multipole builder's own tuning. They are consumed by `fock_builder = "qfmm"` alone,
 and a run on any other family that writes one is refused rather than run with the key dropped:
 `theta` is an accuracy control, and a run that discarded it would compute at a screening the file
-did not ask for.
+did not ask for. `qfmm_near_field_certified_lane = false` switches the near field, and the composed
+builder's exchange half, from the certified single-precision lane to double precision; the run
+record's `qfmm_model.certified_near_field_lane` states which one ran.
 
 `enforce_certified_bound` and `force_certified_lane` are two different switches, not two spellings
 of one. The first asks for the budget enforcement over the single-precision lane's routing; the

@@ -1702,6 +1702,22 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
 
     input.method.crossoverBasisFunctionCount = *crossover;
 
+    // The QFMM near-field certified-lane request: optional and type-strict,
+    // absent = the engine default (the lane enabled, subject to the preset
+    // gate). The one input that reaches QfmmOptions::
+    // useCertifiedMixedPrecision; the run record already discloses the
+    // resolved policy as qfmm_model.certified_near_field_lane (schema 47).
+    // The driver's qfmm path is its only consumer, and it is refused there
+    // by name on every other family.
+    auto qfmmNearFieldCertifiedLane = ReadBool(method, "method.qfmm_near_field_certified_lane");
+
+    if (!qfmmNearFieldCertifiedLane.has_value())
+    {
+        return std::unexpected(qfmmNearFieldCertifiedLane.error());
+    }
+
+    input.method.qfmmNearFieldCertifiedLane = *qfmmNearFieldCertifiedLane;
+
     // The disk-rung knob: optional; the mode words are the io enum's own
     // vocabulary ("auto" | "disk" - the rung selector selects a rung and
     // nothing else). The FORCE is not a word here any more: it lives at

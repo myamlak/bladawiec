@@ -44,6 +44,7 @@ is self-describing.
 | `[method] l_mult` | `method.lMult` | optional; the QFMM multipole-order override: `-1` (the default when absent) = the accuracy preset's order; `0..8` = the explicit order (the `kQfmmMaxLMult = 8` cap — the range `QfmmJBuilder::Create` enforces) |
 | `[method] max_leaf_size` | `method.maxLeafSize` | optional; the QFMM octree leaf-size cap: absent = the engine default 8; `>= 1` |
 | `[method] crossover_basis_function_count` | `method.crossoverBasisFunctionCount` | optional; the QFMM-vs-RI-J crossover override: absent = the engine's `kQfmmCrossoverBasisFunctionCount` (a placeholder until a measured value lands); `>= 0` |
+| `[method] qfmm_near_field_certified_lane` | `method.qfmmNearFieldCertifiedLane` | Optional; a TOML boolean. The composed QFMM builder's near-field lane request (the `QfmmOptions::useCertifiedMixedPrecision` passthrough, schema 47's companion input key): absent = `true`, the engine's own default, which is the certified fp32 lane subject to the preset's own gate (`MixedPrecisionThreshold` > 0, so never at `kTight`); `false` CREATES the composed builder with the lane off, running the near-field direct builder in fp64. One option feeds both nested builders (`qfmm_hf_build.cpp`), so `false` also runs the composed builder's exchange half in fp64. Unlike `force_certified_lane`, this key's explicit `false` IS a force-off for this one builder; read by `fock_builder = "qfmm"` and refused by name on every other family (the key-split rule, §2.3). The resolved policy is the run record's `qfmm_model.certified_near_field_lane` (§3.10) |
 | `[method] ri_tensor_mode` | `method.riTensorMode` | optional; the RI-J tensor-**rung** selector (the disk-rung knob); absent = `auto`. These are TIER words, not family words (the two axes are stated at the `[method] fock_builder` row above): the key asks where the RI tensor and its working set live, never which builder family runs. `auto` = the composed in-memory ladder (the engine's budget-path estimate picks fast/light). **Disk is entered only when a run asks for it**: an absent key — like `auto` — never selects the disk rung, the estimate choosing among the in-memory rungs alone, and only `disk` or `[diagnostics] force_disk_ri` engages the store. `disk` = the explicit opt-in that engages the storage-module disk-backed builder (the ladder's LAST rung) when — and only when — the in-memory ladder refuses at the engine's Create-time estimate under the workspace budget; a fitting memory rung always rides (the knob is inert by design), and on the legacy null-budget path (`memory_cap_gib = 0`) the disk route refuses loudly — never a silent no-op. The selector selects a rung and nothing else: the FORCE is `[diagnostics] force_disk_ri` below, because a rung word re-used to mean "force" is one key naming two mechanisms (the key-split rule). The record carries the requested-vs-ran pairing (`resources_resolved.ri_tensor_mode`, schema 19), so a request on a family with no `ri_j_link` disk route is recorded rather than dropped — `not_applicable` for `disk`. **Schema 22 removed the `forced_disk` word**: it is refused by name with the key that replaced it as the remedy (§2.3) |
 | `[diagnostics] force_disk_ri` | `diagnostics.forceDiskRi` | optional; default `false`; a TOML boolean (the owner's ruling 2026-09-13, schema 22). The RI disk route's **force-on** request, and the key that replaced the retired `[method] ri_tensor_mode = "forced_disk"` word: `true` makes the driver bypass the composed in-memory ladder entirely (no `RiJkFockBuilder::Create`, so no estimate-time refusal to fall back from — and, unlike `disk`, no budget path required: with `memory_cap_gib = 0` the disk builder simply runs with no budget granted) and construct the storage-module disk-backed builder directly, at any size and under any cap. It is a **measurement/diagnostic override, not a rung selector and NOT the production path**: the ladder's own semantics are untouched (`disk` stays the LAST rung of the production path, the disk-algorithms principle), and it exists so a benchmark cell can measure the disk builder itself instead of an in-memory run wearing a disk label — at benchmark sizes the ladder fits, so `disk` alone would never engage the store. `false` — explicit or absent — is **not a force-off**: it leaves every run's rung decision where it was, which is the state every run had before this key existed. Consumed on the `fock_builder = "ri_j_link"` path; on any other family the run proceeds with the resolved family's own builder and the request is **demoted with the record stating both sides** (`resources_resolved.ri_tensor_mode`), never silently dropped. The record states the override twice, for two different questions: `mode_record.forced_disk` (schema 18) is `true` exactly on this route, and `resources_resolved.ri_tensor_mode.forced` (schema 22) names this key as the request's source |
 
@@ -98,19 +99,23 @@ or computes (the bit-parity pins are absolute). Empty `trace_file`
 runs the window without the watchdog (stats-only, nothing written).
 
 The `[method]` QFMM knobs (`theta` / `l_mult` / `max_leaf_size` /
-`crossover_basis_function_count`, the QFMM fast-multipole track) are the
+`crossover_basis_function_count` / `qfmm_near_field_certified_lane`, the QFMM
+fast-multipole track) are the
 fields of `QfmmOptions` that exist in the engine but were unreachable from
 TOML; each is optional and type-strict when present, parsed strictly with the
 engine's own `QfmmJBuilder::Create` validation contract so a bad value is
 rejected at parse time **by its schema name** — never parked silently or
 deferred to a builder error that names no TOML key. The driver's `fock_builder
 = "qfmm"` path is their only consumer; other runs store them inertly (`io` is
-a pure schema layer — the `[basis] aux` precedent). Schema values: `theta` a
+a pure schema layer — the `[basis] aux` precedent), and the driver refuses the
+keys by name on those runs (§2.3). Schema values: `theta` a
 finite double as documented above (the one knob the parse tightens past the
 engine's not-NaN check, the `resources.memory_cap_gib` precedent), `l_mult` an
 integer in `-1..8`, `max_leaf_size` an integer `>= 1`,
 `crossover_basis_function_count` an integer `>= 0` (absent = the engine
-default; the `-1` sentinels are internal to `QfmmOptions`).
+default; the `-1` sentinels are internal to `QfmmOptions`), and
+`qfmm_near_field_certified_lane` a TOML boolean (absent = the engine's own
+request, true).
 
 The three **model parameters** of the same builder — `extentModel`,
 `separationMode` and the separation buffer `separationK` — are deliberately
@@ -307,6 +312,7 @@ method.theta must be a finite number
 method.l_mult must be in -1..8
 method.max_leaf_size must be >= 1
 method.crossover_basis_function_count must be >= 0
+"method.qfmm_near_field_certified_lane" must be a bool
 unknown method.ri_tensor_mode "ram" (auto | disk)
 method.ri_tensor_mode does not take "forced_disk": the forced disk mode is not a rung selection and is no longer spelled here. Set [diagnostics] force_disk_ri = true instead (the accepted rung words are auto | disk)
 "diagnostics.force_disk_ri" must be a bool
@@ -1054,13 +1060,15 @@ reads an absent budget key as "the budget was met".
 of a composed-QFMM build is a nested restricted direct builder, and whether it
 was created with the certified mixed-precision lane enabled is a decision
 `QfmmJBuilder::Create` makes — the `QfmmOptions` request against the preset's
-own gate — not something the input names or the driver resolves. Two runs with
+own gate — where the request is the engine's default (true) unless the input
+writes `[method] qfmm_near_field_certified_lane`, and the gate itself is never
+an input. Two runs with
 the same model and the same budget can therefore differ in the arithmetic that
 served the near-field pairs, and before this key the document could not say
 which: an energy from a lane-enabled near field and one from an fp64 near field
 were indistinguishable in the artifact. `certified_near_field_lane` is written
 on every present block — `true` at kLoose/kNormal by default, `false` at
-kTight's fp64-only gate or when a caller switched the request off — and it is
+kTight's fp64-only gate or when the input's lane key is `false` — and it is
 the lane's POLICY at builder creation, never a per-quartet tally: the nested
 builder still routes each quartet by its own density-weighted bound. The QFMM
 near field passes no precision ladder into that builder, so the policy is

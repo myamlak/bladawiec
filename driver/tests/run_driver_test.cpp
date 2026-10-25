@@ -1044,12 +1044,20 @@ std::string H2oDef2SvpUhfToml(std::string_view builder) {
 // and every row is re-measured at the new gate in the tests below.
 std::string AlkaneChainToml(const qcx::molecule::Molecule& molecule,
                             std::string_view builder,
-                            std::string_view accuracy) {
+                            std::string_view accuracy,
+                            std::optional<bool> qfmmNearFieldCertifiedLane = std::nullopt) {
     std::ostringstream text;
     WriteAlkaneMoleculeBlock(text, molecule);
     text << "\n[basis]\norbital = \"sto-3g\"\n\n[method]\ntype = \"rhf\"\nfock_builder = \""
-         << builder << "\"\naccuracy = \"" << accuracy
-         << "\"\n\n[scf]\nmax_iterations = 100\n"
+         << builder << "\"\naccuracy = \"" << accuracy << "\"\n";
+
+    if (qfmmNearFieldCertifiedLane.has_value())
+    {
+        text << "qfmm_near_field_certified_lane = "
+             << (*qfmmNearFieldCertifiedLane ? "true" : "false") << "\n";
+    }
+
+    text << "\n[scf]\nmax_iterations = 100\n"
             "energy_tolerance = 1e-8\ndensity_tolerance = 1e-6\nuse_diis = true\n";
     return text.str();
 }
@@ -5029,7 +5037,7 @@ TEST(DriverErrorTest, RejectsBadQfmmSchemaKnobsByName) {
     }
 }
 
-// The key split (owner-ruled 2026-09-13) on the four QFMM tuning knobs: a
+// The key split (owner-ruled 2026-09-13) on the five QFMM tuning knobs: a
 // key that names a MECHANISM the author is relying on is refused by name on a
 // family that has no route for it, never accepted and dropped. Before this
 // rule the knob was parsed, validated and stored, and then read by nothing
@@ -5109,6 +5117,18 @@ accuracy = "kNormal"
 crossover_basis_function_count = 1000
 )",
          "method.crossover_basis_function_count is set on a run whose fock_builder is not "
+         "\"qfmm\""},
+        {R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+qfmm_near_field_certified_lane = false
+)",
+         "method.qfmm_near_field_certified_lane is set on a run whose fock_builder is not "
          "\"qfmm\""},
     };
 
@@ -5351,6 +5371,30 @@ theta = -1.0
     EXPECT_NE(gate->find("\"theta\": 0.0"), std::string::npos);
     EXPECT_NE(gate->find("\"separation_k\": 0.0"), std::string::npos);
     EXPECT_NE(gate->find("\"geometric_far_pair_count\": 0,"), std::string::npos);
+
+    // Leg 6 - the lane key is a CREATION policy, and the record follows the
+    // build the driver asked for. Leg 1 pinned the default request (the
+    // engine's own true at this gate); the same fixture with the lane key
+    // written false must come back false, or a reader could not tell an
+    // aligned fp64 near field from the default one. The key is the composed
+    // builder's passthrough: false also runs its exchange half in fp64.
+    const auto fp64Near = RunInputText(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+fock_builder = "qfmm"
+accuracy = "kNormal"
+qfmm_near_field_certified_lane = false
+)");
+    ASSERT_TRUE(fp64Near.has_value()) << fp64Near.error().message;
+    EXPECT_NE(fp64Near->find("\"certified_near_field_lane\": false"), std::string::npos);
+    // The rest of the model is untouched by the lane switch - the same build
+    // at the same aim, differing only in the precision its near field ran.
+    EXPECT_NE(fp64Near->find("\"extent_model\": \"kProductBall\""), std::string::npos);
+    EXPECT_NE(fp64Near->find("\"theta\": 0.3"), std::string::npos);
 }
 
 TEST(DriverPinTest, H2QfmmRhfWithSchemaKnobsRunsToConvergence) {
@@ -5832,7 +5876,18 @@ TEST(DriverPinTest, C24ChainQfmmRhfMatchesDirectInsideThePresetBudgets) {
     // record's 1997 is the same claim under the retired midpoint-extent
     // model, kept alive at the builder level by
     // QfmmHfBuildTest.C24KeepsItsFarAliveRungsAliveAtCreateTime).
-    const auto qfmmKlooseToml = AlkaneChainToml(*molecule, "qfmm", "kLoose");
+    //
+    // The two composed rows below run their near field WITHOUT the certified
+    // fp32 lane (qfmm_near_field_certified_lane = false), matching the direct
+    // reference, whose own lane resolves off on this host (the compute
+    // profile's verdict: no device clears the mixed-precision gate). The
+    // default lane-on run was measured on 2026-10-24 to sit 1.11e-7 ABOVE the
+    // direct at kNormal, of which the fp64 far-field model accounts for
+    // -8.9e-10 (112x inside the 1e-7 budget): the lane, not the multipoles,
+    // was the difference the old comparison measured. The key also runs the
+    // composed builder's exchange half in fp64, as the direct reference's K
+    // does - like with like on both halves.
+    const auto qfmmKlooseToml = AlkaneChainToml(*molecule, "qfmm", "kLoose", false);
     auto qfmmKlooseResult = RunInputText(qfmmKlooseToml.c_str());
     ASSERT_TRUE(qfmmKlooseResult.has_value()) << qfmmKlooseResult.error().message;
     EXPECT_NE(qfmmKlooseResult->find("\"converged\": true"), std::string::npos);
@@ -5906,8 +5961,11 @@ TEST(DriverPinTest, C24ChainQfmmRhfMatchesDirectInsideThePresetBudgets) {
     }
 
     // kNormal row: the sound same-preset comparison at the recorded 1e-7
-    // budget (identical K halves; the J half is the CSV's 1.9e-9).
-    const auto qfmmKnormalToml = AlkaneChainToml(*molecule, "qfmm", "kNormal");
+    // budget (identical K halves; the J half is the CSV's 1.9e-9). The composed
+    // run's near field is aligned to the direct reference's fp64 lane (see the
+    // alignment note above the kLoose composed run): the lane-off build is what
+    // makes the J half the only difference the budget measures.
+    const auto qfmmKnormalToml = AlkaneChainToml(*molecule, "qfmm", "kNormal", false);
     auto qfmmKnormalResult = RunInputText(qfmmKnormalToml.c_str());
     ASSERT_TRUE(qfmmKnormalResult.has_value()) << qfmmKnormalResult.error().message;
     EXPECT_NE(qfmmKnormalResult->find("\"converged\": true"), std::string::npos);
@@ -5927,11 +5985,56 @@ TEST(DriverPinTest, C24ChainQfmmRhfMatchesDirectInsideThePresetBudgets) {
         << "the kNormal rung's own angle";
     EXPECT_NE(qfmmKnormalResult->find("\"geometric_far_pair_count\": 33404,"), std::string::npos)
         << "the kNormal composed run must record a live far field";
+    // ... and the alignment, from the same record (schema 47): the near field
+    // the number below was computed from must be the fp64 one the direct
+    // reference's K and its own fp64 J ran, or this row silently measures the
+    // lane again (the misreading the alignment above removes).
+    EXPECT_NE(qfmmKnormalResult->find("\"certified_near_field_lane\": false"), std::string::npos)
+        << "the aligned row must run the near field in fp64";
 
     const double knormalDifference = std::abs(*qfmmKnormalTotal - *knormalDirectTotal);
     std::cout << "C24 preset kNormal: E_qfmm " << *qfmmKnormalTotal << ", E_direct-kNormal "
               << *knormalDirectTotal << ", difference " << knormalDifference << "\n";
     EXPECT_LT(knormalDifference, 1e-7) << "preset kNormal";
+
+    // The five-run replay's reporting print (text only, no budget): every
+    // scalar the series compares by exact equality, at round-trip precision -
+    // the two measured differences and each of the five runs' own SCF
+    // scalars, so a replay can check "runs 1-3 agree exactly on every printed
+    // metric and all five SCF iteration counts" from its log alone.
+    {
+        const auto printScalar =
+            [](std::string_view name, const std::string& document, std::string_view key) {
+                const auto value = JsonNumber(document, key);
+
+                if (value.has_value())
+                {
+                    std::cout << "C24 scalar " << name << " " << key << ": " << *value << "\n";
+                } else
+                {
+                    std::cout << "C24 scalar " << name << " " << key << ": absent\n";
+                }
+            };
+
+        const auto previousPrecision = std::cout.precision();
+        std::cout.precision(17);
+        std::cout << "C24 scalar kLoose difference: " << klooseNearExactDeviation << "\n";
+        std::cout << "C24 scalar kLoose direct class: " << directLooseDeviation << "\n";
+        std::cout << "C24 scalar kNormal difference: " << knormalDifference << "\n";
+        printScalar("direct-kTight", *ktightResult, "\"iterations\"");
+        printScalar("direct-kTight", *ktightResult, "\"total_energy_hartree\"");
+        printScalar("direct-kLoose", *klooseResult, "\"iterations\"");
+        printScalar("direct-kLoose", *klooseResult, "\"total_energy_hartree\"");
+        printScalar("direct-kNormal", *knormalResult, "\"iterations\"");
+        printScalar("direct-kNormal", *knormalResult, "\"total_energy_hartree\"");
+        printScalar("qfmm-kLoose", *qfmmKlooseResult, "\"iterations\"");
+        printScalar("qfmm-kLoose", *qfmmKlooseResult, "\"total_energy_hartree\"");
+        printScalar("qfmm-kNormal", *qfmmKnormalResult, "\"iterations\"");
+        printScalar("qfmm-kNormal", *qfmmKnormalResult, "\"total_energy_hartree\"");
+        printScalar("qfmm-kNormal", *qfmmKnormalResult, "\"energy_delta_hartree\"");
+        printScalar("qfmm-kNormal", *qfmmKnormalResult, "\"rms_density_delta\"");
+        std::cout.precision(previousPrecision);
+    }
 
     // The kNormal composed row's band line: the same-preset context
     // measures the composed total only (the CSV J-half record is not an
