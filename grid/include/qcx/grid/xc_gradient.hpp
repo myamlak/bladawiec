@@ -44,6 +44,11 @@ struct XcGradientCounts {
     // right to read them.
     std::size_t weightDerivativeTerms = 0; ///< (point, nuclear coordinate) weight entries read.
     std::size_t coordinateDerivativeTerms = 0; ///< (point, direction, coordinate) entries read.
+    // The second-order counterpart of the two columns above. The provider fills
+    // each block's curvature arrays whole, so the second-order walk reads them
+    // whole and these columns are its bill rather than a screened fraction.
+    std::size_t weightCurvatureTerms = 0; ///< (point, q, r) weight entries read.
+    std::size_t coordinateCurvatureTerms = 0; ///< (point, direction, q, r) entries read.
 };
 
 /// One grid integration's exchange-correlation gradient, at fixed density.
@@ -164,5 +169,114 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
     const excgrid::GridDerivativeProvider& provider,
     const XcIntegrationThresholds& thresholds,
     const XcBatchSettings& batch = {});
+
+/// One grid integration's second-order contribution from the grid's own motion.
+///
+/// At fixed density the exchange-correlation energy is
+/// `E_xc(R) = sum_p W_p(R) e(X_p(R), R)`, and its second nuclear derivative
+/// separates by what carries the displacement:
+///
+///     d2E/dR_q dR_r = sum_p [ W_,qr e + W_,q T_r + W_,r T_q + W d2e/dR_q dR_r ],
+///
+/// with `T_r` the integrand's total first derivative - the point's own motion
+/// and the orbitals', the two channels EvaluateXcGradient accumulates
+/// separately. This object is the derivative of what that walk accumulates,
+/// with one channel left out: the integrand's own response along the point's
+/// motion, `W (dF_c/dR_q) X^c_,r` and the density's second response. That
+/// channel needs a third-derivative AO tier, which the evaluator does not
+/// supply yet, so a complete Hessian is this object PLUS it and never this
+/// object alone.
+///
+/// What it holds is the whole of the grid's own contribution at that order: the
+/// quadrature weight's curvature, the two cross terms the weight's first
+/// derivative carries, and the point's own position curvature. The default grid
+/// rides each point on its owning atom, so its position curvature is zero and
+/// the weight curvature is the entire object.
+///
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-grid
+struct XcGridMotionHessian {
+    /// d2E_xc/dR2, (3N) x (3N) in Hartree/Bohr^2, atom-major like the gradient:
+    /// entry (3*i + d, 3*j + e) is the second derivative in direction d of atom
+    /// i and direction e of atom j. Symmetric to the last bit, because one
+    /// triangle is accumulated and then mirrored rather than both being summed.
+    Eigen::MatrixXd hessian;
+    /// dE_xc/dR, the same gradient EvaluateXcGradient returns. This walk
+    /// computes it on the way, and it is reported because a second-order row
+    /// that does not differentiate the first-order result beside it is the
+    /// defect this adjacency makes visible.
+    Eigen::VectorXd gradient;
+    /// The energy this walk integrated, Hartree, summed point by point in block
+    /// order.
+    double energy = 0.0;
+    /// The thresholds this walk ran under, echoed back rather than assumed.
+    XcIntegrationThresholds thresholds;
+    /// The counted cost of this assembly.
+    XcGradientCounts counts;
+};
+
+/// Assembles the grid-motion part of the exchange-correlation Hessian.
+///
+/// The same walk as EvaluateXcGradient - the same blocks, the same thresholds,
+/// the same per-point selection, kernel call and orbital-motion sums - with the
+/// derivative provider asked for second order, accumulating at each visited
+/// point
+///
+///     H_qr += W_,qr e + W_,q T_r + W_,r T_q + W sum_c (de/dx^c) X^c_,qr .
+///
+/// Sharing the first-order pieces is what makes the two walks one derivative
+/// apart: a point set or a screening rule that differed between them would make
+/// this the curvature of a different gradient.
+///
+/// \param blocks The grid blocks, in the order the energy path walks them.
+/// \param provider The grid's geometric derivatives for these blocks. It must
+/// report DerivativeOrder::kSecond, and it must be the provider built for the
+/// geometry and the parameters these blocks came from; its arrays are indexed by
+/// nuclear coordinate in the caller's own 3N order.
+/// \param evaluator The AO evaluator the blocks' points are evaluated with.
+/// \param functional The functional kernel, read exactly as the gradient walk
+/// reads it.
+/// \param envelopes The screening envelopes, in the evaluator's shell order.
+/// \param thresholds The energy path's truncation and screening thresholds.
+/// \param densityAlpha The alpha spin density, AOCount() x AOCount(), in the
+/// evaluator's AO order.
+/// \param densityBeta The beta spin density, same shape, order, and contract.
+/// \returns The Hessian, the gradient this walk accumulated, the energy, the
+/// thresholds and the counted cost, or an Error: kInvalidArgument for a shape
+/// mismatch or a provider that does not supply second order, and the provider's
+/// own refusal, by name, when it declines a block rather than answering it with
+/// zeros.
+/// \ingroup qcx-grid
+qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
+    std::span<const excgrid::Block> blocks,
+    const excgrid::GridDerivativeProvider& provider,
+    const AoEvaluator& evaluator,
+    const excgrid::XcFunctional& functional,
+    std::span<const ShellEnvelope> envelopes,
+    const XcIntegrationThresholds& thresholds,
+    const Eigen::MatrixXd& densityAlpha,
+    const Eigen::MatrixXd& densityBeta);
+
+/// Assembles the grid-motion part of the Hessian on an engine's own grid.
+///
+/// The form a consumer uses: the engine already holds the blocks, the AO tier,
+/// the envelopes and the functional, so the second derivative cannot be taken
+/// on a grid or a functional the energy was not integrated over.
+/// \param engine The engine whose grid, evaluator and functional the Hessian
+/// belongs to.
+/// \param densityAlpha The alpha spin density, AOCount() x AOCount(), in the
+/// evaluator's AO order.
+/// \param densityBeta The beta spin density, same shape, order, and contract.
+/// \param provider The grid's geometric derivatives for this engine's blocks.
+/// \param thresholds The thresholds the energy path ran under.
+/// \returns The Hessian, the gradient, the energy, the thresholds and the
+/// counted cost, or an Error as the free function of the same name returns it.
+/// \ingroup qcx-grid
+qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
+    const XcGridEngine& engine,
+    const Eigen::MatrixXd& densityAlpha,
+    const Eigen::MatrixXd& densityBeta,
+    const excgrid::GridDerivativeProvider& provider,
+    const XcIntegrationThresholds& thresholds);
 
 } // namespace qcx::grid

@@ -78,7 +78,11 @@ struct PointField {
 // term is placed by. The map is also the check that the envelope set covers the
 // basis exactly once - a set that leaves a slot unclaimed would place that AO's
 // motion on no atom at all, silently.
-qcx::Result<std::vector<std::size_t>> BuildAtomOfAo(std::span<const ShellEnvelope> envelopes,
+//
+// The refusal messages name the operation that asked, so a refusal from either
+// walk is attributable to the call the caller made rather than to the other one.
+qcx::Result<std::vector<std::size_t>> BuildAtomOfAo(std::string_view operation,
+                                                    std::span<const ShellEnvelope> envelopes,
                                                     std::size_t aoCount) {
     std::vector<std::size_t> atomOfAo(aoCount, kNoAtom);
 
@@ -88,7 +92,7 @@ qcx::Result<std::vector<std::size_t>> BuildAtomOfAo(std::span<const ShellEnvelop
         {
             return std::unexpected(
                 qcx::Error{qcx::ErrorCode::kInvalidArgument,
-                           "EvaluateXcGradient: a shell envelope reaches past AOCount()"});
+                           std::string(operation) + ": a shell envelope reaches past AOCount()"});
         }
 
         for (std::size_t ao = 0; ao < shell.functionCount; ++ao)
@@ -97,9 +101,9 @@ qcx::Result<std::vector<std::size_t>> BuildAtomOfAo(std::span<const ShellEnvelop
 
             if (slot != kNoAtom)
             {
-                return std::unexpected(
-                    qcx::Error{qcx::ErrorCode::kInvalidArgument,
-                               "EvaluateXcGradient: two shell envelopes claim the same AO slot"});
+                return std::unexpected(qcx::Error{
+                    qcx::ErrorCode::kInvalidArgument,
+                    std::string(operation) + ": two shell envelopes claim the same AO slot"});
             }
 
             slot = shell.atomIndex;
@@ -112,7 +116,7 @@ qcx::Result<std::vector<std::size_t>> BuildAtomOfAo(std::span<const ShellEnvelop
         {
             return std::unexpected(
                 qcx::Error{qcx::ErrorCode::kInvalidArgument,
-                           "EvaluateXcGradient: the shell envelopes do not cover every AO"});
+                           std::string(operation) + ": the shell envelopes do not cover every AO"});
         }
     }
 
@@ -262,6 +266,7 @@ std::array<double, 3> SymmetricTimes(const std::array<double, 9>& matrix,
 // functional did not produce stays at its initial zero. A refusal is returned
 // as an Error naming the status, never as a silent zero energy.
 qcx::Result<excgrid::XcKernelValue> EvaluateKernel(
+    std::string_view operation,
     const excgrid::XcFunctional& functional,
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
     const PointField& alpha,
@@ -284,7 +289,7 @@ qcx::Result<excgrid::XcKernelValue> EvaluateKernel(
     if (status != excgrid::KernelStatus::kOk)
     {
         return std::unexpected(qcx::Error{qcx::ErrorCode::kUnimplemented,
-                                          "EvaluateXcGradient: the functional " +
+                                          std::string(operation) + ": the functional " +
                                               std::string(excgrid::DescribeStatus(status))});
     }
 
@@ -469,7 +474,7 @@ std::array<double, 3> MatrixTimes(const std::array<double, 9>& matrix,
 // are the same matrix-vector product twice, so neither is transposed - a
 // transpose here is invisible whenever the pair is diagonal and wrong on the
 // cross pair.
-void AccumulateOrbitalMotion(Eigen::VectorXd& gradient,
+void AccumulateOrbitalMotion(std::span<double> gradient,
                              const SpinSums& alphaSums,
                              const SpinSums& betaSums,
                              const PointField& alpha,
@@ -499,8 +504,7 @@ void AccumulateOrbitalMotion(Eigen::VectorXd& gradient,
                                  kernel.vsigmaAb * (sigmaAb[axis] + sigmaBa[axis]) +
                                  2.0 * kernel.vsigmaBb * sigmaBb[axis];
             const double tauValue = kernel.vtauA * tauAlpha[axis] + kernel.vtauB * tauBeta[axis];
-            const Eigen::Index component = static_cast<Eigen::Index>(3 * atom + axis);
-            gradient[component] -= 2.0 * weight * value + weight * tauValue;
+            gradient[3 * atom + axis] -= 2.0 * weight * value + weight * tauValue;
         }
     }
 }
@@ -527,7 +531,7 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                        "EvaluateXcGradient: both densities must be AOCount() x AOCount()"});
     }
 
-    auto atomOfAo = BuildAtomOfAo(envelopes, evaluator.AOCount());
+    auto atomOfAo = BuildAtomOfAo("EvaluateXcGradient", envelopes, evaluator.AOCount());
 
     if (!atomOfAo.has_value())
     {
@@ -817,7 +821,8 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                                    usesTau,
                                    evaluation.counts.aoDerivativeTerms);
 
-                const auto kernel = EvaluateKernel(functional, fieldA, fieldB);
+                const auto kernel =
+                    EvaluateKernel("EvaluateXcGradient", functional, fieldA, fieldB);
 
                 if (!kernel.has_value())
                 {
@@ -859,7 +864,13 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
 
                 // The orbitals' motion, from the two sums per spin.
                 AccumulateOrbitalMotion(
-                    evaluation.gradient, alphaSums, betaSums, fieldA, fieldB, *kernel, weight);
+                    std::span<double>(evaluation.gradient.data(), nuclearCoordinateCount),
+                    alphaSums,
+                    betaSums,
+                    fieldA,
+                    fieldB,
+                    *kernel,
+                    weight);
             }
         }
     }
@@ -887,6 +898,396 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                               batch,
                               densityAlpha,
                               densityBeta);
+}
+
+qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
+    std::span<const excgrid::Block> blocks,
+    const excgrid::GridDerivativeProvider& provider,
+    const AoEvaluator& evaluator,
+    const excgrid::XcFunctional& functional,
+    std::span<const ShellEnvelope> envelopes,
+    const XcIntegrationThresholds& thresholds,
+    const Eigen::MatrixXd& densityAlpha,
+    const Eigen::MatrixXd& densityBeta) {
+    const std::string_view operation = "EvaluateXcGridMotionHessian";
+    const Eigen::Index n = static_cast<Eigen::Index>(evaluator.AOCount());
+
+    if (densityAlpha.rows() != n || densityAlpha.cols() != n || densityBeta.rows() != n ||
+        densityBeta.cols() != n)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       std::string(operation) + ": both densities must be AOCount() x AOCount()"});
+    }
+
+    // A provider built for first order would refuse every block; naming the
+    // requirement once, before any allocation, is what tells a caller what to
+    // build rather than where it happened to notice.
+    if (provider.MaxOrder() != excgrid::DerivativeOrder::kSecond)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       std::string(operation) +
+                           ": the grid derivative provider must supply second-order derivatives"});
+    }
+
+    auto atomOfAo = BuildAtomOfAo(operation, envelopes, evaluator.AOCount());
+
+    if (!atomOfAo.has_value())
+    {
+        return std::unexpected(atomOfAo.error());
+    }
+
+    std::size_t atomCount = 0;
+
+    for (const ShellEnvelope& shell : envelopes)
+    {
+        atomCount = std::max(atomCount, shell.atomIndex + 1);
+    }
+
+    if (atomCount == 0)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       std::string(operation) + ": the shell envelopes name no atom"});
+    }
+
+    std::size_t largestBlock = 0;
+
+    for (const excgrid::Block& block : blocks)
+    {
+        largestBlock = std::max(largestBlock, block.pointCount);
+    }
+
+    const std::size_t nuclearCoordinateCount = 3U * atomCount;
+
+    XcGridMotionHessian evaluation;
+    evaluation.thresholds = thresholds;
+    evaluation.gradient = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(nuclearCoordinateCount));
+    evaluation.hessian = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(nuclearCoordinateCount),
+                                               static_cast<Eigen::Index>(nuclearCoordinateCount));
+
+    // The flags that decide what the walk fetches are the gradient walk's, from
+    // the same functional, so the two walks read the same tier at every point.
+    const excgrid::ComponentMask required = functional.RequiredMask();
+    const bool usesTau =
+        required.Test(excgrid::Component::TauA) || required.Test(excgrid::Component::TauB);
+    const bool usesGradient = functional.UsesGradient();
+    const bool needsHessians = usesGradient || usesTau;
+
+    const std::size_t aoCount = evaluator.AOCount();
+
+    PointContractions contractions;
+    contractions.value.resize(aoCount);
+    contractions.gradient.resize(3 * aoCount);
+    SpinSums alphaSums(atomCount);
+    SpinSums betaSums(atomCount);
+
+    // One point at a time: the batch split exists so that one fetch serves a
+    // batch of points, and here a fetch already serves the only point that
+    // reads it. The scratch is sized for a point, not for a batch.
+    std::vector<double> aoValues(aoCount);
+    std::vector<double> aoGradients(3 * aoCount);
+    std::vector<double> aoHessians(needsHessians ? 6 * aoCount : 0);
+    std::vector<std::size_t> selectedShells(envelopes.size());
+    std::vector<std::size_t> selectedAos(aoCount);
+    // T_r, the integrand's total first derivative at fixed density: the point's
+    // own motion plus the orbitals'.
+    std::vector<double> pointMotion(nuclearCoordinateCount);
+
+    // The provider's buffers, sized once for the largest block, at the order the
+    // second derivative needs: the curvature arrays are the whole point of this
+    // walk and the first-order ones are read from the same request.
+    excgrid::DerivativeRequest request;
+    request.parts = BothParts();
+    request.order = excgrid::DerivativeOrder::kSecond;
+    request.nuclearCoordinateCount = nuclearCoordinateCount;
+
+    const excgrid::BlockDerivativeSizes providerSizes = excgrid::SizeOf(request, largestBlock);
+    std::vector<double> positionFirst(providerSizes.positionFirst);
+    std::vector<double> weightFirst(providerSizes.weightFirst);
+    std::vector<double> positionSecond(providerSizes.positionSecond);
+    std::vector<double> weightSecond(providerSizes.weightSecond);
+
+    const std::vector<double> flatAlpha = internal::FlattenRowMajor(densityAlpha);
+    auto weightsAlpha = ShellDensityWeights(envelopes, flatAlpha, aoCount);
+
+    if (!weightsAlpha.has_value())
+    {
+        return std::unexpected(weightsAlpha.error());
+    }
+
+    const bool sharedSpinDensity = densityAlpha.data() == densityBeta.data();
+    std::vector<double> weightsBeta;
+
+    if (sharedSpinDensity)
+    {
+        weightsBeta = *weightsAlpha;
+    } else
+    {
+        const std::vector<double> flatBeta = internal::FlattenRowMajor(densityBeta);
+        auto computed = ShellDensityWeights(envelopes, flatBeta, aoCount);
+
+        if (!computed.has_value())
+        {
+            return std::unexpected(computed.error());
+        }
+
+        weightsBeta = std::move(*computed);
+    }
+
+    evaluation.counts.densityWeightTerms = aoCount * aoCount * (sharedSpinDensity ? 1 : 2);
+
+    for (const excgrid::Block& block : blocks)
+    {
+        if (block.points.size() != block.pointCount || block.weights.size() != block.pointCount ||
+            block.atomIndex.size() != block.pointCount)
+        {
+            return std::unexpected(
+                qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                           std::string(operation) +
+                               ": a block's points, weights and owning atoms must each hold its "
+                               "point count entries"});
+        }
+
+        const excgrid::BlockDerivativeSizes sizes = excgrid::SizeOf(request, block.pointCount);
+        excgrid::BlockDerivatives derivatives;
+        derivatives.positionFirst = std::span<double>(positionFirst.data(), sizes.positionFirst);
+        derivatives.weightFirst = std::span<double>(weightFirst.data(), sizes.weightFirst);
+        derivatives.positionSecond = std::span<double>(positionSecond.data(), sizes.positionSecond);
+        derivatives.weightSecond = std::span<double>(weightSecond.data(), sizes.weightSecond);
+        derivatives.atomIndex = block.atomIndex;
+
+        const excgrid::DerivativeStatus status = provider.Evaluate(block, request, derivatives);
+
+        if (status != excgrid::DerivativeStatus::kOk)
+        {
+            return std::unexpected(qcx::Error{
+                qcx::ErrorCode::kInvalidArgument,
+                std::string(operation) + ": the grid derivative provider refused a block: " +
+                    std::string(DerivativeStatusName(status))});
+        }
+
+        ++evaluation.counts.batches;
+        evaluation.counts.weightDerivativeTerms += sizes.weightFirst;
+        evaluation.counts.coordinateDerivativeTerms += sizes.positionFirst;
+        evaluation.counts.weightCurvatureTerms += sizes.weightSecond;
+        evaluation.counts.coordinateCurvatureTerms += sizes.positionSecond;
+
+        for (std::size_t point = 0; point < block.pointCount; ++point)
+        {
+            const double weight = block.weights[point];
+
+            if (weight == 0.0)
+            {
+                continue;
+            }
+
+            ++evaluation.counts.points;
+
+            // The selection the energy path makes at this point, under the same
+            // tolerance and from the same weights.
+            std::size_t selectedShellCount = 0;
+            std::size_t selectedAoCount = 0;
+
+            for (std::size_t shell = 0; shell < envelopes.size(); ++shell)
+            {
+                ++evaluation.counts.shellTests;
+
+                const double spinWeight = std::max((*weightsAlpha)[shell], weightsBeta[shell]);
+
+                if (!ShellIsSignificant(envelopes[shell],
+                                        block.points[point],
+                                        spinWeight,
+                                        thresholds.screeningTolerance))
+                {
+                    continue;
+                }
+
+                ++evaluation.counts.shellKeeps;
+                selectedShells[selectedShellCount++] = shell;
+
+                for (std::size_t ao = 0; ao < envelopes[shell].functionCount; ++ao)
+                {
+                    selectedAos[selectedAoCount++] = envelopes[shell].aoOffset + ao;
+                }
+            }
+
+            if (selectedShellCount == 0)
+            {
+                continue;
+            }
+
+            evaluation.counts.aoSlotsEvaluated += selectedAoCount;
+            evaluation.counts.contractionPairs += 2 * selectedAoCount * selectedAoCount;
+            ++evaluation.counts.aoFetches;
+
+            const std::span<const std::size_t> selectionShells(selectedShells.data(),
+                                                               selectedShellCount);
+
+            if (needsHessians)
+            {
+                evaluator.EvaluateDerivativesSelected(
+                    block.points[point],
+                    selectionShells,
+                    std::span<double>(aoValues.data(), aoCount),
+                    std::span<double>(aoGradients.data(), 3 * aoCount),
+                    std::span<double>(aoHessians.data(), 6 * aoCount));
+            } else
+            {
+                evaluator.EvaluateGradientsSelected(
+                    block.points[point],
+                    selectionShells,
+                    std::span<double>(aoValues.data(), aoCount),
+                    std::span<double>(aoGradients.data(), 3 * aoCount));
+            }
+
+            // Empty when neither sigma nor tau is read: BuildPointField and the
+            // spin sums must not read a buffer that was never allocated.
+            const std::span<const double> hessians =
+                needsHessians ? std::span<const double>(aoHessians.data(), 6 * aoCount)
+                              : std::span<const double>();
+            const AoSlice aos{std::span<const double>(aoValues.data(), aoCount),
+                              std::span<const double>(aoGradients.data(), 3 * aoCount),
+                              hessians,
+                              std::span<const std::size_t>(selectedAos.data(), selectedAoCount)};
+
+            const PointField fieldA =
+                BuildPointField(densityAlpha, aos, contractions, usesGradient, usesTau);
+
+            alphaSums.Clear();
+            AccumulateSpinSums(alphaSums,
+                               aos,
+                               contractions,
+                               *atomOfAo,
+                               usesGradient,
+                               usesTau,
+                               evaluation.counts.aoDerivativeTerms);
+
+            const PointField fieldB =
+                BuildPointField(densityBeta, aos, contractions, usesGradient, usesTau);
+
+            betaSums.Clear();
+            AccumulateSpinSums(betaSums,
+                               aos,
+                               contractions,
+                               *atomOfAo,
+                               usesGradient,
+                               usesTau,
+                               evaluation.counts.aoDerivativeTerms);
+
+            const auto kernel = EvaluateKernel(operation, functional, fieldA, fieldB);
+
+            if (!kernel.has_value())
+            {
+                return std::unexpected(kernel.error());
+            }
+
+            evaluation.energy += weight * kernel->exc;
+
+            const std::array<double, 3> energyDensityGradient =
+                GradientOfEnergyDensity(*kernel, fieldA, fieldB, usesGradient, usesTau);
+
+            // T_r: the integrand's total derivative through both the point's own
+            // motion and the orbitals'. The gradient walk accumulates the two
+            // separately because each multiplies a different weight derivative;
+            // here each weight derivative multiplies the whole sum, so it is
+            // formed once. The orbital half is the same function at unit weight.
+            std::fill(pointMotion.begin(), pointMotion.end(), 0.0);
+            AccumulateOrbitalMotion(std::span<double>(pointMotion.data(), nuclearCoordinateCount),
+                                    alphaSums,
+                                    betaSums,
+                                    fieldA,
+                                    fieldB,
+                                    *kernel,
+                                    1.0);
+
+            const double* positionRow = positionFirst.data() + point * 3 * nuclearCoordinateCount;
+
+            for (std::size_t direction = 0; direction < 3; ++direction)
+            {
+                const double* row = positionRow + direction * nuclearCoordinateCount;
+
+                for (std::size_t coordinate = 0; coordinate < nuclearCoordinateCount; ++coordinate)
+                {
+                    pointMotion[coordinate] += energyDensityGradient[direction] * row[coordinate];
+                }
+            }
+
+            // The gradient this walk owes the total: the weight's motion and the
+            // integrand's, which is the whole of the first-order result.
+            const double* weightRow = weightFirst.data() + point * nuclearCoordinateCount;
+
+            for (std::size_t coordinate = 0; coordinate < nuclearCoordinateCount; ++coordinate)
+            {
+                evaluation.gradient[static_cast<Eigen::Index>(coordinate)] +=
+                    weightRow[coordinate] * kernel->exc + weight * pointMotion[coordinate];
+            }
+
+            //     d2(W e)/dR_q dR_r = W_,qr e + W_,q T_r + W_,r T_q
+            //                       + W sum_c (de/dx^c) X^c_,qr ,
+            // which is the derivative of the accumulated gradient above with the
+            // integrand's own response left to the electronic tier.
+            const std::size_t curvatureRow = nuclearCoordinateCount * nuclearCoordinateCount;
+            const double* weightCurvature = weightSecond.data() + point * curvatureRow;
+            const double* positionCurvature = positionSecond.data() + point * 3 * curvatureRow;
+
+            for (std::size_t rowIndex = 0; rowIndex < nuclearCoordinateCount; ++rowIndex)
+            {
+                for (std::size_t column = rowIndex; column < nuclearCoordinateCount; ++column)
+                {
+                    const std::size_t entry = rowIndex * nuclearCoordinateCount + column;
+                    double value = weightCurvature[entry] * kernel->exc +
+                                   weightRow[rowIndex] * pointMotion[column] +
+                                   weightRow[column] * pointMotion[rowIndex];
+
+                    for (std::size_t direction = 0; direction < 3; ++direction)
+                    {
+                        value += weight * energyDensityGradient[direction] *
+                                 positionCurvature[direction * curvatureRow + entry];
+                    }
+
+                    evaluation.hessian(static_cast<Eigen::Index>(rowIndex),
+                                       static_cast<Eigen::Index>(column)) += value;
+                }
+            }
+        }
+    }
+
+    // One triangle was accumulated, so the mirror is exact rather than an
+    // agreement to rounding between two sums.
+    for (std::size_t rowIndex = 0; rowIndex < nuclearCoordinateCount; ++rowIndex)
+    {
+        for (std::size_t column = rowIndex + 1; column < nuclearCoordinateCount; ++column)
+        {
+            evaluation.hessian(static_cast<Eigen::Index>(column),
+                               static_cast<Eigen::Index>(rowIndex)) =
+                evaluation.hessian(static_cast<Eigen::Index>(rowIndex),
+                                   static_cast<Eigen::Index>(column));
+        }
+    }
+
+    evaluation.counts.aoSlotsDense = evaluation.counts.points * aoCount;
+    evaluation.counts.contractionPairsDense = 2 * evaluation.counts.points * aoCount * aoCount;
+    evaluation.counts.aoDerivativeTermsDense = 2 * evaluation.counts.points * aoCount;
+
+    return evaluation;
+}
+
+qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
+    const XcGridEngine& engine,
+    const Eigen::MatrixXd& densityAlpha,
+    const Eigen::MatrixXd& densityBeta,
+    const excgrid::GridDerivativeProvider& provider,
+    const XcIntegrationThresholds& thresholds) {
+    return EvaluateXcGridMotionHessian(engine.Grid().Blocks(),
+                                       provider,
+                                       engine.Evaluator(),
+                                       engine.Functional(),
+                                       engine.ShellEnvelopes(),
+                                       thresholds,
+                                       densityAlpha,
+                                       densityBeta);
 }
 
 } // namespace qcx::grid
