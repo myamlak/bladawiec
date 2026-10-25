@@ -322,7 +322,8 @@ function(qcx_mark_large_cases module)
         "            \"long test it names is back in the routine selection.\")\n"
         "    endif()\n"
         "endforeach()\n"
-        "set_tests_properties(\${_qcxLargeCases} PROPERTIES LABELS large)\n")
+        "set_tests_properties(\${_qcxLargeCases} PROPERTIES LABELS large TIMEOUT "
+        "${QCX_LARGE_TEST_TIMEOUT_SECONDS})\n")
     file(WRITE "${_qcxLargeManifest}" "${_qcxLargeBody}")
     set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${_qcxLargeManifest}")
 endfunction()
@@ -439,6 +440,15 @@ enable_testing()
 # performance gate: it must stay above every test the suite is expected to keep.
 set(QCX_TEST_TIMEOUT_SECONDS 2400 CACHE STRING
     "Per-test ctest timeout in seconds (a runaway guard, not a performance gate)")
+
+# The large category is excluded from the routine selection and run on its own;
+# its cases are the ones whose cost is why the category exists, and the
+# measured C24 aligned series (2026-10-25: 1,860-2,485 s for one case) exceeds
+# the routine guard. This is the same kind of guard, set above what the
+# category is expected to keep, and it is applied only by the manifest that
+# marks a case large - no routine test reads it.
+set(QCX_LARGE_TEST_TIMEOUT_SECONDS 3600 CACHE STRING
+    "Per-test ctest timeout in seconds for the large category (a runaway guard)")
 
 # Third-party libraries: pinned git submodules under third_party/.
 
