@@ -772,10 +772,10 @@ qcx::Result<std::optional<qcx::io::RunXcGradient>> BuildXcGradientBlock(
     const Eigen::MatrixXd& alphaDensity,
     const Eigen::MatrixXd& betaDensity,
     const qcx::io::RunInput& input);
-// The opt-in total analytic gradient block: the converged RHF reference's
-// total nuclear gradient, every contribution kept apart. It takes the SCF
-// result rather than the densities the other builders take, because the
-// reference Extracts only from a converged HfResult.
+// The opt-in total analytic gradient block: the converged closed-shell
+// reference's total nuclear gradient, every contribution kept apart. It takes
+// the SCF result rather than the densities the other builders take, because
+// the reference Extracts only from a converged HfResult.
 qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
@@ -6415,21 +6415,22 @@ qcx::Result<std::optional<qcx::io::RunXcGradient>> BuildXcGradientBlock(
     return block;
 }
 
-// The opt-in total analytic gradient block: the converged RHF reference's
-// total nuclear gradient, every contribution kept apart, plus the energies,
-// dimensions, counts and solve report the properties entry carries.
+// The opt-in total analytic gradient block: the converged closed-shell
+// reference's total nuclear gradient, every contribution kept apart, plus the
+// energies, dimensions, counts and solve report the properties entry carries.
 //
 // The properties entry is the whole assembly: this builder extracts the
 // reference through the one gate in front of it (a non-converged result is
 // refused, and the refusal names this key), resolves the dispersion correction
-// through the same seam the energy path uses, and converts the result to io's
-// plain data. It deliberately adds nothing of its own: no matvec count, no
+// through the same seam the energy path uses, resolves the Kohn-Sham keys for
+// a restricted Kohn-Sham reference, and converts the result to io's plain
+// data. It deliberately adds nothing of its own: no matvec count, no
 // worst residual, no re-derived term.
 //
-// Driver-internal helper of the RHF arm (the forward declaration above). It
-// sits on the RHF arm rather than in FillProperties because the reference
-// Extracts from the converged HfResult, which the shared properties builder
-// does not receive.
+// Driver-internal helper of the restricted arm (the forward declaration
+// above). It sits on that arm rather than in FillProperties because the
+// reference Extracts from the converged HfResult, which the shared properties
+// builder does not receive.
 qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
@@ -6440,17 +6441,19 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
         return std::nullopt;
     }
 
-    // The validator refuses this key on every method word but rhf, so a
-    // non-rhf value here is a programmatic caller that never passed through
-    // validation. Refused rather than assembled, for the validator's reason:
-    // the assembly differentiates a converged closed-shell RHF reference.
-    if (input.method.method != qcx::io::MethodType::kRhf)
+    // The validator admits this key on rhf and rks and refuses it on the
+    // unrestricted methods, so another value here is a programmatic caller
+    // that never passed through validation. Refused rather than assembled,
+    // for the validator's reason: the assembly differentiates a converged
+    // closed-shell reference, and only the two restricted lanes run one.
+    if (input.method.method != qcx::io::MethodType::kRhf &&
+        input.method.method != qcx::io::MethodType::kRks)
     {
         return std::unexpected(Err(
             qcx::ErrorCode::kInvalidArgument,
             "properties.total_gradient: " + std::string(qcx::io::ToString(input.method.method)) +
-                " has no total-gradient assembly (the closed-shell rhf lane is the only one "
-                "with a converged RHF reference to differentiate)"));
+                " has no total-gradient assembly (the closed-shell rhf and rks lanes are the "
+                "only ones with a converged reference to differentiate)"));
     }
 
     const std::size_t numOccupied = static_cast<std::size_t>(molecule.ElectronCount()) / 2;
@@ -6471,6 +6474,39 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     // tighter preset than the reference it differentiates, and the mismatch
     // shows up as a spurious stationarity refusal at the screening floor.
     options.eri.accuracy = input.method.accuracy;
+
+    // The restricted Kohn-Sham reference's own keys: the functional, the
+    // `[grid]` block and the screening tolerance, resolved exactly as the
+    // energy path (ResolveKsContext) and the xc_gradient walk
+    // (BuildXcGradientBlock) resolve them. The gradient differentiates the
+    // energy the run computed only while those three are the run's: a grid or
+    // a screening rule re-derived here would move every grid term while still
+    // looking reasonable. The batch is the default because CreateKsGrid hands
+    // the energy path the default - both walks sum in the same order, and the
+    // gradient walk's energy is compared against the reference's.
+    if (input.method.method == qcx::io::MethodType::kRks)
+    {
+        if (!input.method.functional.has_value())
+        {
+            return std::unexpected(
+                Err(qcx::ErrorCode::kInvalidArgument,
+                    "properties.total_gradient: no method.functional to differentiate"));
+        }
+
+        auto functional = qcx::driver::internal::ResolveKsFunctional(*input.method.functional);
+
+        if (!functional.has_value())
+        {
+            return std::unexpected(functional.error());
+        }
+
+        qcx::properties::TotalGradientXcOptions xc;
+        xc.functional = functional->name;
+        xc.grid = ResolveXcGridSettings(input.grid.value_or(qcx::io::RunGridInput{}));
+        xc.screeningTolerance =
+            input.method.screeningTolerance.value_or(qcx::io::kDefaultScreeningTolerance);
+        options.xc = std::move(xc);
+    }
 
     // The dispersion correction the run requested, resolved by the energy
     // path's own seam. An absent block adds no term and leaves the
@@ -6507,6 +6543,16 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     block.terms.nuclearRepulsion = ToStdVector(total->terms.nuclearRepulsion);
     block.terms.coulomb = ToStdVector(total->terms.coulomb);
     block.terms.exchange = ToStdVector(total->terms.exchange);
+
+    // The exchange-correlation term is present exactly when the reference
+    // integrated a functional: the presence rule is the METHOD's, not the
+    // vector's length, so a Hartree-Fock run never publishes a zero-filled
+    // exchange-correlation term.
+    if (input.method.method == qcx::io::MethodType::kRks)
+    {
+        block.terms.xc = ToStdVector(total->terms.xc);
+    }
+
     block.terms.response = ToStdVector(total->terms.response);
 
     // The dispersion term is present exactly when the input wrote a
@@ -11435,12 +11481,13 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
             return refuse(properties.error());
         }
 
-        // The opt-in total analytic gradient (schema 45): assembled from the
+        // The opt-in total analytic gradient (schema 46): assembled from the
         // converged reference and attached to the properties block the run
-        // just filled. A request the assembly refuses - a non-converged SCF,
-        // a non-stationary reference, a D4 dispersion gradient - fails the
-        // whole run by name: a requested gradient is never silently dropped
-        // from the record.
+        // just filled, on the restricted Hartree-Fock and restricted
+        // Kohn-Sham lanes alike. A request the assembly refuses - a
+        // non-converged SCF, a non-stationary reference, a D4 dispersion
+        // gradient - fails the whole run by name: a requested gradient is
+        // never silently dropped from the record.
         auto totalGradient = BuildTotalGradientBlock(*molecule, *basis, *scf, input);
 
         if (!totalGradient.has_value())

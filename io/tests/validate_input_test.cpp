@@ -703,8 +703,8 @@ total_gradient = true
     ASSERT_EQ(uhf.issues.size(), 1u);
     EXPECT_EQ(uhf.issues[0],
               "properties.total_gradient: uhf does not take the total analytic gradient (the "
-              "assembly differentiates a converged closed-shell RHF reference; the rhf method "
-              "is the only lane that runs one)");
+              "assembly differentiates a converged closed-shell reference; the rhf and rks "
+              "methods are the only lanes that run one)");
 
     const auto uks = Validate(R"(
 [molecule]
@@ -721,8 +721,8 @@ total_gradient = true
     ASSERT_EQ(uks.issues.size(), 1u);
     EXPECT_EQ(uks.issues[0],
               "properties.total_gradient: uks does not take the total analytic gradient (the "
-              "assembly differentiates a converged closed-shell RHF reference; the rhf method "
-              "is the only lane that runs one)");
+              "assembly differentiates a converged closed-shell reference; the rhf and rks "
+              "methods are the only lanes that run one)");
 }
 
 TEST(RunInputValidationTest, DispersionIsMethodIndependent) {

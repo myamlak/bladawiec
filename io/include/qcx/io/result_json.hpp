@@ -242,7 +242,9 @@ struct RunTotalGradientTerms {
     std::vector<double> nuclearRepulsion;
     /// `dE_J/dR`.
     std::vector<double> coulomb;
-    /// `-(1/2) dE_K/dR`, the exchange as the closed-shell energy subtracts it.
+    /// `-(1/2) c_HF dE_K/dR`, the exchange as the closed-shell energy
+    /// subtracts it, scaled by the functional's exact-exchange fraction
+    /// (`c_HF = 1` on `rhf`, zero on a pure functional).
     std::vector<double> exchange;
     /// `Tr(F D(1))`, the orbital response's energy-weighted term.
     std::vector<double> response;
@@ -365,7 +367,8 @@ struct RunTotalGradient {
     /// The right-hand-side contributions the response solved against, in the
     /// order they were wired. A contribution silently dropped from the wiring
     /// is invisible in the total; this list is what makes its absence visible.
-    /// The shipped assembly wires `["one-electron", "coulomb", "exchange"]`.
+    /// The shipped assembly wires `["one-electron", "coulomb", "exchange"]`
+    /// on `rhf` and `["one-electron", "coulomb", "exchange", "xc"]` on `rks`.
     std::vector<std::string> rightHandSideTerms;
 };
 

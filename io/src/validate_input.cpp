@@ -409,8 +409,8 @@ ValidationReport ValidateInput(const RunInput& input) {
         report.issues.push_back(
             "properties.total_gradient: " + std::string(MethodWord(input.method.method)) +
             " does not take the total analytic gradient (the assembly differentiates a "
-            "converged closed-shell RHF reference; the rhf method is the only lane that "
-            "runs one)");
+            "converged closed-shell reference; the rhf and rks methods are the only lanes "
+            "that run one)");
     }
 
     // The `[dispersion]` block's cross-key rules. The module resolves a
