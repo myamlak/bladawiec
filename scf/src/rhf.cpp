@@ -530,13 +530,77 @@ qcx::Result<HfResult> RunScfLoop(const qcx::molecule::Molecule& molecule,
     // transform the walk used: two call sites, one rule. The
     // columns come back ascending by orbital energy - SelfAdjointEigenSolver
     // orders its eigenvalues, and the blocked path preserves that order.
-    const auto diagonalizeFock = [&](const Eigen::MatrixXd& fock) {
-        if (symmetryBlocks.has_value())
+    //
+    // THE EQUIVALENCE IS CONDITIONAL, so the choice is guarded (the guard's
+    // home on the restricted path). The argument "U^T (X^T F X) U is
+    // block-diagonal up to integral noise, so the blocked solve equals the
+    // plain one" is exactly as good as "F commutes with the group", and that
+    // is a property of the SOLUTION, not of the molecule. The point group is a
+    // property of the NUCLEAR FRAMEWORK; the group that may legitimately
+    // constrain a solution is the invariance group OF THAT SOLUTION, and a
+    // restricted solution is free to have a smaller one. Blocking by the full
+    // point group then projects that solution out and returns the
+    // symmetry-adapted one as if it were the answer, converged and
+    // variational-looking. The measured case is an external perturbation: an
+    // applied field couples sigma_g and sigma_u in H2/STO-3G, the blocked
+    // solve keeps only the diagonal irrep blocks, and the finite-field
+    // polarizability comes back as zero on a density that never saw the field.
+    //
+    // So each iteration measures the precondition on its own Fock
+    // (internal::MeasureSymmetryAdaptation) and refuses the blocks when it
+    // fails. The refusal is the SAFE direction: a blocked solve of a
+    // non-adapted Fock silently CONSTRAINS the variational search, while a
+    // plain solve of an adapted Fock only loses the speedup. The test is
+    // necessary and not sufficient - a small commutator says the matrix about
+    // to be blocked is adapted, never that no broken solution exists - which
+    // is why refusing does not change what a plain run would have found.
+    SymmetryBlockingReport symmetryBlocking;
+
+    const auto diagonalizeFock =
+        [&symmetryBlocks, &blockedDiagonalizeData, &x](
+            const Eigen::MatrixXd& fock,
+            SymmetryBlockingReport& report) -> qcx::Result<Eigen::MatrixXd> {
+        // The blocking needs both the decomposition and data that can serve
+        // it: the linear-dependence removal leaves a non-square orthogonalizer
+        // and DiagonalizeFockBlocked disengages from it by design (its own
+        // reasoning), so the run must not report having blocked anything here.
+        if (!symmetryBlocks.has_value() || !blockedDiagonalizeData.has_value() ||
+            blockedDiagonalizeData->isTrivial)
         {
+            if (symmetryBlocks.has_value())
+            {
+                report.action = SymmetryBlockingAction::kUnavailable;
+            }
+
+            return qcx::Result<Eigen::MatrixXd>(internal::DiagonalizeFock(fock, x));
+        }
+
+        const auto adaptation =
+            internal::MeasureSymmetryAdaptation(fock, *symmetryBlocks, *blockedDiagonalizeData);
+        report.tolerance = internal::kSymmetryAdaptationTolerance;
+
+        // The per-generator norms travel with the WORST measurement of the
+        // channel, so the recorded vector always explains the recorded
+        // maximum - a reader can check the decision rather than take it.
+        if (report.generatorCommutatorNorms.empty() ||
+            adaptation.maxCommutatorNorm > report.maxGeneratorCommutatorNorm)
+        {
+            report.generatorCommutatorNorms = adaptation.generatorCommutatorNorms;
+            report.maxGeneratorCommutatorNorm = adaptation.maxCommutatorNorm;
+        }
+
+        if (adaptation.maxCommutatorNorm <= internal::kSymmetryAdaptationTolerance)
+        {
+            ++report.blockedSolveCount;
+            report.action = report.plainSolveCount == 0 ? SymmetryBlockingAction::kUsed
+                                                        : SymmetryBlockingAction::kDemoted;
             return internal::DiagonalizeFockBlocked(
                 fock, x, *symmetryBlocks, *blockedDiagonalizeData);
         }
 
+        ++report.plainSolveCount;
+        report.action = report.blockedSolveCount == 0 ? SymmetryBlockingAction::kRefused
+                                                      : SymmetryBlockingAction::kDemoted;
         return qcx::Result<Eigen::MatrixXd>(internal::DiagonalizeFock(fock, x));
     };
 
@@ -765,7 +829,7 @@ qcx::Result<HfResult> RunScfLoop(const qcx::molecule::Molecule& molecule,
                     fock, overlap, coefficients, kEscapeLevelShift, numOccupied);
             }
 
-            const auto diagonalized = diagonalizeFock(fock);
+            const auto diagonalized = diagonalizeFock(fock, symmetryBlocking);
 
             if (!diagonalized.has_value())
             {
@@ -1025,6 +1089,10 @@ qcx::Result<HfResult> RunScfLoop(const qcx::molecule::Molecule& molecule,
 
         if (coulomb != nullptr)
         {
+            // The seam/KS carve-out returns the loop's own pair, so the guard's
+            // history is the whole of its disclosure - attach it here too, and
+            // not only on the polished path.
+            result.symmetryBlocking = symmetryBlocking;
             return {};
         }
 
@@ -1043,7 +1111,7 @@ qcx::Result<HfResult> RunScfLoop(const qcx::molecule::Molecule& molecule,
         // self-describing: SelfAdjointEigenSolver returns ASCENDING eigenvalues
         // with matching eigenvectors, so the documented "columns ascending by
         // orbital energy" holds by construction and no re-sort is needed.
-        const auto finalCoefficients = diagonalizeFock(*returnedFock);
+        const auto finalCoefficients = diagonalizeFock(*returnedFock, symmetryBlocking);
 
         if (!finalCoefficients.has_value())
         {
@@ -1127,6 +1195,10 @@ qcx::Result<HfResult> RunScfLoop(const qcx::molecule::Molecule& molecule,
                 result.stateFixedPointResidual);
         }
 
+        // The report travels with the result AFTER the finalizer's own
+        // re-diagonalization above, which is a diagonalization like any other:
+        // a blocked walk that the returned-density Fock demotes must say so.
+        result.symmetryBlocking = symmetryBlocking;
         return {};
     };
 

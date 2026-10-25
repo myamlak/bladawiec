@@ -16,6 +16,7 @@
 #include <Eigen/Dense>
 #include <functional>
 #include <optional>
+#include <vector>
 
 // Forward declaration only: the basis set is an optional pointer parameter
 // of the FockBuilderFn overloads - no basisset symbols are exposed by
@@ -90,6 +91,73 @@ struct RhfOptions {
     /// zero-cost path - no file, no allocation, no numerical effect (the
     /// bit-parity pins are absolute).
     std::string densityDumpFile;
+};
+
+/// What a run did with the point-group symmetry blocking it was in a position
+/// to use (the blocked diagonalization, requested by supplying the basis set
+/// to the run function). The honoured / refused-by-name / demoted vocabulary,
+/// graded where the decision is made.
+/// \ingroup qcx-scf
+enum class SymmetryBlockingAction {
+    kNotRequested, ///< No basis set was supplied, or the detected group is C1/unrealizable:
+                   ///< nothing was asked and every diagonalization ran the plain solve.
+    kUsed, ///< Every diagonalization ran on the irrep blocks.
+    kDemoted, ///< Blocking ran for at least one diagonalization and was refused for at least
+              ///< one other - the run walked both paths.
+    kRefused, ///< Every diagonalization was refused: blocking was requested and never ran.
+    kUnavailable, ///< The decomposition could not serve a blocked solve at all - the
+                  ///< linear-dependence removal left a non-square orthogonalizer, whose
+                  ///< disengagement DiagonalizeFockBlocked documents. Distinct from
+                  ///< kRefused by name: no Fock was measured, no guard decision was taken.
+};
+
+/// One symmetry channel's blocking DISCLOSURE: what was requested, what the
+/// guard decided, and the numbers it decided on. The restricted path has one
+/// Fock and therefore one channel (HfResult::symmetryBlocking); the
+/// unrestricted path carries one per spin (UhfResult::symmetryBlockingAlpha
+/// and symmetryBlockingBeta), because the alpha and beta Focks are different
+/// matrices and one may be symmetry-adapted while the other is not.
+///
+/// The guard exists because the blocked equivalence is conditional. "U^T (X^T F X) U
+/// is block-diagonal up to integral noise ... equivalent to the plain n x n
+/// solve" holds while the Fock commutes with the group - a property of the
+/// SOLUTION. The point group is a property of the NUCLEAR FRAMEWORK; the group
+/// that may legitimately constrain a solution is the invariance group OF THAT
+/// SOLUTION, and a solution may have a smaller one. Blocking a Fock that has
+/// broken the group's symmetry does not accelerate that solution's
+/// diagonalization - it projects the solution out, and silently: the blocked
+/// path still returns a converged, variational-looking answer, just the wrong
+/// one. On the unrestricted path the broken solution is the lower one (an
+/// RHF -> UHF instability is exactly that); on the restricted path the
+/// measured case is an external perturbation, where an applied field couples
+/// irreps (sigma_g and sigma_u in H2/STO-3G) and the blocked solve drops the
+/// coupling, returning a zero response to a field that is there. The guard
+/// measures the precondition (internal::MeasureSymmetryAdaptation) and refuses
+/// by name when it fails, per diagonalization.
+///
+/// This report is the record of that decision (the number a reader can check
+/// rather than take). The per-generator norms are the WORST measurement of the
+/// channel, so they always correspond to maxGeneratorCommutatorNorm.
+/// \ingroup qcx-scf
+struct SymmetryBlockingReport {
+    /// The action taken over the whole run; see SymmetryBlockingAction.
+    SymmetryBlockingAction action = SymmetryBlockingAction::kNotRequested;
+    /// Diagonalizations that ran on the irrep blocks.
+    int blockedSolveCount = 0;
+    /// Diagonalizations that ran the plain n x n solve (the guard's refusals,
+    /// and the finalizer's re-diagonalization, which is counted here too).
+    int plainSolveCount = 0;
+    /// The relative commutator norms || [F_orth, A(g_j)] ||_F / || F_orth ||_F
+    /// of the worst measurement, one per generator of the computational group.
+    /// Empty when nothing was ever measured (kNotRequested, kUnavailable).
+    std::vector<double> generatorCommutatorNorms;
+    /// The largest relative commutator norm the channel ever measured; compare
+    /// it with tolerance. 0 when nothing was measured.
+    double maxGeneratorCommutatorNorm = 0.0;
+    /// The threshold the norms above were compared against, recorded so the
+    /// numbers are readable without the source (the guard's constant is
+    /// internal to the scf module).
+    double tolerance = 0.0;
 };
 
 /// Result of one RHF run.
@@ -228,6 +296,21 @@ struct HfResult {
     /// independent and are not recorded twice: nothing else removes
     /// directions, so this count is what says why the labeling block is absent.
     std::size_t numRemovedOverlapDirections = 0;
+
+    /// The run's symmetry-blocking disclosure (the blocking guard; see
+    /// SymmetryBlockingReport): what the run requested, what the guard decided
+    /// on each diagonalization's Fock, and the numbers it decided on. The
+    /// restricted path has ONE Fock and therefore one channel; the
+    /// unrestricted path carries the per-spin pair
+    /// (UhfResult::symmetryBlockingAlpha / symmetryBlockingBeta).
+    ///
+    /// It is filled whenever a basis set was supplied and the detected group
+    /// was realizable - including the runs where every diagonalization was
+    /// refused (kRefused), which is exactly the disclosure a caller needs to
+    /// tell a blocked run from a plain one. A run that never asked leaves it
+    /// at kNotRequested, which is the absence of a decision rather than a
+    /// passed check.
+    SymmetryBlockingReport symmetryBlocking;
 };
 
 /// Per-iteration Fock-matrix builder callback (the loop's builder seam).

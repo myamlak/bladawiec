@@ -122,66 +122,6 @@ struct UhfOptions {
     std::string traceFile;
 };
 
-/// What a run did with the point-group symmetry blocking it was in a position
-/// to use (the blocked diagonalization, requested by supplying the basis
-/// set to RunUhfScf). The honoured / refused-by-name / demoted vocabulary,
-/// graded where the decision is made.
-/// \ingroup qcx-scf
-enum class SymmetryBlockingAction {
-    kNotRequested, ///< No basis set was supplied, or the detected group is C1/unrealizable:
-                   ///< nothing was asked and every diagonalization ran the plain solve.
-    kUsed, ///< Every diagonalization ran on the irrep blocks.
-    kDemoted, ///< Blocking ran for at least one diagonalization and was refused for at least
-              ///< one other - the run walked both paths.
-    kRefused, ///< Every diagonalization was refused: blocking was requested and never ran.
-    kUnavailable, ///< The decomposition could not serve a blocked solve at all - the
-                  ///< linear-dependence removal left a non-square orthogonalizer, whose
-                  ///< disengagement DiagonalizeFockBlocked documents. Distinct from
-                  ///< kRefused by name: no Fock was measured, no guard decision was taken.
-};
-
-/// One spin channel's symmetry-blocking DISCLOSURE: what was requested, what
-/// the guard decided, and the numbers it decided on.
-///
-/// The guard exists because the blocked equivalence is conditional. "U^T (X^T F X) U
-/// is block-diagonal up to integral noise ... equivalent to the plain n x n
-/// solve" holds while the Fock commutes with the group - a property of the
-/// SOLUTION. The point group is a property of the NUCLEAR FRAMEWORK; the group
-/// that may legitimately constrain a solution is the invariance group OF THAT
-/// SOLUTION, and an unrestricted solution may have a smaller one. Blocking a
-/// Fock that has broken the group's symmetry does not accelerate that
-/// solution's diagonalization - it projects the solution out, and silently:
-/// the blocked path still returns a converged, variational-looking answer,
-/// just the wrong one. The guard measures the precondition
-/// (internal::MeasureSymmetryAdaptation) and refuses by name when it fails,
-/// per spin and per iteration, because the alpha and beta Focks are different
-/// matrices.
-///
-/// This report is the record of that decision (the number a reader can check
-/// rather than take). The per-generator norms are the WORST measurement of the
-/// channel, so they always correspond to maxGeneratorCommutatorNorm.
-/// \ingroup qcx-scf
-struct SymmetryBlockingReport {
-    /// The action taken over the whole run; see SymmetryBlockingAction.
-    SymmetryBlockingAction action = SymmetryBlockingAction::kNotRequested;
-    /// Diagonalizations that ran on the irrep blocks.
-    int blockedSolveCount = 0;
-    /// Diagonalizations that ran the plain n x n solve (the guard's refusals,
-    /// and the finalizer's re-diagonalization, which is counted here too).
-    int plainSolveCount = 0;
-    /// The relative commutator norms || [F_orth, A(g_j)] ||_F / || F_orth ||_F
-    /// of the worst measurement, one per generator of the computational group.
-    /// Empty when nothing was ever measured (kNotRequested, kUnavailable).
-    std::vector<double> generatorCommutatorNorms;
-    /// The largest relative commutator norm the channel ever measured; compare
-    /// it with tolerance. 0 when nothing was measured.
-    double maxGeneratorCommutatorNorm = 0.0;
-    /// The threshold the norms above were compared against, recorded so the
-    /// numbers are readable without the source (the guard's constant is
-    /// internal to the scf module).
-    double tolerance = 0.0;
-};
-
 /// Result of one UHF run.
 /// \ingroup qcx-scf
 struct UhfResult {
