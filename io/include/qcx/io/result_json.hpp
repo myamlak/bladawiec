@@ -1625,6 +1625,27 @@ struct RunQfmmModel {
     /// there are no far pairs: the absence of a worst interaction, never a
     /// certified one.
     double worstTruncationBound = 0.0;
+
+    /// Whether the near-field direct builder the run constructed had the
+    /// certified mixed-precision (fp32) lane ENABLED (schema 47), serialized
+    /// as `certified_near_field_lane`. The near field of a composed-QFMM
+    /// build is a nested restricted direct builder, and the lane's state
+    /// there is a builder-creation decision the driver never makes: the
+    /// engine resolves `QfmmOptions::useCertifiedMixedPrecision` against the
+    /// preset's own gate (`MixedPrecisionThreshold`, 0 at kTight), so a
+    /// consumer reading an energy has no way to tell a near field served
+    /// with the lane enabled from one served fp64 - two different arithmetic
+    /// regimes over the same pairs - unless the record says which.
+    ///
+    /// Emitted on every present `qfmm_model` block rather than omitted when
+    /// false (the `certified_bound` rule): `false` is a statement about the
+    /// lane (switched off, or the preset's gate), never permission to infer
+    /// the lane's state from an absent key. It is the CREATION policy, not a
+    /// per-quartet tally: the nested builder still routes each quartet by its
+    /// own density-weighted bound, so `true` means the lane was enabled for
+    /// the near field, not that every pair took it. The far field is fp64 by
+    /// construction and is not this member's subject.
+    bool certifiedNearFieldLane = false;
 };
 
 /// The `xc_grid` block of a run result (schema 34): the XC integration
@@ -1956,7 +1977,28 @@ struct RunResult {
     /// the member is absent, not zero - and a consumer that reads the member
     /// on an RHF record learns the run had no exchange-correlation term, not
     /// that one was computed as zero.
-    static constexpr int kSchemaVersion = 46;
+    ///
+    /// Schema 47 ADDS two disclosures under one bump, because both close the
+    /// same defect on the record's disclosure surface - a decision the run
+    /// made that its document could not state. (1) The restricted path's
+    /// symmetry-blocking decision (RunResult::symmetryBlocking): the RHF/RKS
+    /// guard's `action`, the two solve counts, the per-generator commutator
+    /// norms with their maximum, and the tolerance, serialized as the
+    /// `symmetry_blocking` object's own body - ONE report, because the
+    /// restricted path has one Fock and therefore one channel - while the
+    /// unrestricted shape keeps its schema-32 `alpha`/`beta` pair. A key
+    /// added, and a shape a consumer must tell apart: before this schema a
+    /// restricted run's demotion was visible only to a caller holding the
+    /// in-process HfResult, so the JSON read as though the irrep blocks had
+    /// been used. (2) The QFMM near-field lane (`RunQfmmModel::
+    /// certifiedNearFieldLane`): whether the near-field direct builder the
+    /// run constructed had the certified mixed-precision lane enabled,
+    /// emitted on every present `qfmm_model` block beside the model and
+    /// budget keys it qualifies. A key added, so the number moves with them;
+    /// `false` is a statement about the lane (switched off, or the preset's
+    /// own kTight gate), never an inference from an absent key, and it is
+    /// the creation policy rather than a per-quartet delivery tally.
+    static constexpr int kSchemaVersion = 47;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.
@@ -2044,6 +2086,23 @@ struct RunResult {
     std::optional<RunSymmetryBlocking> symmetryBlockingAlpha;
     /// The beta channel's disclosure; see symmetryBlockingAlpha.
     std::optional<RunSymmetryBlocking> symmetryBlockingBeta;
+
+    /// The RESTRICTED path's blocking disclosure (schema 47): one report for
+    /// the one Fock an RHF or RKS run diagonalizes. It is serialized as the
+    /// `symmetry_blocking` object's own body - `action`, the two solve
+    /// counts, the per-generator norms and their maximum, and the tolerance -
+    /// with no `alpha`/`beta` wrapper, because there is no second channel for
+    /// a wrapper to disambiguate. The pair above stays the unrestricted
+    /// shape, and a document carries one shape or the other: the serializer
+    /// writes this report when the member is set and the channel pair
+    /// otherwise.
+    ///
+    /// The value is the guard's own `action` copied through the driver's
+    /// `MakeRunSymmetryBlocking`, never re-derived here. Absent on the same
+    /// rule as its siblings - the guard's `kNotRequested` (no basis set, a
+    /// C1 molecule, an unrealizable group) is the key's absence, never a
+    /// fabricated word.
+    std::optional<RunSymmetryBlocking> symmetryBlocking;
 
     /// The term_counters block of an instrumented ri_j run
     /// (RunTermCounters - the engine-emitted x/p3/g3/qx/gx per-run totals

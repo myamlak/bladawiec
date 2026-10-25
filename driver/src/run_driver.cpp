@@ -7021,6 +7021,12 @@ std::optional<qcx::io::RunQfmmModel> MakeQfmmModelRecord(
     record.pairsMovedToNearField = model->pairsMovedToNearField;
     record.fellThroughToCap = model->fellThroughToCap;
     record.worstTruncationBound = model->worstTruncationBound;
+    // The near-field lane (schema 47): the engine resolved it when it created
+    // the nested near-field builder (the QfmmOptions request against the
+    // preset's own gate), so the driver copies the engine's answer rather
+    // than re-deriving the gate from the run's accuracy - a second derivation
+    // could disagree with the builder the energy came from.
+    record.certifiedNearFieldLane = model->certifiedNearFieldLane;
     return record;
 }
 
@@ -11278,6 +11284,14 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         // full_group = false switch, or an unrealizable group) - never a
         // fabricated C1 record.
         result.symmetry = MakeRunSymmetry(scf->symmetryLabels);
+
+        // The blocking guard's decision on the SAME stage's Fock (schema 47):
+        // the restricted path has one Fock, so the record carries the one
+        // report as the `symmetry_blocking` object's own body. Copied from
+        // the scf report, never re-derived here; absent when the guard never
+        // asked (C1, no basis set, an unrealizable group) - the guard's own
+        // kNotRequested, which is the absence of a decision.
+        result.symmetryBlocking = MakeRunSymmetryBlocking(scf->symmetryBlocking);
 
         // The last-iterate checkpoint write (scf.checkpoint_file,
         // RHF only): the restart state - the final-iterate density, the

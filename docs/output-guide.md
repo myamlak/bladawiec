@@ -92,7 +92,7 @@ its line endings are LF.
 ### The JSON document
 
 The same result goes to stdout as one JSON document, indented two spaces, with its keys in
-alphabetical order. It carries `schema_version` (currently **41**), and a reader should key on
+alphabetical order. It carries `schema_version` (currently **47**), and a reader should key on
 that: the document grows as the program grows, and a consumer that ignores unknown keys keeps
 working. The opening entries of one run's document, with the entries between them left out:
 
@@ -107,7 +107,7 @@ working. The opening entries of one run's document, with the entries between the
   "converged": true,
   "method": "rhf",
   "molecule_units": "angstrom",
-  "schema_version": 41,
+  "schema_version": 47,
   ...
 ```
 

@@ -3688,6 +3688,11 @@ TEST(DriverPinTest, O2UhfComposedQfmmReproducesTheDirectUhfPin) {
     EXPECT_NE(result->find("\"extent_model\": \"kProductBall\""), std::string::npos);
     EXPECT_NE(result->find("\"theta\": 0.0"), std::string::npos);
     EXPECT_NE(result->find("\"geometric_far_pair_count\": 0,"), std::string::npos);
+    // The near-field lane (schema 47) reads OFF at this rung, and the word is
+    // the preset's own: kTight's MixedPrecisionThreshold is 0.0, the strict
+    // pins are fp64-only, so the request the builder carried could not engage
+    // the lane. Written rather than omitted - `false` is the statement.
+    EXPECT_NE(result->find("\"certified_near_field_lane\": false"), std::string::npos);
 
     const auto spinSquared = JsonNumber(*result, "\"spin_squared\"");
     ASSERT_TRUE(spinSquared.has_value());
@@ -5254,6 +5259,13 @@ accuracy = "kNormal"
     EXPECT_NE(defaultRun->find("\"separation_mode\": \"kWidthTheta\""), std::string::npos);
     EXPECT_NE(defaultRun->find("\"theta\": 0.3"), std::string::npos);
     EXPECT_NE(defaultRun->find("\"separation_k\": 0.0"), std::string::npos);
+    // The near-field lane (schema 47): the builder the engine created for this
+    // run's near field carries the certified mixed-precision lane ENABLED -
+    // QfmmOptions' default request at a preset whose gate admits it (kNormal's
+    // MixedPrecisionThreshold is 1e-10). The record states the lane policy the
+    // builder was created with, so a reader can tell this near field from one
+    // served fp64 without consulting the input or the source.
+    EXPECT_NE(defaultRun->find("\"certified_near_field_lane\": true"), std::string::npos);
     // The run's own far field: two atoms admit no far pair at any aim, so 0 is
     // the honest count here - the claim that the far field CAN be nonzero
     // rides the chain pins, where the count moves with the preset.
@@ -5298,6 +5310,9 @@ accuracy = "kNormal"
 )");
     ASSERT_TRUE(directRun.has_value()) << directRun.error().message;
     EXPECT_EQ(directRun->find("\"qfmm_model\""), std::string::npos);
+    // ... and with no block there is no lane statement either: the field is a
+    // member of the QFMM record, not a top-level fact a direct run acquires.
+    EXPECT_EQ(directRun->find("\"certified_near_field_lane\""), std::string::npos);
 
     // Leg 4 - the two words are INDEPENDENT facts, which is the whole reason
     // the block carries two members instead of one "model" word. Leg 2's
@@ -6526,6 +6541,92 @@ type = "core"
     // information, so the full-group blocks are absent for the same C1 cause.
     EXPECT_EQ(result->find("\"symmetry\""), std::string::npos);
     EXPECT_EQ(result->find("\"symmetry_beta\""), std::string::npos);
+}
+
+// The restricted path's blocking disclosure (schema 47): the same guard, the
+// same measurement, ONE report. RHF has one Fock per diagonalization, so its
+// record has one channel, and that report is serialized as the
+// `symmetry_blocking` object's own body - the UHF block's alpha/beta wrapper
+// has nothing to disambiguate here. The fixture is the UHF `kUsed` cell's own
+// geometry and guess (stretched H2/STO-3G read in bohr, core guess), so the
+// word is the one the same measurement produced one spin at a time; what this
+// cell adds is the restricted SHAPE and the driver wiring that publishes it -
+// before schema 47 the restricted decision existed only in the in-process
+// HfResult and the run's JSON was silent about it.
+TEST(DriverRunTest, SymmetryBlockingReadsUsedOnTheRestrictedPath) {
+    auto result = RunInputText(R"(
+[molecule]
+units = "bohr"
+charge = 0
+multiplicity = 1
+atoms = [
+    ["H", 0.0, 0.0, 0.0],
+    ["H", 3.5, 0.0, 0.0],
+]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+
+[guess]
+type = "core"
+)");
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+    EXPECT_NE(result->find("\"converged\": true"), std::string::npos);
+
+    const auto blockPos = result->find("\"symmetry_blocking\"");
+    ASSERT_NE(blockPos, std::string::npos) << "the guard ran, so the record must account for it";
+
+    // The action sits at the block's OWN level: the object opens into the
+    // report, not into a channel wrapper. The full-group labeling stage ran on
+    // the same Fock, so this is a live symmetry run and not a stage that stood
+    // down.
+    EXPECT_NE(result->find("\"full_group\""), std::string::npos);
+    EXPECT_NE(result->find("\"symmetry_blocking\": {\n    \"action\": \"kUsed\"", blockPos),
+              std::string::npos)
+        << "the report IS the block: no alpha/beta wrapper on the restricted path";
+    EXPECT_EQ(result->find("\"action\": \"kRefused\"", blockPos), std::string::npos);
+    EXPECT_EQ(result->find("\"action\": \"kDemoted\"", blockPos), std::string::npos);
+
+    // No channel keys after the block: a restricted document has no alpha or
+    // beta channel anywhere below this point (the populations block, which
+    // does carry alpha/beta members, sorts earlier and is out of the region).
+    EXPECT_EQ(result->find("\"alpha\":", blockPos), std::string::npos);
+    EXPECT_EQ(result->find("\"beta\":", blockPos), std::string::npos);
+
+    const auto blocked = JsonScalarNumber(*result, "\"blocked_solve_count\":", blockPos);
+    const auto plain = JsonScalarNumber(*result, "\"plain_solve_count\":", blockPos);
+    ASSERT_TRUE(blocked.has_value());
+    ASSERT_TRUE(plain.has_value());
+    EXPECT_GT(static_cast<int>(*blocked), 0) << "the count the kUsed word was decided on";
+    EXPECT_EQ(static_cast<int>(*plain), 0) << "kUsed means no diagonalization was refused";
+
+    const auto tolerance = JsonScalarNumber(*result, "\"tolerance\":", blockPos);
+    const auto maximum = JsonScalarNumber(*result, "\"max_generator_commutator_norm\":", blockPos);
+    ASSERT_TRUE(tolerance.has_value());
+    ASSERT_TRUE(maximum.has_value());
+    EXPECT_DOUBLE_EQ(*tolerance, 1e-08);
+    EXPECT_LT(*maximum, *tolerance) << "the guard's own comparison";
+
+    // One norm per generator of the computational group, and the recorded
+    // maximum is EXPLAINED by the vector: the same four generators the UHF
+    // cells assert for this fixture's abelian reduction.
+    const auto norms = JsonNumberArray(*result, "\"generator_commutator_norms\":", blockPos);
+    ASSERT_TRUE(norms.has_value());
+    ASSERT_EQ(norms->values.size(), 4U);
+
+    double worst = 0.0;
+
+    for (const double norm : norms->values)
+    {
+        worst = std::max(worst, norm);
+    }
+
+    EXPECT_DOUBLE_EQ(worst, *maximum);
 }
 
 // The disk-rung knob (
