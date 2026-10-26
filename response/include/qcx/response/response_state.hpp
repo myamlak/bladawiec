@@ -10,9 +10,17 @@
 /// operator and the right-hand side read, and a place where one solver per
 /// coordinate guarantees that slot `k` is reused for coordinate `k` and not
 /// for whichever displacement happened to be solved last. This is that owner.
+///
+/// The state builds one of two operators from the same reference: the
+/// Hartree-Fock orbital Hessian by default, or - when it is handed a density
+/// functional's kernel term - the Kohn-Sham Hessian that adds the kernel to
+/// the scaled exact-exchange action. The state owns the kernel callback but
+/// not what the callback points at: the engine and the kernel action the
+/// caller's capture references must outlive the state.
 
 #include "qcx/error.hpp"
 #include "qcx/response/response_gradient.hpp"
+#include "qcx/response/response_kernel.hpp"
 #include "qcx/response/response_operator.hpp"
 #include "qcx/response/response_solver.hpp"
 
@@ -20,6 +28,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace qcx::response {
@@ -134,10 +143,23 @@ public:
     /// reference's coordinates.
     /// \param solverOptions The options every per-coordinate solver starts
     /// with.
+    /// \param exchangeFraction The exact-exchange fraction c_HF the operator
+    /// scales its exchange integrals by, in [0, 1]. The default 1.0 is the
+    /// Hartree-Fock operator's unscaled action.
+    /// \param kernel The density functional's kernel term. Absent (the
+    /// default), the state builds the Hartree-Fock operator; present, it builds
+    /// a KohnShamOrbitalHessian whose kernel action adds the term to every
+    /// application. The state copies the callback, not what it captures - the
+    /// caller keeps the engine and action the callback reads alive for as long
+    /// as the state is used, as response_kernel_test does by capturing a
+    /// shared_ptr<XcKernelAction>.
     /// \returns The state, or an Error (kInvalidArgument) naming the refusal.
-    static qcx::Result<ResponseState> Create(ResponseStateReference reference,
-                                             ResponseScreening screening,
-                                             ResponseSolveOptions solverOptions = {});
+    static qcx::Result<ResponseState> Create(
+        ResponseStateReference reference,
+        ResponseScreening screening,
+        ResponseSolveOptions solverOptions = {},
+        double exchangeFraction = 1.0,
+        std::optional<KohnShamKernelTerm> kernel = std::nullopt);
 
     /// Replaces the reference and screening structure, keeping every stored
     /// solution vector.
@@ -148,12 +170,24 @@ public:
     /// validation as Create, and its layout must match this state's - a
     /// changed basis-function, occupied, virtual or atom count is refused
     /// rather than solved with the wrong-shaped stored vectors.
+    ///
+    /// The operator arguments are the sweep's method, not a property of the
+    /// reference, and a rebase does not remember them: a rebase that omits
+    /// them rebuilds the Hartree-Fock operator. A Kohn-Sham sweep passes the
+    /// same exchange fraction and kernel to every Rebase, exactly as it passed
+    /// them to Create, and keeps the kernel's engine and action alive beside
+    /// the state.
     /// \param reference The new reference; every array is copied.
     /// \param screening The new screening structure, its digest matching the
     /// new coordinates.
+    /// \param exchangeFraction The exact-exchange fraction c_HF, in [0, 1].
+    /// \param kernel The density functional's kernel term, as Create takes it.
     /// \returns An Error (kInvalidArgument) naming the refusal. A refused
     /// rebase leaves the state unchanged.
-    qcx::Result<void> Rebase(ResponseStateReference reference, ResponseScreening screening);
+    qcx::Result<void> Rebase(ResponseStateReference reference,
+                             ResponseScreening screening,
+                             double exchangeFraction = 1.0,
+                             std::optional<KohnShamKernelTerm> kernel = std::nullopt);
 
     /// Solves the orbital response to one nuclear displacement.
     ///
@@ -215,6 +249,26 @@ public:
         return _report;
     }
 
+    /// \returns Whether the state's operator carries a density functional's
+    /// kernel term (false for the Hartree-Fock operator).
+    bool HasKernel() const {
+        return _ksOperator.has_value();
+    }
+
+    /// \returns The kernel term's name; empty when the state carries the
+    /// Hartree-Fock operator.
+    std::string_view KernelName() const {
+        return _ksOperator.has_value() ? std::string_view(_ksOperator->KernelName())
+                                       : std::string_view{};
+    }
+
+    /// \returns The exact-exchange fraction the operator scales its exchange
+    /// integrals by; 1.0 for the default Hartree-Fock state.
+    double ExchangeFraction() const {
+        return _ksOperator.has_value() ? _ksOperator->ExchangeFraction()
+                                       : _operator->ExchangeFraction();
+    }
+
     /// \returns The reference coordinates, 3 per atom, Bohr.
     std::span<const double> CoordinatesBohr() const {
         return _coordinatesBohr;
@@ -264,9 +318,15 @@ private:
     /// Migrates a validated reference into the state's own storage and
     /// rebuilds the operator against it.
     /// \param reference The validated reference.
+    /// \param exchangeFraction The exact-exchange fraction the operator
+    /// scales its exchange integrals by.
+    /// \param kernel The kernel term, when the state is a Kohn-Sham one; its
+    /// callback's capture must outlive the state.
     /// \returns An Error from the operator's construction; on failure the
     /// state's own storage is untouched.
-    qcx::Result<void> Install(ResponseStateReference reference);
+    qcx::Result<void> Install(ResponseStateReference reference,
+                              double exchangeFraction,
+                              std::optional<KohnShamKernelTerm> kernel);
 
     ResponseLayout _layout;
     std::size_t _numBasisFunctions = 0;
@@ -281,6 +341,7 @@ private:
     ResponseReferenceIdentity _identity;
     ResponseSolveOptions _solverOptions;
     std::optional<OrbitalHessianOperator> _operator;
+    std::optional<KohnShamOrbitalHessian> _ksOperator;
     std::vector<ResponseSolver<OrbitalHessianOperator>> _solvers;
     ResponseStateReport _report;
 };

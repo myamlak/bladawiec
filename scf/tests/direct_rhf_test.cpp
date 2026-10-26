@@ -694,9 +694,25 @@ TEST(DirectRhfTest, RotatedBenzeneC2hClassesMatchPlain) {
     ASSERT_TRUE(seamResult.has_value()) << seamResult.error().message;
     // The rotated benzene keeps the C2h subgroup (the C6-axis C2, the
     // inversion, the molecular-plane mirror): the fallback selects it for
-    // the class contraction, while the blocked diagonalization keeps the
-    // full D2h of the unrotated fixture's realization frame.
+    // the class contraction, while the blocked diagonalization builds the
+    // blocks for that realized subgroup. The DEFAULT start is NOT adapted:
+    // the GWH eigensolver's columns inside the degenerate HOMO set are an
+    // arbitrary mixture, and the Fock built from it reads 2.775e-04 against
+    // the restricted path's 1e-8 tolerance. The diagonalization guard
+    // therefore DEMOTES - it refuses the irrep blocks on the broken opening
+    // Focks and blocks once the walk enters the adapted manifold (measured
+    // on this tree: kDemoted, 4 blocked / 7 plain, worst 2.775e-04). Before
+    // the guard this run was blocked THROUGHOUT, i.e. it solved the problem
+    // constrained to the group's irreps on a Fock that did not commute with
+    // it, and the old density pin below was measured on that walk.
     ASSERT_TRUE(symmetryEngaged) << "the C2h fallback must engage the class path";
+    EXPECT_EQ(seamResult->symmetryBlocking.action, qcx::scf::SymmetryBlockingAction::kDemoted)
+        << seamResult->symmetryBlocking.blockedSolveCount << " blocked / "
+        << seamResult->symmetryBlocking.plainSolveCount << " plain";
+    EXPECT_GT(seamResult->symmetryBlocking.plainSolveCount, 0);
+    EXPECT_GT(seamResult->symmetryBlocking.blockedSolveCount, 0);
+    EXPECT_GT(seamResult->symmetryBlocking.maxGeneratorCommutatorNorm,
+              seamResult->symmetryBlocking.tolerance);
 
     auto plainResult = RunDirectRhf(*molecule, *basis, fockOptions, scfOptions);
     ASSERT_TRUE(plainResult.has_value()) << plainResult.error().message;
@@ -709,12 +725,29 @@ TEST(DirectRhfTest, RotatedBenzeneC2hClassesMatchPlain) {
     // threads), so the stop index was not decided inside the |dE| ~ 1e-10
     // band - the exit's energy operand reads 4.5e-12, 22x inside the gate,
     // and the two routes agree on it to ~10 percent. The equality holds at
-    // the production defaults too (measured 2026-09-15: equal counts).
-    // Apply maxParallelChunks 1 here as well if a fixture or tolerance
-    // change ever brings the two crossings together.
+    // the production defaults too (measured 2026-09-15, and again with the
+    // guard: equal counts). Apply maxParallelChunks 1 here as well if a
+    // fixture or tolerance change ever brings the two crossings together.
     EXPECT_EQ(seamResult->iterations, plainResult->iterations);
     EXPECT_NEAR(seamResult->totalEnergy, plainResult->totalEnergy, 1e-9);
-    EXPECT_NEAR((seamResult->density - plainResult->density).cwiseAbs().maxCoeff(), 0.0, 1e-9);
+    // WHAT THE DENSITY CONTRACT IS, exactly - the gate-derived form the H2O
+    // seam test above states at its assertion. The 1e-9 max-element form
+    // this test used to carry was calibrated at the production defaults on
+    // 2026-09-15 against the blocked-throughout walk; with the guard the
+    // seam route takes the plain eigenspaces on its broken opening
+    // iterations, and the same quantity reads 1.891e-9 - a bound that
+    // straddles its measurement is not a bound. A stopped point is
+    // determined by the gate that stopped it and by nothing finer, so the
+    // difference of two stopped points is a statement about the gate: each
+    // sits within one density leg of the shared fixed point, hence within
+    // twice that leg. Asserted in the loop's own norm - (new - old).norm() /
+    // n, the quantity IsConverged tests - at 2 x densityTolerance. The
+    // energy contract above is unchanged and sharper: the energy is
+    // stationary at the fixed point, so it is second order in the density
+    // error and survives the gate unweakened.
+    const double routeDensityRms = (seamResult->density - plainResult->density).norm() /
+                                   static_cast<double>(seamResult->density.rows());
+    EXPECT_LE(routeDensityRms, 2.0 * scfOptions.densityTolerance);
 }
 
 TEST(DirectRhfTest, MixedLaneEnergyBoundDominates) {

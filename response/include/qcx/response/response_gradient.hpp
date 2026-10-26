@@ -1,20 +1,23 @@
 #pragma once
 
 /// \file
-/// The nuclear-displacement right-hand side: the perturbation that turns the
-/// orbital-response solver into a gradient, as distinct from the applied-field
-/// perturbation that gives a polarizability.
+/// The orbital-response right-hand sides: the perturbations that turn the
+/// orbital-response solver into a gradient (a nuclear displacement) and into a
+/// polarizability (an applied electric field).
 ///
-/// The right-hand side is everything in the derivative of the Fock matrix that
-/// the response term does not account for - the one-electron derivative, the
-/// two-electron derivative, and for a functional the derivative of the
-/// exchange-correlation potential. Each is supplied through one seam, so a
-/// caller can wire in whichever engine it has without this module linking one.
+/// A right-hand side is everything in the derivative of the Fock matrix that
+/// the response term does not account for. For a nuclear displacement that is
+/// the one-electron derivative, the two-electron derivative, and for a
+/// functional the derivative of the exchange-correlation potential; each is
+/// supplied through one seam, so a caller can wire in whichever engine it has
+/// without this module linking one. For a uniform electric field it is the
+/// dipole matrix alone.
 
 #include "qcx/error.hpp"
 #include "qcx/response/response_operator.hpp"
 #include "qcx/response/response_solver.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -169,6 +172,108 @@ private:
     std::size_t _numBasisFunctions = 0;
     std::vector<std::string> _names;
     std::vector<FockDerivativeContributionFn> _contributions;
+};
+
+/// \ingroup qcx-response
+/// One Cartesian component of a uniform applied electric field.
+///
+/// A response is a derivative with respect to the field's strength, so this
+/// names the direction only: the strength the derivative is used at is the
+/// consumer's contraction, not part of the perturbation.
+struct ElectricField {
+    std::size_t direction = 0; ///< Cartesian axis: 0 = x, 1 = y, 2 = z.
+};
+
+/// \ingroup qcx-response
+/// Names a field component, for reporting and for a refusal that says which one
+/// it refused.
+/// \param field The field to name.
+/// \returns Its name, one of "field-x", "field-y" and "field-z".
+std::string ToString(const ElectricField& field);
+
+/// \ingroup qcx-response
+/// What one electric-field assembly is handed.
+///
+/// The reference quantities are borrowed, as FockDerivativeRequest's are, and
+/// there is no density among them: a uniform field's skeleton derivative does
+/// not read one.
+struct ElectricFieldRequest {
+    ResponseLayout layout; ///< Occupied/virtual structure of the response.
+    ElectricField field; ///< The field component being responded to.
+    std::size_t numBasisFunctions = 0; ///< AO count (may exceed the MO count).
+    /// The reference MO coefficients, numBasisFunctions x numOrbitals,
+    /// row-major. Column p is orbital p, occupied orbitals first.
+    std::span<const double> moCoefficients;
+};
+
+/// \ingroup qcx-response
+/// The applied electric field's right-hand side: the occupied-virtual block of
+/// the field's one-electron operator in the MO basis.
+///
+/// The field enters the Hamiltonian as `H(F) = H0 + sum_k F_k D_k`, with `D_k`
+/// the matrix along axis k, signed as the caller's Hamiltonian couples it. The
+/// derivative Fock matrix is then that matrix, and its occupied-virtual block
+/// is B of `A U = -B` - the object NuclearDisplacementRightHandSide assembles
+/// for a displaced nucleus.
+///
+/// One right-hand side serves both the Hartree-Fock and the Kohn-Sham solve.
+/// The exchange-correlation part of a response is quadratic in the orbital
+/// rotation, so it belongs to the operator (KohnShamOrbitalHessian's kernel
+/// term) and not here: a CPKS solve is this block against the kernel operator,
+/// and the right-hand side is the same matrix as in CPHF.
+///
+/// Unlike the nuclear-displacement right-hand side there is no contribution
+/// seam, because a uniform field's skeleton derivative is the matrix handed to
+/// Create and nothing adds to it.
+class ElectricFieldRightHandSide {
+public:
+    /// Builds the right-hand side from the three Cartesian matrices.
+    /// \param layout Occupied/virtual counts; both must be non-zero.
+    /// \param numBasisFunctions AO count; must be at least the orbital count
+    /// and must match each matrix's side.
+    /// \param dipoleMatrices The one-electron matrices along x, y and z, each
+    /// numBasisFunctions^2 row-major. Borrowed, not copied.
+    /// \returns The right-hand side, or an Error (kInvalidArgument on a zero
+    /// block, an AO count below the orbital count, or a matrix that is not
+    /// numBasisFunctions squared).
+    /// \pre The matrices outlive the right-hand side.
+    static qcx::Result<ElectricFieldRightHandSide> Create(
+        ResponseLayout layout,
+        std::size_t numBasisFunctions,
+        std::array<std::span<const double>, 3> dipoleMatrices);
+
+    /// Assembles B into \p occupiedVirtualBlock, which arrives zeroed.
+    /// \param request The reference and the field component to assemble for.
+    /// \param occupiedVirtualBlock Output, size Dimension().
+    /// \returns An Error (kInvalidArgument) on a shape mismatch, a request that
+    /// does not describe this right-hand side's layout, a direction that is not
+    /// a Cartesian axis, or MO coefficients of the wrong length.
+    qcx::Result<void> Assemble(const ElectricFieldRequest& request,
+                               std::span<double> occupiedVirtualBlock) const;
+
+    /// \returns The occupied/virtual structure.
+    const ResponseLayout& Layout() const {
+        return _layout;
+    }
+
+    /// \returns The AO count.
+    std::size_t NumBasisFunctions() const {
+        return _numBasisFunctions;
+    }
+
+    /// \returns The flattened dimension, numOccupied * numVirtual.
+    std::size_t Dimension() const {
+        return _layout.Dimension();
+    }
+
+private:
+    ElectricFieldRightHandSide(ResponseLayout layout,
+                               std::size_t numBasisFunctions,
+                               std::array<std::span<const double>, 3> dipoleMatrices);
+
+    ResponseLayout _layout;
+    std::size_t _numBasisFunctions = 0;
+    std::array<std::span<const double>, 3> _dipoleMatrices;
 };
 
 /// \ingroup qcx-response

@@ -453,6 +453,29 @@ struct RunMethodInput {
     /// placeholder until the measured value lands); present must be
     /// >= 0.
     std::optional<int> crossoverBasisFunctionCount;
+    /// The QFMM near-field certified-lane request (the
+    /// QfmmOptions::useCertifiedMixedPrecision passthrough): absent = the
+    /// engine default true, the certified fp32 lane enabled in the nested
+    /// near-field direct builder subject to the preset's own gate (so every
+    /// kTight build runs the near field in fp64); present false = the
+    /// composed QFMM builder is CREATED with the lane off. One option feeds
+    /// both nested builders (`qfmm_hf_build.cpp`), so false also runs the
+    /// composed builder's exchange half in fp64. The run record states the
+    /// resolved near-field policy as `qfmm_model.certified_near_field_lane`
+    /// (schema 47).
+    ///
+    /// It exists because the preset's advertised budget bounds the QFMM
+    /// Coulomb half alone, never the fp32 lane (schema section 3.10): a run
+    /// comparing a composed QFMM energy against a direct reference at the
+    /// same preset must put both sides on the same lane policy, and the
+    /// direct family's policy is the compute-profile verdict (or
+    /// force_certified_lane) while the QFMM near field's request had no
+    /// input at all. Explicit `false` IS a force-off for this one builder -
+    /// unlike force_certified_lane, which has none because it would have to
+    /// mean something on routes its request cannot reach. This key names the
+    /// QFMM family's own near field and is refused by name on every other
+    /// family (the key-split rule).
+    std::optional<bool> qfmmNearFieldCertifiedLane;
     /// The RI tensor rung selection (the driver's disk-rung knob): "disk" permits the
     /// disk-backed rung as the in-memory ladder's last rung (RiTensorMode
     /// above); absent = auto. The FORCE is not a word here - it is the
@@ -747,20 +770,22 @@ struct RunPropertiesInput {
     /// rule). Appended last so the aggregate's earlier fields keep their
     /// positions.
     bool xcGradient = false;
-    /// The `total_gradient` request: true makes an RHF run assemble the total
-    /// analytic nuclear gradient at its converged reference, with the
-    /// electronic terms, the nuclear repulsion and any requested dispersion
+    /// The `total_gradient` request: true makes a closed-shell run assemble
+    /// the total analytic nuclear gradient at its converged reference, with
+    /// the electronic terms, the nuclear repulsion, the exchange-correlation
+    /// skeleton on the density-functional lanes and any requested dispersion
     /// correction kept apart in the record.
     ///
-    /// It is RHF-only, and the key is REFUSED by name on `uhf`, `rks` and
-    /// `uks` rather than ignored (validate_input.cpp). The assembly
-    /// differentiates a converged closed-shell RHF reference: the Kohn-Sham
-    /// lanes' response machinery carries no exchange-fraction or kernel seam,
-    /// so an RHF number under a Kohn-Sham label would be a different energy's
-    /// derivative, and the closed-shell density the reference is validated
-    /// against is the RHF convention. A non-converged SCF is refused at run
-    /// time as well: a last iterate's gradient differentiates an energy the
-    /// density is not the minimum of.
+    /// It is the closed-shell assembly's key: admitted by the validator on
+    /// `rhf` and `rks`, and REFUSED by name on the unrestricted lanes `uhf`
+    /// and `uks` rather than ignored (validate_input.cpp). The assembly
+    /// differentiates a converged closed-shell reference; on `rks` the
+    /// response solves against the Kohn-Sham orbital Hessian, which carries
+    /// the functional's exchange fraction and its exchange-correlation
+    /// kernel, while an unrestricted reference's alpha/beta split is not the
+    /// closed-shell density the reference is validated against. A
+    /// non-converged SCF is refused at run time as well: a last iterate's
+    /// gradient differentiates an energy the density is not the minimum of.
     ///
     /// False (the default) keeps the zero-cost path: no reference is
     /// extracted, no dense tensor is built, and the record carries no

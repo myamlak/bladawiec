@@ -2,6 +2,7 @@
 #include "qcx/error.hpp"
 #include "qcx/integrals/one_electron.hpp"
 #include "qcx/integrals/two_electron.hpp"
+#include "qcx/response/response_gradient.hpp"
 #include "qcx/response/response_operator.hpp"
 #include "qcx/response/response_solver.hpp"
 #include "qcx/scf/rhf.hpp"
@@ -11,6 +12,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +34,9 @@
 namespace {
 
 using qcx::response::DenseResponseOperator;
+using qcx::response::ElectricField;
+using qcx::response::ElectricFieldRequest;
+using qcx::response::ElectricFieldRightHandSide;
 using qcx::response::MoTwoElectronTensor;
 using qcx::response::OrbitalEnergies;
 using qcx::response::OrbitalHessianOperator;
@@ -1066,8 +1071,9 @@ std::vector<double> TransformEriToMo(
 //
 // SCOPE, stated so this is not read as proving more than it does: both sides
 // consume the same dipole matrix, so this pins the solver, the operator, the MO
-// transform and the field-to-right-hand-side relation against the SCF - it does
-// not re-validate the dipole integrals, which carry their own pin in
+// transform and the field-to-right-hand-side relation - as the module's own
+// ElectricFieldRightHandSide assembles it - against the SCF. It does not
+// re-validate the dipole integrals, which carry their own pin in
 // integrals/tests.
 TEST(ResponseSolverTest, H2Sto3gPolarizabilityMatchesTheFiniteFieldSecondDifference) {
     const auto basis = MakeSto3gBasis();
@@ -1103,18 +1109,48 @@ TEST(ResponseSolverTest, H2Sto3gPolarizabilityMatchesTheFiniteFieldSecondDiffere
     const ResponseLayout layout{kNumOccupied, numVirtual};
 
     // X: the occupied-virtual block of the dipole in the MO basis, flattened
-    // occupied-major - the layout the operator acts on.
-    const Eigen::MatrixXd dipoleMo =
-        reference->coefficients.transpose() * fieldMatrix * reference->coefficients;
+    // occupied-major - the layout the operator acts on. It is assembled by the
+    // module's own applied-field right-hand side, and the hand transform below
+    // is the independent check that the object put the same numbers in that
+    // block.
+    const std::array<Eigen::MatrixXd, 3> dipoleAo{
+        fieldMatrix, ToMatrix((*dipole)[1]), ToMatrix((*dipole)[2])};
+    const std::array<std::vector<double>, 3> dipoleFlattened{
+        Flatten(dipoleAo[0]), Flatten(dipoleAo[1]), Flatten(dipoleAo[2])};
+    const auto fieldRightHandSide =
+        ElectricFieldRightHandSide::Create(layout,
+                                           numOrbitals,
+                                           {std::span<const double>(dipoleFlattened[0]),
+                                            std::span<const double>(dipoleFlattened[1]),
+                                            std::span<const double>(dipoleFlattened[2])});
+    ASSERT_TRUE(fieldRightHandSide.has_value()) << fieldRightHandSide.error().message;
+
+    ElectricFieldRequest fieldRequest;
+    fieldRequest.layout = layout;
+    fieldRequest.field = ElectricField{0};
+    fieldRequest.numBasisFunctions = numOrbitals;
+    const std::vector<double> moCoefficients = Flatten(reference->coefficients);
+    fieldRequest.moCoefficients = moCoefficients;
+
     std::vector<double> dipoleOv(layout.Dimension(), 0.0);
+    const auto assembledBlock = fieldRightHandSide->Assemble(fieldRequest, dipoleOv);
+    ASSERT_TRUE(assembledBlock.has_value()) << assembledBlock.error().message;
+
+    const Eigen::MatrixXd dipoleMo =
+        reference->coefficients.transpose() * dipoleAo[0] * reference->coefficients;
+    double handDifference = 0.0;
 
     for (std::size_t i = 0; i < kNumOccupied; ++i)
     {
         for (std::size_t a = 0; a < numVirtual; ++a)
         {
-            dipoleOv[i * numVirtual + a] = Coefficient(dipoleMo, kNumOccupied + a, i);
+            handDifference = std::max(handDifference,
+                                      std::abs(dipoleOv[i * numVirtual + a] -
+                                               Coefficient(dipoleMo, kNumOccupied + a, i)));
         }
     }
+
+    EXPECT_LT(handDifference, 1e-14) << "the right-hand side and the hand MO transform disagree";
 
     // The equation the field's first-order response satisfies is A x = -X, with
     // A the orbital Hessian this module applies.

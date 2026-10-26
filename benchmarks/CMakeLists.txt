@@ -337,6 +337,26 @@ target_precompile_headers(qcx-bench-qfmm-ladder-sweep PRIVATE
     <Eigen/Dense>)
 qcx_apply_blas_runtime(qcx-bench-qfmm-ladder-sweep)
 
+# The fixed-density Coulomb-half error of the composed QFMM path at a
+# converged SCF density (the C24 bound lane's M2 instrument): reads the
+# driver's [scf] density_dump side channel, then measures
+# 0.5 * sum_ij D_ij (F_Q - F_D)_ij with the sweep's builders and metric.
+# Local-only, plain main().
+add_executable(qcx-bench-qfmm-fixed-density-error qfmm_fixed_density_error.cpp)
+target_include_directories(qcx-bench-qfmm-fixed-density-error PRIVATE
+    ${CMAKE_SOURCE_DIR}/integrals/src
+    ${CMAKE_SOURCE_DIR}/linalg/include
+    ${CMAKE_SOURCE_DIR}/tests/fixtures)
+target_compile_features(qcx-bench-qfmm-fixed-density-error PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-qfmm-fixed-density-error PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-qfmm-fixed-density-error PRIVATE qcx-integrals qcx-test-fixtures)
+target_precompile_headers(qcx-bench-qfmm-fixed-density-error PRIVATE
+    <qcx/integrals/qfmm_fock_build.hpp>
+    <Eigen/Dense>)
+qcx_apply_blas_runtime(qcx-bench-qfmm-fixed-density-error)
+
 # The Fock-parallel acceptance benchmark:
 # wall-time of the direct Fock build on the certified mixed-precision lane
 # (kLoose), with an exact %.17g Fock-matrix dump for the bit-identity

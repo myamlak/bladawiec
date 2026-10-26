@@ -83,6 +83,14 @@ enum class QfmmSeparationMode {
 /// the budget and what the far field's own a-priori bound says about the
 /// interactions it carried. `QfmmHfFockBuilder::ModelRecord()` forwards them
 /// unchanged.
+///
+/// The near-field lane member (`certifiedNearFieldLane`, schema 47) reaches the
+/// same block as `certified_near_field_lane`: which fp32 policy the near-field
+/// direct builder was CREATED under, so a reader can tell a QFMM run whose near
+/// field ran with the certified mixed-precision lane enabled from one that ran
+/// it off - the two resolve different arithmetic over the same pairs, and
+/// before this member the record named only the near field's extent and the far
+/// field's model, never the lane that served the pairs in between.
 /// \ingroup qcx-integrals
 struct QfmmModelRecord {
     QfmmExtentMode extentModel = QfmmExtentMode::kProductBall; ///< The geometry model used.
@@ -115,6 +123,24 @@ struct QfmmModelRecord {
     /// far pairs). Divide it by perInteractionBudget for how far outside the
     /// budget the worst interaction sits.
     double worstTruncationBound = 0.0;
+
+    /// Whether the nested near-field direct builder was CREATED with the
+    /// certified mixed-precision (fp32) lane enabled (schema 47). It is the
+    /// lane POLICY of the builder that served the near-field pairs, resolved at
+    /// the one site that constructs it: QfmmOptions::useCertifiedMixedPrecision
+    /// (default true) AND the preset gate MixedPrecisionThreshold(accuracy) > 0
+    /// - the nested builder's own two conditions, so every kTight build reads
+    /// false (that preset's strict pins are fp64-only) and so does a build whose
+    /// caller switched the lane off. The QFMM near field passes no precision
+    /// ladder into the nested builder, so the ladder cannot engage it and these
+    /// two conditions are complete.
+    ///
+    /// It is not a per-quartet delivery tally: the nested builder still routes
+    /// each quartet by its own density-weighted bound, so a `true` here means
+    /// the lane was ENABLED for the near field, not that every pair took it.
+    /// Nor is it the far field's story - the multipole half is fp64 by
+    /// construction.
+    bool certifiedNearFieldLane = false;
 };
 
 /// QFMM build settings (the near-field direct-builder pass-throughs the

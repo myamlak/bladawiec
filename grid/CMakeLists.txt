@@ -44,6 +44,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/ao_evaluator_test.cpp
         tests/xc_assembly_test.cpp
         tests/xc_gradient_test.cpp
+        tests/xc_gradient_hessian_test.cpp
         tests/xc_kernel_action_test.cpp
         tests/xc_kernel_gradient_test.cpp
         tests/tau_reference_test.cpp

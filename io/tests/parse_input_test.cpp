@@ -999,14 +999,15 @@ TEST(RunInputParseTest, RejectsTheRemainingMalformedInputs) {
 }
 
 TEST(RunInputParseTest, ParsesTheQfmmSchemaKnobs) {
-    // The four optional QFMM knobs land
+    // The five optional QFMM knobs land
     // in RunMethodInput; the engine-default spellings (-1, 0) parse like
     // any explicit value and resolve in the driver/engine, not here.
     const auto knobbed = ParseRunInput(
         "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
         "[method]\ntype = \"rhf\"\nfock_builder = \"qfmm\"\naccuracy = \"kNormal\"\n"
         "theta = 0.45\nl_mult = 3\nmax_leaf_size = 16\n"
-        "crossover_basis_function_count = 600\n");
+        "crossover_basis_function_count = 600\n"
+        "qfmm_near_field_certified_lane = false\n");
     ASSERT_TRUE(knobbed.has_value()) << knobbed.error().message;
     ASSERT_TRUE(knobbed->method.theta.has_value());
     EXPECT_EQ(*knobbed->method.theta, 0.45);
@@ -1016,15 +1017,18 @@ TEST(RunInputParseTest, ParsesTheQfmmSchemaKnobs) {
     EXPECT_EQ(*knobbed->method.maxLeafSize, 16u);
     ASSERT_TRUE(knobbed->method.crossoverBasisFunctionCount.has_value());
     EXPECT_EQ(*knobbed->method.crossoverBasisFunctionCount, 600);
+    ASSERT_TRUE(knobbed->method.qfmmNearFieldCertifiedLane.has_value());
+    EXPECT_FALSE(*knobbed->method.qfmmNearFieldCertifiedLane);
 
     // The contract edges that stay valid: theta 0 (= the preset's theta,
     // the engine's == 0 branch), the -1 l_mult sentinel (the preset's
-    // order), leaf size 1 and crossover 0 (>= 0).
+    // order), leaf size 1, crossover 0 (>= 0) and an explicit lane request.
     const auto edges = ParseRunInput(
         "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
         "[method]\ntype = \"rhf\"\nfock_builder = \"qfmm\"\naccuracy = \"kLoose\"\n"
         "theta = 0.0\nl_mult = -1\nmax_leaf_size = 1\n"
-        "crossover_basis_function_count = 0\n");
+        "crossover_basis_function_count = 0\n"
+        "qfmm_near_field_certified_lane = true\n");
     ASSERT_TRUE(edges.has_value()) << edges.error().message;
     ASSERT_TRUE(edges->method.theta.has_value());
     EXPECT_EQ(*edges->method.theta, 0.0);
@@ -1034,6 +1038,8 @@ TEST(RunInputParseTest, ParsesTheQfmmSchemaKnobs) {
     EXPECT_EQ(*edges->method.maxLeafSize, 1u);
     ASSERT_TRUE(edges->method.crossoverBasisFunctionCount.has_value());
     EXPECT_EQ(*edges->method.crossoverBasisFunctionCount, 0);
+    ASSERT_TRUE(edges->method.qfmmNearFieldCertifiedLane.has_value());
+    EXPECT_TRUE(*edges->method.qfmmNearFieldCertifiedLane);
 
     // Absent knobs stay unset (nullopt = the engine default at wiring) -
     // on a qfmm run and on any other run alike (the io layer stores what
@@ -1046,6 +1052,7 @@ TEST(RunInputParseTest, ParsesTheQfmmSchemaKnobs) {
     EXPECT_FALSE(plain->method.lMult.has_value());
     EXPECT_FALSE(plain->method.maxLeafSize.has_value());
     EXPECT_FALSE(plain->method.crossoverBasisFunctionCount.has_value());
+    EXPECT_FALSE(plain->method.qfmmNearFieldCertifiedLane.has_value());
 }
 
 TEST(RunInputParseTest, RejectsOutOfContractQfmmKnobValues) {
@@ -1092,6 +1099,12 @@ TEST(RunInputParseTest, RejectsOutOfContractQfmmKnobValues) {
          "[method]\ntype = \"rhf\"\nfock_builder = \"qfmm\"\naccuracy = \"kNormal\"\n"
          "crossover_basis_function_count = -1\n",
          "method.crossover_basis_function_count"},
+        // The lane key accepts a TOML boolean only: the string spelling is a
+        // type error naming the key, not a truthy parse.
+        {"[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
+         "[method]\ntype = \"rhf\"\nfock_builder = \"qfmm\"\naccuracy = \"kNormal\"\n"
+         "qfmm_near_field_certified_lane = \"false\"\n",
+         "method.qfmm_near_field_certified_lane"},
         // The knob types are strict like every schema scalar.
         {"[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
          "[method]\ntype = \"rhf\"\nfock_builder = \"qfmm\"\naccuracy = \"kNormal\"\n"

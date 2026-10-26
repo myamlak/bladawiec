@@ -567,6 +567,17 @@ qcx::Result<QfmmJBuilder> QfmmJBuilder::Create(
         separation.test == internal::QfmmSeparationTest::kSurfaceBall ? separation.k : 0.0;
     state->_modelRecord.theta =
         separation.test == internal::QfmmSeparationTest::kWidthTheta ? resolvedTheta : 0.0;
+    // The lane the near-field builder above was CREATED under (schema 47).
+    // The nested builder's gate is ResolveCertifiedLane(nearFieldOptions) &&
+    // MixedPrecisionThreshold(accuracy) > 0 && !ladderEngaged: this options
+    // block writes the request EXPLICITLY, so the device-profile default is
+    // out of the picture, and the QFMM near field passes no ladder inputs, so
+    // the ladder never engages it. The two remaining conditions are therefore
+    // the whole gate, read from the same options the near-field builder was
+    // handed - the disclosure is the builder's creation policy, not a
+    // per-quartet delivery tally.
+    state->_modelRecord.certifiedNearFieldLane =
+        options.useCertifiedMixedPrecision && MixedPrecisionThreshold(options.accuracy) > 0.0;
 
     // The budget record: what the far field was held to, what it cost in
     // pairs, and whether any interaction ran at the cap with the budget

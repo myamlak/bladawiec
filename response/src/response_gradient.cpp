@@ -1,6 +1,7 @@
 #include "qcx/response/response_gradient.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <string>
@@ -39,6 +40,15 @@ std::uint64_t FoldDigest(std::uint64_t digest, std::span<const double> values) {
     return digest;
 }
 
+/// Names a Cartesian axis, with "?" for an index no axis answers to.
+/// \param direction The axis index.
+/// \returns The axis name.
+const char* AxisName(std::size_t direction) {
+    static const char* const kAxisNames[3] = {"x", "y", "z"};
+
+    return direction < 3 ? kAxisNames[direction] : "?";
+}
+
 /// Validates the occupied/virtual structure, as the operator's own factory does.
 /// \param layout The layout to check.
 /// \returns An Error (kInvalidArgument) when a block is empty.
@@ -57,10 +67,11 @@ qcx::Result<void> ValidateLayout(const ResponseLayout& layout) {
 } // namespace
 
 std::string ToString(const NuclearDisplacement& displacement) {
-    static const char* const kAxisNames[3] = {"x", "y", "z"};
-    const std::string axis = displacement.direction < 3 ? kAxisNames[displacement.direction] : "?";
+    return "atom" + std::to_string(displacement.atom) + "-" + AxisName(displacement.direction);
+}
 
-    return "atom" + std::to_string(displacement.atom) + "-" + axis;
+std::string ToString(const ElectricField& field) {
+    return "field-" + std::string(AxisName(field.direction));
 }
 
 qcx::Result<ResponseReferenceIdentity> MakeResponseReferenceIdentity(
@@ -173,6 +184,129 @@ qcx::Result<void> NuclearDisplacementRightHandSide::Assemble(
         if (!status.has_value())
         {
             return std::unexpected(status.error());
+        }
+    }
+
+    return {};
+}
+
+ElectricFieldRightHandSide::ElectricFieldRightHandSide(
+    ResponseLayout layout,
+    std::size_t numBasisFunctions,
+    std::array<std::span<const double>, 3> dipoleMatrices) :
+    _layout(layout), _numBasisFunctions(numBasisFunctions), _dipoleMatrices(dipoleMatrices) {}
+
+qcx::Result<ElectricFieldRightHandSide> ElectricFieldRightHandSide::Create(
+    ResponseLayout layout,
+    std::size_t numBasisFunctions,
+    std::array<std::span<const double>, 3> dipoleMatrices) {
+    auto layoutStatus = ValidateLayout(layout);
+
+    if (!layoutStatus.has_value())
+    {
+        return std::unexpected(layoutStatus.error());
+    }
+
+    const std::size_t numOrbitals = layout.numOccupied + layout.numVirtual;
+
+    if (numBasisFunctions < numOrbitals)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       "the basis-function count cannot be below the orbital count"});
+    }
+
+    for (std::size_t direction = 0; direction < dipoleMatrices.size(); ++direction)
+    {
+        if (dipoleMatrices[direction].size() != numBasisFunctions * numBasisFunctions)
+        {
+            return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                              "the matrix for direction " +
+                                                  std::to_string(direction) +
+                                                  " must be numBasisFunctions squared"});
+        }
+    }
+
+    return ElectricFieldRightHandSide(layout, numBasisFunctions, dipoleMatrices);
+}
+
+qcx::Result<void> ElectricFieldRightHandSide::Assemble(
+    const ElectricFieldRequest& request, std::span<double> occupiedVirtualBlock) const {
+    if (occupiedVirtualBlock.size() != Dimension())
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "the occupied-virtual block must be sized numOccupied * "
+                                          "numVirtual"});
+    }
+
+    if (request.layout.numOccupied != _layout.numOccupied ||
+        request.layout.numVirtual != _layout.numVirtual ||
+        request.numBasisFunctions != _numBasisFunctions)
+    {
+        return std::unexpected(qcx::Error{
+            qcx::ErrorCode::kInvalidArgument,
+            "the request does not describe the layout this right-hand side was built for"});
+    }
+
+    if (request.field.direction >= _dipoleMatrices.size())
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       "a uniform field's direction is a Cartesian axis: 0 = x, 1 = y, 2 = z"});
+    }
+
+    const std::size_t numOccupied = _layout.numOccupied;
+    const std::size_t numVirtual = _layout.numVirtual;
+    const std::size_t numOrbitals = numOccupied + numVirtual;
+    const std::size_t numBasisFunctions = _numBasisFunctions;
+
+    if (request.moCoefficients.size() != numBasisFunctions * numOrbitals)
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "the MO coefficients must be numBasisFunctions x "
+                                          "numOrbitals"});
+    }
+
+    std::fill(occupiedVirtualBlock.begin(), occupiedVirtualBlock.end(), 0.0);
+
+    const std::span<const double> dipole = _dipoleMatrices[request.field.direction];
+
+    // The AO matrix is transformed once over its occupied columns and once over
+    // the virtual rows, rather than forming every occupied-virtual element as
+    // its own four-index sum: that keeps the assembly cubic in the basis size
+    // instead of quartic.
+    std::vector<double> occupiedTransform(numBasisFunctions * numOccupied, 0.0);
+
+    for (std::size_t mu = 0; mu < numBasisFunctions; ++mu)
+    {
+        for (std::size_t i = 0; i < numOccupied; ++i)
+        {
+            double value = 0.0;
+
+            for (std::size_t nu = 0; nu < numBasisFunctions; ++nu)
+            {
+                value += dipole[mu * numBasisFunctions + nu] *
+                         request.moCoefficients[nu * numOrbitals + i];
+            }
+
+            occupiedTransform[mu * numOccupied + i] = value;
+        }
+    }
+
+    for (std::size_t i = 0; i < numOccupied; ++i)
+    {
+        for (std::size_t a = 0; a < numVirtual; ++a)
+        {
+            const std::size_t orbital = numOccupied + a;
+            double value = 0.0;
+
+            for (std::size_t mu = 0; mu < numBasisFunctions; ++mu)
+            {
+                value += request.moCoefficients[mu * numOrbitals + orbital] *
+                         occupiedTransform[mu * numOccupied + i];
+            }
+
+            occupiedVirtualBlock[i * numVirtual + a] = value;
         }
     }
 

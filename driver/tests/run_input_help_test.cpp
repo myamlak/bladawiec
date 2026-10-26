@@ -660,6 +660,14 @@ const DefaultClaim kDefaultClaims[] = {
          return documents.written.method.forceCertifiedLane ==
                 documents.omitted.method.forceCertifiedLane;
      }},
+    // The QFMM near-field lane's shown default is the engine's own (true);
+    // the schema member is an absent optional, so the claim compares the
+    // resolved request, exactly as the key's engine default reads.
+    {"method.qfmm_near_field_certified_lane",
+     [](const DefaultPair& documents) {
+         return documents.written.method.qfmmNearFieldCertifiedLane.value_or(true) ==
+                documents.omitted.method.qfmmNearFieldCertifiedLane.value_or(true);
+     }},
     // The passthrough keys whose engine default is itself writable are
     // compared against the engine's own option struct further down; the two
     // here are the optional-around-the-request kind, where an absent key and

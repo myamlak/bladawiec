@@ -1,8 +1,8 @@
-// The total analytic gradient (schema 45) started from a user's INPUT FILE:
+// The total analytic gradient (schema 46) started from a user's INPUT FILE:
 // one .toml on disk, the way `qcx run <file.toml>` starts a run, and the block
 // read back both from the structured record and from its JSON text.
 //
-// The acceptance is five claims. First, an rhf run that asks for the gradient
+// The acceptance is six claims. First, an rhf run that asks for the gradient
 // records every term of the decomposition, and the terms sum to the total -
 // the block cannot disagree with itself. Second, the block is ABSENT when the
 // key was not written (the null-honesty rule: absent, never a zero-filled
@@ -15,19 +15,28 @@
 // energy alone still runs). Fifth, the run's [method] accuracy reaches the
 // assembly: the two-electron derivative walk's screening counts in the block
 // move with the preset, so a kLoose run's block carries the kLoose-derived
-// figure rather than the kNormal default.
+// figure rather than the kNormal default. Sixth, a restricted Kohn-Sham run
+// records the exchange-correlation term beside the Hartree-Fock ones, its
+// response names the xc contribution, and its analytic gradient agrees with a
+// central difference of the run's own total energy - the gradient
+// differentiates the energy the run reports.
 
 #include "qcx/driver/run_driver.hpp"
 #include "qcx/io/parse_input.hpp"
 #include "qcx/io/result_json.hpp"
 #include "qcx/io/run_input.hpp"
 #include "qcx/io/validate_input.hpp"
+#include "qcx/molecule/molecule.hpp"
 
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iomanip>
+#include <iostream>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -128,6 +137,39 @@ orbital = "sto-3g"
 )" + std::string(trailing);
 }
 
+// The same water in CANONICAL molecule order, at a caller-chosen geometry.
+// Molecule::Create renumbers atoms by (Z, x, y, z), so the record's gradient
+// comes back hydrogens first (y decides between them) and oxygen last - not
+// necessarily in the order `atoms` was written. A finite-difference row that
+// displaces a written coordinate and compares it with `gradient[3 * atom +
+// direction]` needs the two orders to coincide, and this fixture is the file
+// order that is already canonical. Symbols follow the order: H, H, O.
+using WaterAngstromPositions = std::array<std::array<double, 3>, 3>;
+
+std::string CanonicalWaterToml(const WaterAngstromPositions& positions,
+                               std::string_view methodBody,
+                               std::string_view trailing = {}) {
+    static constexpr std::array<std::string_view, 3> kSymbols{"H", "H", "O"};
+
+    std::ostringstream text;
+    text << "[molecule]\ncharge = 0\nmultiplicity = 1\natoms = [";
+
+    for (std::size_t atom = 0; atom < kSymbols.size(); ++atom)
+    {
+        // Full round-trip precision, so the coordinates on disk are the ones
+        // the caller displaced.
+        text << (atom == 0 ? "[\"" : ", [\"") << kSymbols[atom] << "\", " << std::setprecision(17)
+             << positions[atom][0] << ", " << positions[atom][1] << ", " << positions[atom][2]
+             << "]";
+    }
+
+    text << "]\n\n[basis]\norbital = \"sto-3g\"\n\n[method]\n"
+         << methodBody << "accuracy = \"kNormal\"\n"
+         << trailing;
+
+    return text.str();
+}
+
 // Stretched H2 at 5.75 Angstrom: the one off-diagonal canonical quartet's
 // density-weighted Schwarz bound sits between the kLoose and kNormal screen
 // thresholds, so the two presets' derivative walks count it differently (the
@@ -157,6 +199,29 @@ fock_builder = "direct"
 )";
 
 constexpr std::string_view kRequest = "[properties]\ntotal_gradient = true\n";
+
+// The Kohn-Sham row's method: PBE on the direct builder. The builder is
+// stated rather than left to the auto ladder for the reason the finite-
+// difference row gives - a pure functional's ladder resolves to the RI-J
+// approximation, whose fitted Coulomb energy is not the operator the gradient
+// assembly differentiates.
+constexpr std::string_view kKohnShamBody = R"(type = "rks"
+functional = "pbe"
+fock_builder = "direct"
+)";
+
+// The SCF the finite-difference row needs: the difference divides an SCF
+// energy error by 2h, so the operating 1e-8 energy gate would put a ~2.6e-6
+// floor under the comparison (h = 1e-3 Angstrom on the first side). At 1e-10
+// the floor is 2.6e-8, orders below the bar. The pair is the kTight rung
+// (1e-10/1e-8), not a private gate.
+constexpr std::string_view kTightScf =
+    "[scf]\nenergy_tolerance = 1e-10\ndensity_tolerance = 1e-8\n";
+
+// The Kohn-Sham row's reference geometry: WaterToml's water, written in the
+// canonical atom order (H at y = -0.757, H at y = +0.757, then O).
+constexpr WaterAngstromPositions kCanonicalWaterAngstrom{
+    {{0.0, -0.757, -0.469}, {0.0, 0.757, -0.469}, {0.0, 0.0, 0.117}}};
 
 } // namespace
 
@@ -462,9 +527,12 @@ TEST(TotalGradientTest, AD4GradientIsRefusedWhileTheEnergyAloneStillRuns) {
     EXPECT_FALSE(energy->result.properties->totalGradient.has_value());
 }
 
-TEST(TotalGradientTest, TheKeyIsRefusedOnEveryMethodButRhf) {
+TEST(TotalGradientTest, TheKeyIsRefusedOnTheUnrestrictedMethods) {
     // The validator's rule, through the input file the way a user writes it:
-    // the closed-shell assembly's key names the rhf lane only.
+    // the closed-shell assembly's key is legal on the two closed-shell lanes
+    // (rhf, and rks through the density functional's kernel term) and refused
+    // by name on the unrestricted ones, whose references the assembly does
+    // not describe. The rks arm that runs is the Kohn-Sham row below.
     const auto uhfPath = TempInputPath("uhf");
     auto uhf = RunFile(uhfPath,
                        HydrogenToml(R"(type = "uhf"
@@ -476,17 +544,6 @@ fock_builder = "direct"
     EXPECT_NE(uhf.error().message.find("properties.total_gradient: uhf"), std::string::npos)
         << uhf.error().message;
 
-    const auto rksPath = TempInputPath("rks");
-    auto rks = RunFile(rksPath,
-                       HydrogenToml(R"(type = "rks"
-functional = "pbe"
-)",
-                                    kRequest));
-    ASSERT_FALSE(rks.has_value());
-    EXPECT_EQ(rks.error().code, qcx::ErrorCode::kInvalidArgument);
-    EXPECT_NE(rks.error().message.find("properties.total_gradient: rks"), std::string::npos)
-        << rks.error().message;
-
     const auto uksPath = TempInputPath("uks");
     auto uks = RunFile(uksPath,
                        HydrogenToml(R"(type = "uks"
@@ -497,4 +554,165 @@ functional = "pbe"
     EXPECT_EQ(uks.error().code, qcx::ErrorCode::kInvalidArgument);
     EXPECT_NE(uks.error().message.find("properties.total_gradient: uks"), std::string::npos)
         << uks.error().message;
+}
+
+TEST(TotalGradientTest, TheKohnShamGradientMatchesTheEnergyItDifferentiates) {
+    // The restricted Kohn-Sham lane through a file: the record carries the
+    // exchange-correlation term beside the Hartree-Fock ones, the response's
+    // right-hand side names the xc contribution, and the analytic gradient
+    // agrees with a central difference of the run's own total energy. The
+    // difference is the claim no term list can make on its own - one missing
+    // or mis-scaled term leaves every individual number plausible and only
+    // the sum wrong.
+    //
+    // Two settings are load-bearing. `fock_builder = "direct"`: a pure
+    // functional's auto ladder resolves to the RI-J builder, and the fitted
+    // Coulomb energy is not the exact operator the assembly differentiates -
+    // the energy gate refuses such a reference (measured 6.9e-5 on this
+    // system, the same refusal the rhf lane has always produced). The
+    // tightened [scf] tolerances: see kTightScf's comment.
+    const auto gradientPath = TempInputPath("rks-gradient");
+    auto gradientRun = RunFile(gradientPath,
+                               CanonicalWaterToml(kCanonicalWaterAngstrom,
+                                                  kKohnShamBody,
+                                                  std::string(kRequest) + std::string(kTightScf)));
+    ASSERT_TRUE(gradientRun.has_value()) << gradientRun.error().message;
+
+    const qcx::io::RunResult& result = gradientRun->result;
+    ASSERT_TRUE(result.properties.has_value());
+    ASSERT_TRUE(result.properties->totalGradient.has_value());
+    const qcx::io::RunTotalGradient& total = *result.properties->totalGradient;
+    const std::size_t expected = std::size_t{3} * 3;
+
+    ASSERT_EQ(total.gradient.size(), expected);
+    ASSERT_TRUE(total.terms.xc.has_value()) << "the rks record carries no xc term";
+    EXPECT_EQ(total.terms.xc->size(), expected);
+
+    for (const std::vector<double>* term : {&total.terms.oneElectron,
+                                            &total.terms.nuclearRepulsion,
+                                            &total.terms.coulomb,
+                                            &total.terms.exchange,
+                                            &*total.terms.xc,
+                                            &total.terms.response})
+    {
+        EXPECT_EQ(term->size(), expected);
+    }
+
+    EXPECT_FALSE(total.terms.dispersion.has_value());
+    EXPECT_FALSE(total.energies.dispersion.has_value());
+
+    // The total is the terms summed in the documented order, the xc term
+    // between exchange and response.
+    for (std::size_t i = 0; i < expected; ++i)
+    {
+        EXPECT_DOUBLE_EQ(total.gradient[i],
+                         total.terms.oneElectron[i] + total.terms.nuclearRepulsion[i] +
+                             total.terms.coulomb[i] + total.terms.exchange[i] +
+                             (*total.terms.xc)[i] + total.terms.response[i]);
+    }
+
+    // The xc skeleton is a real contribution, not a zero-filled vector. PBE
+    // carries no exact exchange (c_HF = 0), so the exchange term is present
+    // and exactly zero - present because the term list is the assembly's
+    // shape, zero because the functional scales the exchange by nothing.
+    double xcMagnitude = 0.0;
+
+    for (const double value : *total.terms.xc)
+    {
+        xcMagnitude += std::abs(value);
+    }
+
+    EXPECT_GT(xcMagnitude, 1e-3);
+
+    for (const double value : total.terms.exchange)
+    {
+        EXPECT_DOUBLE_EQ(value, 0.0);
+    }
+
+    // The block's energies are the record's own: the reconstruction adds E_xc
+    // to the derivative walks' terms and reproduces the reference energy at
+    // the reference geometry.
+    EXPECT_NEAR(total.energies.electronic, result.electronicEnergyHartree, 1e-12);
+    EXPECT_NEAR(total.energies.total, result.totalEnergyHartree, 1e-12);
+    EXPECT_NEAR(
+        total.energies.total, total.energies.electronic + total.energies.nuclearRepulsion, 1e-12);
+    EXPECT_LE(total.stationarityResidual, 1e-6);
+    EXPECT_LE(total.energyResidualHartree, 1e-8);
+
+    EXPECT_EQ(total.sizes.atomCount, 3u);
+    EXPECT_EQ(total.sizes.numBasisFunctions, 7u);
+    EXPECT_EQ(total.sizes.numOccupied, 5u);
+    EXPECT_EQ(total.sizes.numVirtual, 2u);
+    EXPECT_EQ(total.response.solves, expected);
+    EXPECT_GT(total.response.iterations, 0u);
+
+    // The honesty key: the response read the xc contribution as well.
+    EXPECT_EQ(total.rightHandSideTerms,
+              (std::vector<std::string>{"one-electron", "coulomb", "exchange", "xc"}));
+
+    EXPECT_GT(total.counts.oneElectron.overlapTuples, 0u);
+    EXPECT_GT(total.counts.twoElectron.quartets, 0u);
+
+    // The JSON carries the same block, the xc term included.
+    const nlohmann::json document = nlohmann::json::parse(gradientRun->json);
+    const nlohmann::json& block = document.at("total_gradient");
+
+    EXPECT_TRUE(block.at("terms").contains("xc"));
+    EXPECT_EQ(block.at("terms").at("xc").size(), expected);
+    EXPECT_FALSE(block.at("terms").contains("dispersion"));
+    EXPECT_EQ(block.at("right_hand_side_terms").get<std::vector<std::string>>(),
+              total.rightHandSideTerms);
+    EXPECT_DOUBLE_EQ(block.at("energies").at("total_hartree").get<double>(), total.energies.total);
+    EXPECT_DOUBLE_EQ(block.at("stationarity_residual").get<double>(), total.stationarityResidual);
+
+    // The finite difference. First the base geometry's energy alone, which
+    // must be the gradient's own: the two runs then read one potential-energy
+    // surface, so the comparison below differentiates the energy the record
+    // reports.
+    const auto basePath = TempInputPath("rks-energy-base");
+    auto base =
+        RunFile(basePath, CanonicalWaterToml(kCanonicalWaterAngstrom, kKohnShamBody, kTightScf));
+    ASSERT_TRUE(base.has_value()) << base.error().message;
+    EXPECT_NEAR(base->result.totalEnergyHartree, total.energies.total, 1e-12);
+
+    // One step, and a bar four times the measured truncation error: the
+    // observed max |analytic - central difference| is 5.2e-7 Hartree/Bohr at
+    // 1e-3 Angstrom, and 2.1e-6 at 2e-3 - the h^2 scaling of a central
+    // difference, not SCF noise (whose floor at the tightened tolerances is
+    // ~2.6e-8).
+    constexpr double kStep = 1e-3;
+    constexpr double kAgreement = 2e-6;
+    double worst = 0.0;
+
+    for (std::size_t atom = 0; atom < kCanonicalWaterAngstrom.size(); ++atom)
+    {
+        for (std::size_t direction = 0; direction < 3; ++direction)
+        {
+            double energies[2] = {};
+
+            for (std::size_t side = 0; side < 2; ++side)
+            {
+                WaterAngstromPositions displaced = kCanonicalWaterAngstrom;
+                displaced[atom][direction] += side == 0 ? kStep : -kStep;
+
+                const auto path = TempInputPath("rks-energy-displaced");
+                auto energy =
+                    RunFile(path, CanonicalWaterToml(displaced, kKohnShamBody, kTightScf));
+                ASSERT_TRUE(energy.has_value()) << energy.error().message;
+                energies[side] = energy->result.totalEnergyHartree;
+            }
+
+            const double difference =
+                (energies[0] - energies[1]) / (2.0 * kStep * qcx::molecule::kAngstromToBohr);
+            const std::size_t entry = 3 * atom + direction;
+            worst = std::max(worst, std::abs(total.gradient[entry] - difference));
+
+            EXPECT_NEAR(total.gradient[entry], difference, kAgreement)
+                << "atom " << atom << ", direction " << direction;
+        }
+    }
+
+    // The measured agreement is the number whoever reports this run quotes.
+    std::cout << "[kohn-sham gradient] h = " << kStep
+              << " Angstrom worst |analytic - finite| = " << worst << " Hartree/Bohr\n";
 }

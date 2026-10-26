@@ -21,12 +21,15 @@
 #include "qcx/integrals/eri_dense.hpp"
 #include "qcx/integrals/fock_build.hpp"
 #include "qcx/integrals/one_electron.hpp"
+#include "qcx/response/response_gradient.hpp"
 #include "qcx/response/response_kernel.hpp"
+#include "qcx/response/response_solver.hpp"
 #include "qcx/scf/rhf.hpp"
 #include "tensor_conversions.hpp"
 
 #include <Eigen/Dense>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -60,6 +63,25 @@ std::string Scientific(double value) {
     std::snprintf(buffer, sizeof(buffer), "%.6e", value);
 
     return buffer;
+}
+
+/// Row-major flattening of a dense matrix, the layout the response module's
+/// requests and right-hand sides are specified in.
+std::vector<double> RowMajor(const Eigen::MatrixXd& matrix) {
+    const std::size_t rows = static_cast<std::size_t>(matrix.rows());
+    const std::size_t columns = static_cast<std::size_t>(matrix.cols());
+    std::vector<double> flat(rows * columns, 0.0);
+
+    for (std::size_t row = 0; row < rows; ++row)
+    {
+        for (std::size_t column = 0; column < columns; ++column)
+        {
+            flat[row * columns + column] =
+                matrix(static_cast<Eigen::Index>(row), static_cast<Eigen::Index>(column));
+        }
+    }
+
+    return flat;
 }
 
 /// The molecule, basis and one-electron ingredients of a reference.
@@ -128,16 +150,29 @@ struct KsReference {
 /// The Kohn-Sham seam: the restricted Fock, the Coulomb matrix and the energy
 /// contribution, composed as the driver composes them. The exact-exchange
 /// fraction is a parameter because a pure functional with a caller-chosen
-/// fraction is how the hybrid acceptance runs at this pin.
-qcx::Result<KsReference> BuildKsReference(bool water,
-                                          std::string_view functionalName,
-                                          double exchangeFraction) {
+/// fraction is how the hybrid acceptance runs at this pin. A core perturbation
+/// rides in the one-electron Hamiltonian, which is how an applied field enters
+/// a finite-field second difference.
+qcx::Result<KsReference> BuildKsReference(
+    bool water,
+    std::string_view functionalName,
+    double exchangeFraction,
+    const Eigen::MatrixXd& corePerturbation = Eigen::MatrixXd()) {
     auto inputs = BuildMoleculeInputs(water);
 
     if (!inputs.has_value())
     {
         return std::unexpected(
             qcx::Error{qcx::ErrorCode::kInternalError, "the fixture could not be built"});
+    }
+
+    // The trace, the builders and the energy must all read ONE core matrix, or
+    // the converged energy would not belong to the Fock matrix it came from.
+    Eigen::MatrixXd core = inputs->core;
+
+    if (corePerturbation.size() != 0)
+    {
+        core += corePerturbation;
     }
 
     const qcx::grid::XcGridSettings settings{kRadialPoints, kAngularPoints};
@@ -153,7 +188,7 @@ qcx::Result<KsReference> BuildKsReference(bool water,
 
     const bool hasExchange = exchangeFraction > 0.0;
 
-    auto coreTensor = qcx::testing::ToTensor(inputs->core);
+    auto coreTensor = qcx::testing::ToTensor(core);
 
     if (!coreTensor.has_value())
     {
@@ -253,7 +288,7 @@ qcx::Result<KsReference> BuildKsReference(bool water,
     };
 
     qcx::scf::FockBuilderFn fock =
-        [ensure, cache, hasExchange, exchangeFraction, core = inputs->core](
+        [ensure, cache, hasExchange, exchangeFraction, core](
             const Eigen::MatrixXd& density) -> qcx::Result<Eigen::MatrixXd> {
         const auto filled = ensure(density);
 
@@ -274,8 +309,7 @@ qcx::Result<KsReference> BuildKsReference(bool water,
     };
 
     qcx::scf::CoulombFn coulomb =
-        [ensure, cache, core = inputs->core](
-            const Eigen::MatrixXd& density) -> qcx::Result<Eigen::MatrixXd> {
+        [ensure, cache, core](const Eigen::MatrixXd& density) -> qcx::Result<Eigen::MatrixXd> {
         const auto filled = ensure(density);
 
         if (!filled.has_value())
@@ -287,7 +321,7 @@ qcx::Result<KsReference> BuildKsReference(bool water,
     };
 
     qcx::scf::EnergyContributionFn contribution =
-        [ensure, cache, hasExchange, exchangeFraction, core = inputs->core](
+        [ensure, cache, hasExchange, exchangeFraction, core](
             const Eigen::MatrixXd& density) -> qcx::Result<double> {
         const auto filled = ensure(density);
 
@@ -307,9 +341,18 @@ qcx::Result<KsReference> BuildKsReference(bool water,
         return value;
     };
 
+    // The symmetry-blocked diagonalization the basis pointer engages assumes
+    // the Fock commutes with the detected point group. An applied field breaks
+    // that symmetry - for H2 its coupling is entirely between irreps - and the
+    // blocked solve keeps only the diagonal irrep blocks, which would project
+    // the perturbation out of the density. The restricted path's guard now
+    // measures each Fock and refuses the blocks itself, so the perturbed run
+    // keeps the symmetry pointer and takes the plain solve by decision, not by
+    // a caller-side workaround; the unperturbed reference keeps its symmetry
+    // route.
     auto result = qcx::scf::RunRhfScf(inputs->molecule,
                                       inputs->overlap,
-                                      inputs->core,
+                                      core,
                                       qcx::scf::RhfOptions{},
                                       fock,
                                       coulomb,
@@ -332,7 +375,7 @@ qcx::Result<KsReference> BuildKsReference(bool water,
     const std::size_t numVirtual = numOrbitals - numOccupied;
     const Eigen::MatrixXd& coefficients = result->coefficients;
 
-    const Eigen::MatrixXd coreMo = coefficients.transpose() * inputs->core * coefficients;
+    const Eigen::MatrixXd coreMo = coefficients.transpose() * core * coefficients;
 
     const auto aoEri = qcx::integrals::BuildEriTensorGeneral(inputs->molecule, inputs->basis);
 
@@ -707,6 +750,116 @@ TEST(ResponseKernelTest, TheKernelOperatorMatchesTheNumericalHessianForTauXOnH2)
 
 TEST(ResponseKernelTest, TheKernelOperatorMatchesTheNumericalHessianForSlaterOnH2o) {
     CheckAcceptance(true, "slater", 0.0);
+}
+
+// The CPKS counterpart of the Hartree-Fock polarizability anchor: the applied
+// field's right-hand side, solved against the Kohn-Sham Hessian that carries
+// the exchange-correlation kernel, and the same finite-field second
+// difference. Both sides consume the same dipole matrix, so this pins the
+// right-hand side-to-response relation on the Kohn-Sham path; it does not
+// re-validate the dipole integrals.
+void CheckPolarizability(std::string_view functionalName, double exchangeFraction) {
+    auto fixture = MakeOperatorFixture(false, functionalName, exchangeFraction);
+    ASSERT_TRUE(fixture.has_value()) << functionalName;
+
+    const KsReference& reference = fixture->reference;
+    const std::size_t numOccupied = reference.numOccupied;
+    const std::size_t numVirtual = reference.numVirtual;
+    const std::size_t numBasisFunctions =
+        static_cast<std::size_t>(reference.scf.coefficients.rows());
+    const ResponseLayout layout{numOccupied, numVirtual};
+
+    const auto dipole =
+        qcx::integrals::BuildDipoleMatrix(reference.inputs.molecule, reference.inputs.basis);
+    ASSERT_TRUE(dipole.has_value()) << dipole.error().message;
+
+    const std::array<std::vector<double>, 3> dipoleMatrices{RowMajor(ToMatrix((*dipole)[0])),
+                                                            RowMajor(ToMatrix((*dipole)[1])),
+                                                            RowMajor(ToMatrix((*dipole)[2]))};
+    const auto rightHandSide =
+        ElectricFieldRightHandSide::Create(layout,
+                                           numBasisFunctions,
+                                           {std::span<const double>(dipoleMatrices[0]),
+                                            std::span<const double>(dipoleMatrices[1]),
+                                            std::span<const double>(dipoleMatrices[2])});
+    ASSERT_TRUE(rightHandSide.has_value()) << rightHandSide.error().message;
+
+    const std::vector<double> moCoefficients = RowMajor(reference.scf.coefficients);
+    ElectricFieldRequest request;
+    request.layout = layout;
+    // Component 0 is x: the H2 fixture lies on the x axis, the one direction
+    // with a nonzero response.
+    request.field = ElectricField{0};
+    request.numBasisFunctions = numBasisFunctions;
+    request.moCoefficients = moCoefficients;
+
+    std::vector<double> fieldBlock(layout.Dimension(), 0.0);
+    const auto assembled = rightHandSide->Assemble(request, fieldBlock);
+    ASSERT_TRUE(assembled.has_value()) << assembled.error().message;
+
+    std::vector<double> rhs(fieldBlock.size(), 0.0);
+
+    for (std::size_t k = 0; k < fieldBlock.size(); ++k)
+    {
+        rhs[k] = -fieldBlock[k];
+    }
+
+    ResponseSolver<OrbitalHessianOperator> solver;
+    std::vector<double> solution(layout.Dimension(), 0.0);
+    const auto solved = solver.Solve(fixture->kernelOperator->BaseOperator(), 1, rhs, solution);
+    ASSERT_TRUE(solved.has_value()) << solved.error().message;
+
+    // alpha_xx = -4 X^T x with A x = -X: the closed-shell factor and sign of
+    // the Hartree-Fock anchor hold unchanged, because the kernel sits wholly
+    // in A.
+    double contraction = 0.0;
+
+    for (std::size_t k = 0; k < fieldBlock.size(); ++k)
+    {
+        contraction += fieldBlock[k] * solution[k];
+    }
+
+    const double analytic = -4.0 * contraction;
+
+    const Eigen::MatrixXd fieldMatrix = ToMatrix((*dipole)[0]);
+    const auto secondDifference = [&](double field) {
+        const auto plus =
+            BuildKsReference(false, functionalName, exchangeFraction, field * fieldMatrix);
+        const auto minus =
+            BuildKsReference(false, functionalName, exchangeFraction, -field * fieldMatrix);
+        EXPECT_TRUE(plus.has_value()) << plus.error().message;
+        EXPECT_TRUE(minus.has_value()) << minus.error().message;
+
+        const double plusEnergy = plus->scf.totalEnergy;
+        const double minusEnergy = minus->scf.totalEnergy;
+        const double referenceEnergy = reference.scf.totalEnergy;
+
+        return -(plusEnergy - 2.0 * referenceEnergy + minusEnergy) / (field * field);
+    };
+
+    // The Hartree-Fock anchor's protocol: F = 1e-2, and the quartic term
+    // removed by reading the second difference at F and 2F.
+    constexpr double kField = 1e-2;
+    const double coarse = secondDifference(kField);
+    const double fine = secondDifference(2.0 * kField);
+    const double finiteField = (4.0 * coarse - fine) / 3.0;
+
+    ::testing::Test::RecordProperty(std::string(functionalName) + " analytic polarizability",
+                                    Scientific(analytic));
+    ::testing::Test::RecordProperty(std::string(functionalName) + " finite-field polarizability",
+                                    Scientific(finiteField));
+
+    EXPECT_GT(std::abs(analytic), 1e-3) << "the response is zero, so the comparison is empty";
+    EXPECT_NEAR(analytic, finiteField, 1e-4)
+        << functionalName << ": CPKS and the finite field disagree";
+}
+
+TEST(ResponseKernelTest, H2Sto3gSlaterPolarizabilityMatchesTheFiniteFieldSecondDifference) {
+    CheckPolarizability("slater", 0.0);
+}
+
+TEST(ResponseKernelTest, H2Sto3gHybridPolarizabilityMatchesTheFiniteFieldSecondDifference) {
+    CheckPolarizability("pbe", 0.25);
 }
 
 // The kernel term is load-bearing: with it the numerical Hessian matches, and

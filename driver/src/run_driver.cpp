@@ -772,10 +772,10 @@ qcx::Result<std::optional<qcx::io::RunXcGradient>> BuildXcGradientBlock(
     const Eigen::MatrixXd& alphaDensity,
     const Eigen::MatrixXd& betaDensity,
     const qcx::io::RunInput& input);
-// The opt-in total analytic gradient block: the converged RHF reference's
-// total nuclear gradient, every contribution kept apart. It takes the SCF
-// result rather than the densities the other builders take, because the
-// reference Extracts only from a converged HfResult.
+// The opt-in total analytic gradient block: the converged closed-shell
+// reference's total nuclear gradient, every contribution kept apart. It takes
+// the SCF result rather than the densities the other builders take, because
+// the reference Extracts only from a converged HfResult.
 qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
@@ -1427,6 +1427,11 @@ std::vector<std::string> PresentQfmmKnobNames(const qcx::io::RunInput& input) {
         names.emplace_back("method.crossover_basis_function_count");
     }
 
+    if (input.method.qfmmNearFieldCertifiedLane.has_value())
+    {
+        names.emplace_back("method.qfmm_near_field_certified_lane");
+    }
+
     return names;
 }
 
@@ -1902,12 +1907,16 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     // the label it carried - and the side a key falls on is judged by what
     // the key NAMES, not by how strongly it is worded.
     //
-    // This rule covers the four QFMM knobs: method.theta, method.l_mult,
-    // method.max_leaf_size and method.crossover_basis_function_count name the
+    // This rule covers the five QFMM knobs: method.theta, method.l_mult,
+    // method.max_leaf_size, method.crossover_basis_function_count and
+    // method.qfmm_near_field_certified_lane name the
     // composed-QFMM builder's own tuning. theta is an accuracy control, not a
     // performance knob - it decides which pairs the near/far split computes
     // exactly (integrals/src/qfmm_fock_build.cpp) - so a run that dropped it
-    // would compute at a screening the document does not ask for.
+    // would compute at a screening the document does not ask for. The lane key
+    // names the near field's precision policy, which the preset's advertised
+    // budget does not cover (schema section 3.10), so it is a mechanism key
+    // too.
     //
     // The far-field model parameters (the extent model, the separation mode and
     // the surface-ball buffer, QfmmOptions::extentModel / separationMode /
@@ -1974,8 +1983,9 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
                     " whose fock_builder is not \"qfmm\": this run "
                     "is on " +
                     FamilyNameForRefusal(input) +
-                    ". The four QFMM knobs (theta, l_mult, max_leaf_size, "
-                    "crossover_basis_function_count) are consumed by fock_builder = \"qfmm\" "
+                    ". The five QFMM knobs (theta, l_mult, max_leaf_size, "
+                    "crossover_basis_function_count, qfmm_near_field_certified_lane) are "
+                    "consumed by fock_builder = \"qfmm\" "
                     "alone, and no other family in this build reads them, so the request is "
                     "refused rather than run as if the key had not been written - theta is an "
                     "accuracy control (it decides which pairs the near/far split computes "
@@ -5070,6 +5080,13 @@ qcx::Result<UhfRun> RunQfmmUhfScf(
         qfmmOptions.crossoverBasisFunctionCount = *input.method.crossoverBasisFunctionCount;
     }
 
+    // The near-field lane's REQUEST: the one input that reaches
+    // QfmmOptions::useCertifiedMixedPrecision. An absent key keeps the engine
+    // default (QfmmOptions{}); the same option feeds the nested exchange half
+    // (qfmm_hf_build.cpp), so both halves run one policy.
+    qfmmOptions.useCertifiedMixedPrecision = input.method.qfmmNearFieldCertifiedLane.value_or(
+        qcx::integrals::QfmmOptions{}.useCertifiedMixedPrecision);
+
     // The adaptive seam (the budget path), wired like the direct runner above: the
     // cap is the workspace budget shared with the composed builder - each
     // of its nested Creates decides its own rung against the shared
@@ -6415,21 +6432,22 @@ qcx::Result<std::optional<qcx::io::RunXcGradient>> BuildXcGradientBlock(
     return block;
 }
 
-// The opt-in total analytic gradient block: the converged RHF reference's
-// total nuclear gradient, every contribution kept apart, plus the energies,
-// dimensions, counts and solve report the properties entry carries.
+// The opt-in total analytic gradient block: the converged closed-shell
+// reference's total nuclear gradient, every contribution kept apart, plus the
+// energies, dimensions, counts and solve report the properties entry carries.
 //
 // The properties entry is the whole assembly: this builder extracts the
 // reference through the one gate in front of it (a non-converged result is
 // refused, and the refusal names this key), resolves the dispersion correction
-// through the same seam the energy path uses, and converts the result to io's
-// plain data. It deliberately adds nothing of its own: no matvec count, no
+// through the same seam the energy path uses, resolves the Kohn-Sham keys for
+// a restricted Kohn-Sham reference, and converts the result to io's plain
+// data. It deliberately adds nothing of its own: no matvec count, no
 // worst residual, no re-derived term.
 //
-// Driver-internal helper of the RHF arm (the forward declaration above). It
-// sits on the RHF arm rather than in FillProperties because the reference
-// Extracts from the converged HfResult, which the shared properties builder
-// does not receive.
+// Driver-internal helper of the restricted arm (the forward declaration
+// above). It sits on that arm rather than in FillProperties because the
+// reference Extracts from the converged HfResult, which the shared properties
+// builder does not receive.
 qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
@@ -6440,17 +6458,19 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
         return std::nullopt;
     }
 
-    // The validator refuses this key on every method word but rhf, so a
-    // non-rhf value here is a programmatic caller that never passed through
-    // validation. Refused rather than assembled, for the validator's reason:
-    // the assembly differentiates a converged closed-shell RHF reference.
-    if (input.method.method != qcx::io::MethodType::kRhf)
+    // The validator admits this key on rhf and rks and refuses it on the
+    // unrestricted methods, so another value here is a programmatic caller
+    // that never passed through validation. Refused rather than assembled,
+    // for the validator's reason: the assembly differentiates a converged
+    // closed-shell reference, and only the two restricted lanes run one.
+    if (input.method.method != qcx::io::MethodType::kRhf &&
+        input.method.method != qcx::io::MethodType::kRks)
     {
         return std::unexpected(Err(
             qcx::ErrorCode::kInvalidArgument,
             "properties.total_gradient: " + std::string(qcx::io::ToString(input.method.method)) +
-                " has no total-gradient assembly (the closed-shell rhf lane is the only one "
-                "with a converged RHF reference to differentiate)"));
+                " has no total-gradient assembly (the closed-shell rhf and rks lanes are the "
+                "only ones with a converged reference to differentiate)"));
     }
 
     const std::size_t numOccupied = static_cast<std::size_t>(molecule.ElectronCount()) / 2;
@@ -6471,6 +6491,39 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     // tighter preset than the reference it differentiates, and the mismatch
     // shows up as a spurious stationarity refusal at the screening floor.
     options.eri.accuracy = input.method.accuracy;
+
+    // The restricted Kohn-Sham reference's own keys: the functional, the
+    // `[grid]` block and the screening tolerance, resolved exactly as the
+    // energy path (ResolveKsContext) and the xc_gradient walk
+    // (BuildXcGradientBlock) resolve them. The gradient differentiates the
+    // energy the run computed only while those three are the run's: a grid or
+    // a screening rule re-derived here would move every grid term while still
+    // looking reasonable. The batch is the default because CreateKsGrid hands
+    // the energy path the default - both walks sum in the same order, and the
+    // gradient walk's energy is compared against the reference's.
+    if (input.method.method == qcx::io::MethodType::kRks)
+    {
+        if (!input.method.functional.has_value())
+        {
+            return std::unexpected(
+                Err(qcx::ErrorCode::kInvalidArgument,
+                    "properties.total_gradient: no method.functional to differentiate"));
+        }
+
+        auto functional = qcx::driver::internal::ResolveKsFunctional(*input.method.functional);
+
+        if (!functional.has_value())
+        {
+            return std::unexpected(functional.error());
+        }
+
+        qcx::properties::TotalGradientXcOptions xc;
+        xc.functional = functional->name;
+        xc.grid = ResolveXcGridSettings(input.grid.value_or(qcx::io::RunGridInput{}));
+        xc.screeningTolerance =
+            input.method.screeningTolerance.value_or(qcx::io::kDefaultScreeningTolerance);
+        options.xc = std::move(xc);
+    }
 
     // The dispersion correction the run requested, resolved by the energy
     // path's own seam. An absent block adds no term and leaves the
@@ -6507,6 +6560,16 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     block.terms.nuclearRepulsion = ToStdVector(total->terms.nuclearRepulsion);
     block.terms.coulomb = ToStdVector(total->terms.coulomb);
     block.terms.exchange = ToStdVector(total->terms.exchange);
+
+    // The exchange-correlation term is present exactly when the reference
+    // integrated a functional: the presence rule is the METHOD's, not the
+    // vector's length, so a Hartree-Fock run never publishes a zero-filled
+    // exchange-correlation term.
+    if (input.method.method == qcx::io::MethodType::kRks)
+    {
+        block.terms.xc = ToStdVector(total->terms.xc);
+    }
+
     block.terms.response = ToStdVector(total->terms.response);
 
     // The dispersion term is present exactly when the input wrote a
@@ -6975,6 +7038,12 @@ std::optional<qcx::io::RunQfmmModel> MakeQfmmModelRecord(
     record.pairsMovedToNearField = model->pairsMovedToNearField;
     record.fellThroughToCap = model->fellThroughToCap;
     record.worstTruncationBound = model->worstTruncationBound;
+    // The near-field lane (schema 47): the engine resolved it when it created
+    // the nested near-field builder (the QfmmOptions request against the
+    // preset's own gate), so the driver copies the engine's answer rather
+    // than re-deriving the gate from the run's accuracy - a second derivation
+    // could disagree with the builder the energy came from.
+    record.certifiedNearFieldLane = model->certifiedNearFieldLane;
     return record;
 }
 
@@ -8541,6 +8610,13 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
         {
             qfmmOptions.crossoverBasisFunctionCount = *input.method.crossoverBasisFunctionCount;
         }
+
+        // The near-field lane's REQUEST: the one input that reaches
+        // QfmmOptions::useCertifiedMixedPrecision. An absent key keeps the
+        // engine default (QfmmOptions{}); the same option feeds the nested
+        // exchange half (qfmm_hf_build.cpp), so both halves run one policy.
+        qfmmOptions.useCertifiedMixedPrecision = input.method.qfmmNearFieldCertifiedLane.value_or(
+            qcx::integrals::QfmmOptions{}.useCertifiedMixedPrecision);
 
         // The adaptive seam (the budget path), wired like the direct branch below:
         // the cap is the workspace budget shared with the composed builder -
@@ -11233,6 +11309,14 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         // fabricated C1 record.
         result.symmetry = MakeRunSymmetry(scf->symmetryLabels);
 
+        // The blocking guard's decision on the SAME stage's Fock (schema 47):
+        // the restricted path has one Fock, so the record carries the one
+        // report as the `symmetry_blocking` object's own body. Copied from
+        // the scf report, never re-derived here; absent when the guard never
+        // asked (C1, no basis set, an unrealizable group) - the guard's own
+        // kNotRequested, which is the absence of a decision.
+        result.symmetryBlocking = MakeRunSymmetryBlocking(scf->symmetryBlocking);
+
         // The last-iterate checkpoint write (scf.checkpoint_file,
         // RHF only): the restart state - the final-iterate density, the
         // DIIS history, the previous energies (all filled identically on
@@ -11435,12 +11519,13 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
             return refuse(properties.error());
         }
 
-        // The opt-in total analytic gradient (schema 45): assembled from the
+        // The opt-in total analytic gradient (schema 46): assembled from the
         // converged reference and attached to the properties block the run
-        // just filled. A request the assembly refuses - a non-converged SCF,
-        // a non-stationary reference, a D4 dispersion gradient - fails the
-        // whole run by name: a requested gradient is never silently dropped
-        // from the record.
+        // just filled, on the restricted Hartree-Fock and restricted
+        // Kohn-Sham lanes alike. A request the assembly refuses - a
+        // non-converged SCF, a non-stationary reference, a D4 dispersion
+        // gradient - fails the whole run by name: a requested gradient is
+        // never silently dropped from the record.
         auto totalGradient = BuildTotalGradientBlock(*molecule, *basis, *scf, input);
 
         if (!totalGradient.has_value())

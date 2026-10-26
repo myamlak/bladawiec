@@ -38,7 +38,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsFortyFive) {
+TEST(ResultJsonTest, SchemaVersionIsFortySeven) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -168,7 +168,34 @@ TEST(ResultJsonTest, SchemaVersionIsFortyFive) {
     // (absent unless the run asked, never a zero-filled block), and a term
     // nobody requested - the dispersion correction without a `[dispersion]`
     // block - is absent inside a present block.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 45);
+    //
+    // v45 -> v46: `total_gradient.terms` GAINS the optional `xc` member, the
+    // exchange-correlation skeleton term of the total gradient, present on a
+    // run whose reference integrates a density functional (`rks`) and absent
+    // on `rhf`. A key added, so the number moves with it. The RHF document is
+    // byte-identical under the change - the member is absent, not a zero
+    // vector - and a consumer reading it on an RHF record learns that run had
+    // no exchange-correlation term rather than that one was computed as zero.
+    //
+    // v46 -> v47: TWO disclosures under ONE bump, both closing the same
+    // defect - a decision the run made that its document could not state.
+    // (1) The restricted path's symmetry-blocking decision gains its own
+    // record member (`RunResult::symmetryBlocking`): the RHF/RKS guard's
+    // action, the two solve counts, the per-generator commutator norms with
+    // their maximum, and the tolerance, serialized as the `symmetry_blocking`
+    // object's own body. ONE report, because the restricted path has one Fock
+    // and therefore one channel; the schema-32 alpha/beta pair stays the
+    // unrestricted shape. A key added, and a shape a consumer must tell
+    // apart: before this change a restricted run's demotion was visible only
+    // to a caller holding the in-process HfResult, so the JSON read as though
+    // the irrep blocks had been used. (2) The `qfmm_model` block GAINS
+    // `certified_near_field_lane` (RunQfmmModel::certifiedNearFieldLane):
+    // whether the near-field direct builder the run constructed had the
+    // certified mixed-precision lane enabled. A key added, so the number
+    // moves with it; it is written on every present block, so `false` states
+    // the lane is off (or the preset's own kTight gate) rather than leaving
+    // the state to be inferred from an absent key.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 47);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -635,6 +662,49 @@ TEST(ResultJsonTest, QfmmModelBlockCarriesTheFarFieldBudget) {
     EXPECT_NE(defaults.find("\"worst_truncation_bound\": 0.0"), std::string::npos);
 }
 
+TEST(ResultJsonTest, QfmmModelBlockCarriesTheNearFieldLane) {
+    // Schema 47: the block says whether the near-field direct builder the run
+    // constructed had the certified mixed-precision (fp32) lane enabled. The
+    // lane is a builder-creation decision the engine makes, so this pins the
+    // SERIALIZER: the member is written on a present block and its `false` is
+    // a statement, not an omission (the `certified_bound` rule) - a consumer
+    // must never infer the lane's state from an absent key. The field is part
+    // of `qfmm_model`, so it cannot appear on a run that wired no composed
+    // QFMM builder.
+    qcx::io::RunResult result;
+    result.converged = true;
+    qcx::io::RunQfmmModel model;
+    model.extentModel = "kProductBall";
+    model.separationMode = "kWidthTheta";
+    model.theta = 0.3;
+    model.certifiedNearFieldLane = true;
+    result.qfmmModel = model;
+
+    const std::string enabled = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(enabled.find("\"certified_near_field_lane\": true"), std::string::npos);
+    // The key rides the block it belongs to, not the document's top level:
+    // it follows the qfmm_model key in the serialized order.
+    const auto lanePos = enabled.find("\"certified_near_field_lane\"");
+    const auto blockPos = enabled.find("\"qfmm_model\"");
+    ASSERT_NE(lanePos, std::string::npos);
+    ASSERT_NE(blockPos, std::string::npos);
+    EXPECT_LT(blockPos, lanePos);
+
+    // False is written too: a build whose caller switched the lane off, or
+    // whose preset is kTight (the gate reads the lane off), reports it rather
+    // than dropping the key.
+    result.qfmmModel->certifiedNearFieldLane = false;
+    const std::string disabled = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(disabled.find("\"certified_near_field_lane\": false"), std::string::npos);
+
+    // No block, no member: a direct run gains no qfmm_model and therefore no
+    // lane statement, the null-honesty rule the whole block follows.
+    const qcx::io::RunResult direct;
+    const std::string directJson = qcx::io::SerializeRunResultJson(direct);
+    EXPECT_EQ(directJson.find("\"qfmm_model\""), std::string::npos);
+    EXPECT_EQ(directJson.find("\"certified_near_field_lane\""), std::string::npos);
+}
+
 TEST(ResultJsonTest, QfmmModelBlockAbsentWhenNoQfmmBuildRan) {
     // The absence rule, not a null: a run that wired no composed-QFMM builder
     // has no model to report, and a fabricated default block would claim a
@@ -699,11 +769,12 @@ TEST(ResultJsonTest, XcGradientBlockAbsentWhenNotRequested) {
 }
 
 TEST(ResultJsonTest, TotalGradientBlockEmittedWithEveryReportedMember) {
-    // The total analytic gradient (schema 45): every term is its own key, the
+    // The total analytic gradient (schema 46): every term is its own key, the
     // energies, dimensions, counts, solve report and both gate residuals are
-    // written, and the dispersion pair is ABSENT - the run wrote no
-    // [dispersion] block, so the term is not a zero vector and the energy is
-    // not a fabricated 0.0 (the null-honesty rule, one level down).
+    // written, and the exchange-correlation and dispersion terms are ABSENT -
+    // an RHF run integrates no functional and this run wrote no [dispersion]
+    // block, so neither term is a zero vector and no energy is a fabricated
+    // 0.0 (the null-honesty rule, one level down).
     qcx::io::RunResult result;
     qcx::io::RunProperties properties;
 
@@ -771,9 +842,49 @@ TEST(ResultJsonTest, TotalGradientBlockEmittedWithEveryReportedMember) {
     EXPECT_EQ(CountOccurrences(json, "\"right_hand_side_terms\""), 1);
     EXPECT_NE(json.find("\"one-electron\""), std::string::npos);
 
+    // The exchange-correlation term is absent on an RHF-shaped block: the
+    // run's reference integrated no functional, so the key is missing rather
+    // than a zero vector.
+    EXPECT_EQ(CountOccurrences(json, "\"xc\""), 0);
+
     // The dispersion pair inside the block: absent, not zero.
     EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 0);
     EXPECT_EQ(json.find("dispersion_hartree"), std::string::npos);
+}
+
+TEST(ResultJsonTest, TotalGradientXcTermIsPresentOnlyOnADensityFunctionalReference) {
+    // The same block behind a density-functional reference: the
+    // exchange-correlation skeleton term appears under its own key, with the
+    // vector written element for element. Presence is the reference's, so this
+    // is the only shape in which the key is written.
+    qcx::io::RunResult result;
+    qcx::io::RunProperties properties;
+
+    qcx::io::RunTotalGradient total;
+    total.gradient = {0.125, -0.375};
+    total.terms.oneElectron = {0.25, -0.5};
+    total.terms.nuclearRepulsion = {0.75, -1.25};
+    total.terms.coulomb = {1.5, -2.5};
+    total.terms.exchange = {-3.5, 4.5};
+    total.terms.xc = std::vector<double>{-9.5, 10.5};
+    total.terms.response = {5.5, -6.5};
+    total.energies.electronic = -8.125;
+    total.energies.reconstructedElectronic = -8.0625;
+    total.energies.nuclearRepulsion = 0.875;
+    total.energies.total = -7.25;
+    total.rightHandSideTerms = {"one-electron", "coulomb", "exchange"};
+    properties.totalGradient = total;
+    result.properties = std::move(properties);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"xc\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"xc\": ["), 1);
+    EXPECT_EQ(CountOccurrences(json, "-9.5"), 1);
+    EXPECT_EQ(CountOccurrences(json, "10.5"), 1);
+
+    // The dispersion term stays absent: adding the XC key did not widen the
+    // dispersion rule.
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 0);
 }
 
 TEST(ResultJsonTest, TotalGradientDispersionTermIsPresentOnlyWhenRequested) {
@@ -1532,6 +1643,50 @@ TEST(ResultJsonTest, UnavailableSymmetryBlockingDoesNotReadAsUsed) {
     EXPECT_EQ(json.find("kUsed"), std::string::npos);
     EXPECT_NE(json.find("\"generator_commutator_norms\": []"), std::string::npos);
     EXPECT_NE(json.find("\"max_generator_commutator_norm\": 0.0"), std::string::npos);
+}
+
+TEST(ResultJsonTest, RestrictedSymmetryBlockingIsTheBlocksOwnBody) {
+    // Schema 47: the restricted path has ONE Fock, so its disclosure is one
+    // report written as the `symmetry_blocking` object's own body - no
+    // alpha/beta wrapper, because there is no second channel for a wrapper to
+    // disambiguate. The report's six members are the ones a schema-32 channel
+    // carries, so a reader of the UHF shape reads this one the same way; only
+    // the wrapper is gone. The value is the guard's own action, copied.
+    qcx::io::RunResult result;
+    result.converged = true;
+    result.symmetryBlocking = DemotedBlocking();
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"symmetry_blocking\""), 1);
+    // The object opens into the report itself: the action is the body's first
+    // member, not a value nested under a channel name. A serializer that
+    // wrapped the single report would fail here.
+    EXPECT_NE(json.find("\"symmetry_blocking\": {\n    \"action\": \"kDemoted\""),
+              std::string::npos)
+        << "the report IS the block, not a value inside a channel wrapper";
+    EXPECT_NE(json.find("\"blocked_solve_count\": 3"), std::string::npos);
+    EXPECT_NE(json.find("\"plain_solve_count\": 15"), std::string::npos);
+    EXPECT_NE(json.find("\"max_generator_commutator_norm\": 1.909"), std::string::npos);
+    EXPECT_NE(json.find("\"tolerance\": 1e-08"), std::string::npos);
+    // The per-generator norms reach the record, not just their maximum. The
+    // list is dumped multi-line (dump(2)), so the pin is the value count: 4
+    // is the three norms plus the maximum, and a dropped vector would leave 1.
+    EXPECT_EQ(CountOccurrences(json, "\"generator_commutator_norms\": ["), 1);
+    EXPECT_EQ(CountOccurrences(json, "1.909"), 4);
+
+    // No channel wrapper anywhere: nothing else on this result carries an
+    // alpha or beta key (populations is null), so the absence is the shape's.
+    EXPECT_EQ(json.find("\"alpha\""), std::string::npos);
+    EXPECT_EQ(json.find("\"beta\""), std::string::npos);
+
+    // One shape or the other: when the restricted report is set it is what
+    // the block carries, even beside a spin pair - the serializer's branch
+    // prefers the single report rather than emitting both forms.
+    result.symmetryBlockingAlpha = DemotedBlocking();
+    const std::string withPair = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(withPair, "\"symmetry_blocking\""), 1);
+    EXPECT_EQ(withPair.find("\"alpha\""), std::string::npos)
+        << "the restricted shape wins; a mixed document never carries two forms";
 }
 
 TEST(ResultJsonTest, CoefficientsBlockEmittedWhenPresent) {

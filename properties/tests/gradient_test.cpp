@@ -2,7 +2,9 @@
 // against (including the refusals that make a stale or malformed reference
 // unable to reach a solve), the term decomposition, the finite-difference gate
 // against displaced-geometry energies, the invariants a gradient must satisfy,
-// and the dispersion term with its D4 refusal.
+// the restricted Kohn-Sham route (the Fock reconstruction, the grid skeleton
+// term and the exchange scaling, each against an independent assembly), and
+// the dispersion term with its D4 refusal.
 //
 // The fixture is water/STO-3G at a DISTORTED, C1 geometry - every atom moved
 // off the symmetric reference, so no component of any term vanishes by
@@ -11,11 +13,21 @@
 // The derivative integrals are the integrals module's own derivative tier; the
 // finite difference below is a central difference of the SCF's total energy,
 // taken at two steps so its truncation error is seen rather than assumed.
+//
+// The Kohn-Sham rows converge a hybrid reference on the same geometry through
+// the public energy seam, with the Coulomb and exchange operators
+// hand-contracted over the AO tensor, so the Fock the gradient rebuilds and the
+// grid term it adds each have an assembly to disagree with that shares none of
+// their code.
 
+#include "fast_test_mode.hpp"
 #include "h2o_sto3g.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/dispersion/dispersion.hpp"
 #include "qcx/error.hpp"
+#include "qcx/grid/geometry_translation.hpp"
+#include "qcx/grid/xc_gradient.hpp"
+#include "qcx/grid/xc_grid_engine.hpp"
 #include "qcx/integrals/eri_dense.hpp"
 #include "qcx/integrals/one_electron.hpp"
 #include "qcx/integrals/screening.hpp"
@@ -25,6 +37,7 @@
 #include "qcx/molecule/molecule.hpp"
 #include "qcx/properties/gradient.hpp"
 #include "qcx/response/response_gradient.hpp"
+#include "qcx/response/response_kernel.hpp"
 #include "qcx/response/response_state.hpp"
 #include "qcx/scf/density_energy.hpp"
 #include "qcx/scf/gradient_reference.hpp"
@@ -36,10 +49,13 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <excgrid/grid_derivatives.hpp>
 #include <gtest/gtest.h>
 #include <iostream>
+#include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -49,7 +65,9 @@ using qcx::molecule::Atom;
 using qcx::molecule::Molecule;
 using qcx::properties::BuildResponseState;
 using qcx::properties::ComputeTotalGradient;
+using qcx::properties::TotalGradientKohnShamRoute;
 using qcx::properties::TotalGradientOptions;
+using qcx::properties::TotalGradientXcOptions;
 using qcx::response::ResponseScreening;
 using qcx::response::ResponseState;
 using qcx::response::ResponseStateReference;
@@ -1001,6 +1019,471 @@ TEST(TotalGradientTest, AD4GradientRequestIsRefusedByName) {
         << gradient.error().message;
     EXPECT_NE(gradient.error().message.find("gradient tier"), std::string::npos)
         << gradient.error().message;
+}
+
+// --- the Kohn-Sham route -----------------------------------------------------
+
+// The hybrid functional the Kohn-Sham rows run. Its exact-exchange fraction is
+// a quarter, so the exchange the functional scales is present and the scaling
+// is exercised; a pure functional would leave the whole subtraction branch
+// unvisited. The driver's acceptance row runs pbe (c_HF = 0), so the two
+// together cover both branches of the reconstruction.
+constexpr std::string_view kKohnShamFunctional = "pbe0";
+constexpr double kKohnShamExchangeFraction = 0.25;
+
+// The screening tolerance the reference's energy path and the gradient's walks
+// share: one key of the run, passed to every engine evaluation and to the
+// gradient options. A potential screened at another tolerance is the potential
+// of another energy.
+constexpr double kKohnShamScreen = 1e-8;
+
+// The grid the Kohn-Sham rows integrate on: the production defaults, which is
+// what a run that writes no [grid] block gets.
+constexpr qcx::grid::XcGridSettings kKohnShamGrid{};
+
+/// The Kohn-Sham reference's operands: the core Hamiltonian and the AO
+/// two-electron tensor in the row-major layout the hand contractions below
+/// read.
+struct KohnShamOperands {
+    Eigen::MatrixXd core; ///< H = T + V, in the AO basis.
+    std::vector<double> aoTensor; ///< (mu nu | lambda sigma), row-major.
+};
+
+/// Builds the operands at the molecule's geometry.
+/// \param molecule The molecule.
+/// \param basis The basis set.
+/// \returns The operands, or an Error when an integral build fails.
+qcx::Result<KohnShamOperands> MakeKohnShamOperands(const Molecule& molecule,
+                                                   const qcx::basisset::BasisSet& basis) {
+    const auto kinetic = qcx::integrals::BuildKineticMatrix(molecule, basis);
+    const auto nuclear = qcx::integrals::BuildNuclearAttractionMatrix(molecule, basis);
+    // Non-const: HostView is the mutable handle on the host copy.
+    auto eri = qcx::integrals::BuildEriTensorGeneral(molecule, basis);
+
+    if (!kinetic.has_value() || !nuclear.has_value() || !eri.has_value())
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInternalError,
+                                          "the Kohn-Sham fixture's integral build failed"});
+    }
+
+    return KohnShamOperands{ToMatrix(*kinetic) + ToMatrix(*nuclear), eri->HostView()};
+}
+
+/// The Coulomb matrix of a spin-summed closed-shell density,
+/// `J_mu nu = sum_ls D_ls (mu nu | lambda sigma)`.
+///
+/// A hand contraction over the AO tensor: algebraically the same operator the
+/// SCF's supermatrix path contracts, in a different summation order, so a
+/// rebuilt Fock compared against it pins the reconstruction's algebra rather
+/// than one function's output against itself.
+/// \param aoTensor The AO tensor, row-major.
+/// \param density The spin-summed density.
+/// \returns J[D].
+Eigen::MatrixXd CoulombMatrix(const std::vector<double>& aoTensor, const Eigen::MatrixXd& density) {
+    const Eigen::Index n = density.rows();
+    Eigen::MatrixXd coulomb = Eigen::MatrixXd::Zero(n, n);
+
+    for (Eigen::Index mu = 0; mu < n; ++mu)
+    {
+        for (Eigen::Index nu = 0; nu < n; ++nu)
+        {
+            double sum = 0.0;
+
+            for (Eigen::Index lambda = 0; lambda < n; ++lambda)
+            {
+                for (Eigen::Index sigma = 0; sigma < n; ++sigma)
+                {
+                    sum += density(lambda, sigma) * aoTensor[static_cast<std::size_t>(
+                                                        ((mu * n + nu) * n + lambda) * n + sigma)];
+                }
+            }
+
+            coulomb(mu, nu) = sum;
+        }
+    }
+
+    return coulomb;
+}
+
+/// The exchange matrix of a spin-summed closed-shell density,
+/// `K_mu nu = sum_ls D_ls (mu lambda | sigma nu)`, the supermatrix convention
+/// the SCF's own build contracts.
+/// \param aoTensor The AO tensor, row-major.
+/// \param density The spin-summed density.
+/// \returns K[D].
+Eigen::MatrixXd ExchangeMatrix(const std::vector<double>& aoTensor,
+                               const Eigen::MatrixXd& density) {
+    const Eigen::Index n = density.rows();
+    Eigen::MatrixXd exchange = Eigen::MatrixXd::Zero(n, n);
+
+    for (Eigen::Index mu = 0; mu < n; ++mu)
+    {
+        for (Eigen::Index nu = 0; nu < n; ++nu)
+        {
+            double sum = 0.0;
+
+            for (Eigen::Index lambda = 0; lambda < n; ++lambda)
+            {
+                for (Eigen::Index sigma = 0; sigma < n; ++sigma)
+                {
+                    sum += density(lambda, sigma) * aoTensor[static_cast<std::size_t>(
+                                                        ((mu * n + lambda) * n + sigma) * n + nu)];
+                }
+            }
+
+            exchange(mu, nu) = sum;
+        }
+    }
+
+    return exchange;
+}
+
+/// The restricted potential `V = (V_alpha + V_beta) / 2` at a density.
+///
+/// The closed-shell split and the engine's chain rule, called exactly as the
+/// energy path calls it: `(D/2, D/2)` through EvaluateScreened at the run's
+/// screening tolerance.
+/// \param engine The grid engine the reference was converged with.
+/// \param density The spin-summed density.
+/// \returns The potential, or the engine's Error.
+qcx::Result<Eigen::MatrixXd> KohnShamPotential(const qcx::grid::XcGridEngine& engine,
+                                               const Eigen::MatrixXd& density) {
+    const Eigen::MatrixXd halfDensity = 0.5 * density;
+    const auto evaluation = engine.EvaluateScreened(halfDensity, halfDensity, kKohnShamScreen);
+
+    if (!evaluation.has_value())
+    {
+        return std::unexpected(evaluation.error());
+    }
+
+    return Eigen::MatrixXd(0.5 * (evaluation->potentialAlpha + evaluation->potentialBeta));
+}
+
+/// Runs the restricted Kohn-Sham SCF the reference belongs to.
+///
+/// The energy seam is the one the driver's composition fills: a Fock builder, a
+/// Coulomb provider and the energy the trace formula cannot recover. Here the
+/// Fock is `H + J + V_xc - (c_HF/2) K` and the contribution is
+/// `E_xc - (c_HF/4) Tr[D K]`, both from the operands' own contractions, so the
+/// reference is a converged stationary point of exactly the energy and operator
+/// the gradient rebuilds. The tolerance rung is the tight one: the stationarity
+/// gate (1e-6) and the energy reconstruction (1e-8, against an energy formed in
+/// a different summation order) both read this reference.
+/// \param molecule The molecule.
+/// \param basis The basis set.
+/// \param engine The grid engine, created from the settings the gradient will
+/// be handed.
+/// \param operands The core Hamiltonian and the AO tensor.
+/// \returns The validated reference, or an Error.
+qcx::Result<ScfGradientReference> MakeKohnShamReference(const Molecule& molecule,
+                                                        const qcx::basisset::BasisSet& basis,
+                                                        const qcx::grid::XcGridEngine& engine,
+                                                        const KohnShamOperands& operands) {
+    const auto overlap = qcx::integrals::BuildOverlapMatrix(molecule, basis);
+
+    if (!overlap.has_value())
+    {
+        return std::unexpected(overlap.error());
+    }
+
+    // Read off the functional itself, as the driver's composition reads it: a
+    // caller-set fraction could disagree with the functional the energy was
+    // integrated with.
+    const double exchangeFraction = engine.ExchangeFraction();
+
+    const qcx::scf::FockBuilderFn fockBuilder =
+        [&operands, &engine, exchangeFraction](
+            const Eigen::MatrixXd& density) -> qcx::Result<Eigen::MatrixXd> {
+        const Eigen::MatrixXd halfDensity = 0.5 * density;
+        const auto evaluation = engine.EvaluateScreened(halfDensity, halfDensity, kKohnShamScreen);
+
+        if (!evaluation.has_value())
+        {
+            return std::unexpected(evaluation.error());
+        }
+
+        Eigen::MatrixXd fock =
+            operands.core + CoulombMatrix(operands.aoTensor, density) +
+            Eigen::MatrixXd(0.5 * (evaluation->potentialAlpha + evaluation->potentialBeta));
+
+        if (exchangeFraction != 0.0)
+        {
+            fock -= 0.5 * exchangeFraction * ExchangeMatrix(operands.aoTensor, density);
+        }
+
+        return fock;
+    };
+
+    const qcx::scf::CoulombFn coulomb =
+        [&operands](const Eigen::MatrixXd& density) -> qcx::Result<Eigen::MatrixXd> {
+        return CoulombMatrix(operands.aoTensor, density);
+    };
+
+    const qcx::scf::EnergyContributionFn contribution =
+        [&operands, &engine, exchangeFraction](
+            const Eigen::MatrixXd& density) -> qcx::Result<double> {
+        const Eigen::MatrixXd halfDensity = 0.5 * density;
+        const auto evaluation = engine.EvaluateScreened(halfDensity, halfDensity, kKohnShamScreen);
+
+        if (!evaluation.has_value())
+        {
+            return std::unexpected(evaluation.error());
+        }
+
+        double energy = evaluation->energy;
+
+        if (exchangeFraction != 0.0)
+        {
+            // The closed-shell exchange 1/2 sum D K: the gradient's gate
+            // subtracts (1/2) c_HF of it, so the contribution carries the same
+            // half-trace at the same scale and the two energy expressions are
+            // one.
+            const double exchangeHalfTrace =
+                0.5 * density.cwiseProduct(ExchangeMatrix(operands.aoTensor, density)).sum();
+            energy -= 0.5 * exchangeFraction * exchangeHalfTrace;
+        }
+
+        return energy;
+    };
+
+    qcx::scf::RhfOptions options;
+    options.maxIterations = 300;
+    // The kTight rung (energy/density 1e-10/1e-8), so the fixture's
+    // convergence is declared by its rung rather than a private gate.
+    options.energyTolerance = 1e-10;
+    options.densityTolerance = 1e-8;
+
+    const auto result = qcx::scf::RunRhfScf(
+        molecule, ToMatrix(*overlap), operands.core, options, fockBuilder, coulomb, contribution);
+
+    if (!result.has_value())
+    {
+        return std::unexpected(result.error());
+    }
+
+    if (!result->converged)
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInternalError,
+                                          "the Kohn-Sham fixture's SCF did not converge"});
+    }
+
+    return qcx::scf::ExtractGradientReference(*result, kNumOccupied);
+}
+
+// The Kohn-Sham Fock reconstruction: the state must own the matrix the
+// reference actually converged against, not the Roothaan Fock that omits the
+// potential and leaves the exchange unscaled. The expectation is assembled here
+// from the hand contractions and the run's own potential - an independent route
+// to the same matrix - and the default (Hartree-Fock) route still reads the
+// evaluator's Fock bit for bit.
+TEST(TotalGradientTest, TheKohnShamRouteRebuildsTheReferenceFock) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    const auto molecule = MakeMolecule(Geometry{});
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    const auto operands = MakeKohnShamOperands(*molecule, *basis);
+    ASSERT_TRUE(operands.has_value()) << operands.error().message;
+
+    auto engine =
+        qcx::grid::XcGridEngine::Create(*molecule, *basis, kKohnShamFunctional, kKohnShamGrid);
+    ASSERT_TRUE(engine.has_value()) << engine.error().message;
+    EXPECT_DOUBLE_EQ(engine->ExchangeFraction(), kKohnShamExchangeFraction);
+
+    const auto reference = MakeKohnShamReference(*molecule, *basis, *engine, *operands);
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    const auto potential = KohnShamPotential(*engine, reference->density);
+    ASSERT_TRUE(potential.has_value()) << potential.error().message;
+
+    // The kernel is never applied while the state is built: the callback counts
+    // its calls, and the reconstruction reads only the potential and the
+    // fraction.
+    auto kernelCalls = std::make_shared<int>(0);
+    TotalGradientKohnShamRoute route;
+    route.exchangeFraction = engine->ExchangeFraction();
+    route.potential = *potential;
+    route.kernel = qcx::response::KohnShamKernelTerm{
+        std::string(kKohnShamFunctional),
+        [kernelCalls](std::span<const double>, std::span<double>) -> qcx::Result<void> {
+            ++*kernelCalls;
+            return {};
+        }};
+
+    auto state = BuildResponseState(*molecule, *basis, *reference, {}, {}, route);
+    ASSERT_TRUE(state.has_value()) << state.error().message;
+
+    EXPECT_TRUE(state->HasKernel());
+    EXPECT_EQ(state->KernelName(), kKohnShamFunctional);
+    EXPECT_DOUBLE_EQ(state->ExchangeFraction(), kKohnShamExchangeFraction);
+    EXPECT_EQ(*kernelCalls, 0);
+
+    const Eigen::MatrixXd expected =
+        operands->core + CoulombMatrix(operands->aoTensor, reference->density) + *potential -
+        0.5 * kKohnShamExchangeFraction * ExchangeMatrix(operands->aoTensor, reference->density);
+
+    const std::vector<double> fock(state->Fock().begin(), state->Fock().end());
+    ASSERT_EQ(fock.size(), kNumBasis * kNumBasis);
+
+    for (std::size_t row = 0; row < kNumBasis; ++row)
+    {
+        for (std::size_t column = 0; column < kNumBasis; ++column)
+        {
+            EXPECT_NEAR(fock[row * kNumBasis + column],
+                        expected(static_cast<Eigen::Index>(row), static_cast<Eigen::Index>(column)),
+                        kTransformTolerance)
+                << "row " << row << " column " << column;
+        }
+    }
+
+    // The default route is untouched: the state's Fock is the evaluator's own
+    // matrix, bit for bit, and the operator is the Hartree-Fock one.
+    const auto rhfReference = MakeReference(*molecule, *basis);
+    ASSERT_TRUE(rhfReference.has_value()) << rhfReference.error().message;
+
+    auto rhfState = BuildResponseState(*molecule, *basis, *rhfReference);
+    ASSERT_TRUE(rhfState.has_value()) << rhfState.error().message;
+
+    EXPECT_FALSE(rhfState->HasKernel());
+    EXPECT_TRUE(rhfState->KernelName().empty());
+    EXPECT_DOUBLE_EQ(rhfState->ExchangeFraction(), 1.0);
+
+    const auto kinetic = qcx::integrals::BuildKineticMatrix(*molecule, *basis);
+    const auto nuclear = qcx::integrals::BuildNuclearAttractionMatrix(*molecule, *basis);
+    auto eri = qcx::integrals::BuildEriTensorGeneral(*molecule, *basis);
+    ASSERT_TRUE(kinetic.has_value()) << kinetic.error().message;
+    ASSERT_TRUE(nuclear.has_value()) << nuclear.error().message;
+    ASSERT_TRUE(eri.has_value()) << eri.error().message;
+
+    const auto evaluated = qcx::scf::EvaluateRhfDensityEnergy(
+        *molecule, ToMatrix(*kinetic) + ToMatrix(*nuclear), *eri, rhfReference->density);
+    ASSERT_TRUE(evaluated.has_value()) << evaluated.error().message;
+
+    const std::vector<double> rhfFock(rhfState->Fock().begin(), rhfState->Fock().end());
+
+    for (std::size_t row = 0; row < kNumBasis; ++row)
+    {
+        for (std::size_t column = 0; column < kNumBasis; ++column)
+        {
+            EXPECT_DOUBLE_EQ(
+                rhfFock[row * kNumBasis + column],
+                evaluated->fock(static_cast<Eigen::Index>(row), static_cast<Eigen::Index>(column)));
+        }
+    }
+}
+
+// The exchange-correlation terms are the run's own grid walks, not second
+// integrations: the total's xc term is compared against a direct
+// EvaluateXcGradient on the same engine, density and thresholds, the exchange
+// term against the derivative walk's skeleton at the functional's fraction, and
+// the reconstruction gate against the reference's electronic energy.
+TEST(TotalGradientTest, TheKohnShamXcTermIsTheGridWalksOwnGradientAndEnergy) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "grid finite differences over an XC walk: Release-only";
+    }
+
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    const auto molecule = MakeMolecule(Geometry{});
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    const auto operands = MakeKohnShamOperands(*molecule, *basis);
+    ASSERT_TRUE(operands.has_value()) << operands.error().message;
+
+    auto engine =
+        qcx::grid::XcGridEngine::Create(*molecule, *basis, kKohnShamFunctional, kKohnShamGrid);
+    ASSERT_TRUE(engine.has_value()) << engine.error().message;
+    EXPECT_DOUBLE_EQ(engine->ExchangeFraction(), kKohnShamExchangeFraction);
+
+    const auto reference = MakeKohnShamReference(*molecule, *basis, *engine, *operands);
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    TotalGradientOptions options = MakeOptions();
+    options.xc = TotalGradientXcOptions{
+        std::string(kKohnShamFunctional), kKohnShamGrid, kKohnShamScreen, {}};
+
+    const auto gradient = ComputeTotalGradient(*molecule, *basis, *reference, options);
+    ASSERT_TRUE(gradient.has_value()) << gradient.error().message;
+
+    EXPECT_EQ(gradient->terms.xc.size(), static_cast<Eigen::Index>(3 * kNumAtoms));
+    EXPECT_EQ(gradient->terms.dispersion.size(), 0);
+    EXPECT_EQ(gradient->rightHandSideTerms,
+              std::vector<std::string>({"one-electron", "coulomb", "exchange", "xc"}));
+    EXPECT_LE(gradient->stationarityResidual, 1e-6);
+    EXPECT_LE(gradient->energyResidual, 1e-8);
+    EXPECT_NEAR(gradient->energies.reconstructedElectronic, reference->electronicEnergy, 1e-8);
+    EXPECT_NEAR(gradient->energies.total,
+                gradient->energies.electronic + gradient->energies.nuclearRepulsion,
+                1e-12);
+    EXPECT_GT(gradient->terms.xc.cwiseAbs().maxCoeff(), 1e-3);
+
+    // The terms sum to the emitted total, xc included, in the documented order.
+    Eigen::VectorXd sum = Eigen::VectorXd::Zero(gradient->gradient.size());
+    sum += gradient->terms.oneElectron;
+    sum += gradient->terms.nuclearRepulsion;
+    sum += gradient->terms.coulomb;
+    sum += gradient->terms.exchange;
+    sum += gradient->terms.xc;
+    sum += gradient->terms.response;
+
+    for (Eigen::Index entry = 0; entry < gradient->gradient.size(); ++entry)
+    {
+        EXPECT_EQ(sum(entry), gradient->gradient(entry));
+    }
+
+    // The same walk, called directly on the run's engine, density and
+    // thresholds.
+    const Eigen::MatrixXd halfDensity = 0.5 * reference->density;
+    const auto geometry = qcx::grid::ToExcgridGeometry(*molecule);
+    ASSERT_TRUE(geometry.has_value()) << geometry.error().message;
+
+    const auto provider =
+        excgrid::CreateGridDerivativeProvider(*geometry, qcx::grid::ToExcgridParams(kKohnShamGrid));
+    ASSERT_TRUE(provider.has_value())
+        << qcx::grid::TranslateExcgridError(provider.error(), "the fixture's provider").message;
+
+    const auto thresholds =
+        qcx::grid::XcIntegrationThresholds::FromEnergyPath(kKohnShamGrid, kKohnShamScreen);
+    const auto walk = qcx::grid::EvaluateXcGradient(
+        *engine, halfDensity, halfDensity, **provider, thresholds, {});
+    ASSERT_TRUE(walk.has_value()) << walk.error().message;
+
+    for (Eigen::Index entry = 0; entry < gradient->terms.xc.size(); ++entry)
+    {
+        EXPECT_NEAR(gradient->terms.xc(entry), walk->gradient(entry), kTermTolerance)
+            << "entry " << entry;
+    }
+
+    // The walk's energy is the energy path's: the same points under the same
+    // thresholds, so the gradient is the derivative of the energy the reference
+    // was converged against.
+    const auto energyPath = engine->EvaluateScreened(halfDensity, halfDensity, kKohnShamScreen);
+    ASSERT_TRUE(energyPath.has_value()) << energyPath.error().message;
+    EXPECT_DOUBLE_EQ(walk->energy, energyPath->energy);
+
+    // The exchange term is the derivative walk's skeleton at the functional's
+    // exact-exchange fraction.
+    const auto density = DensityTensor(RowMajor(reference->density));
+    ASSERT_TRUE(density.has_value()) << density.error().message;
+
+    qcx::integrals::TwoElectronFockDerivativeOptions twoElectronOptions;
+    twoElectronOptions.accuracy = options.eri.accuracy;
+    const auto twoElectron =
+        qcx::integrals::ComputeTwoElectronFockDerivative(*molecule,
+                                                         *basis,
+                                                         *density,
+                                                         RowMajor(reference->coefficients),
+                                                         kNumOccupied,
+                                                         kNumBasis - kNumOccupied,
+                                                         twoElectronOptions);
+    ASSERT_TRUE(twoElectron.has_value()) << twoElectron.error().message;
+
+    for (Eigen::Index entry = 0; entry < gradient->terms.exchange.size(); ++entry)
+    {
+        EXPECT_NEAR(gradient->terms.exchange(entry),
+                    -0.5 * kKohnShamExchangeFraction * twoElectron->exchangeSkeleton(entry),
+                    kTermTolerance)
+            << "entry " << entry;
+    }
 }
 
 } // namespace

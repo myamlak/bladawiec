@@ -136,6 +136,13 @@ input file keys (a key marked required must be written):
                                     which QFMM is recommended over RI-J; absent
                                     = the built-in threshold. Read by
                                     fock_builder = "qfmm"; refused elsewhere
+    qfmm_near_field_certified_lane = true
+                                    optional; true (the absent key's value) is
+                                    the certified fp32 lane in the composed
+                                    QFMM build's near-field direct builder and
+                                    its exchange half, subject to the preset's
+                                    own gate; false runs both in fp64. Read by
+                                    fock_builder = "qfmm"; refused elsewhere
     ri_tensor_mode = "auto"         optional; auto | disk; the RI-J ladder's
                                     disk-rung selector, wired on the restricted
                                     ri_j_link leg. Disk is entered ONLY when a

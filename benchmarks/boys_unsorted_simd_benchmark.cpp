@@ -95,8 +95,10 @@ private:
 };
 
 // Split Clenshaw (even/odd), 4-wide, half-depth FMA chains — the shipped
-// kernel shape (boys_simd.cpp).
-__m256d Clenshaw4Split(const qcx::integrals::detail::OrderPiece& piece, __m256d xv) {
+// kernel shape (boys_simd.cpp). Named apart from the boys header's
+// Clenshaw4Split: the two take the same piece type and an unqualified call is
+// ambiguous.
+__m256d ReferenceClenshaw4Split(const qcx::integrals::detail::OrderPiece& piece, __m256d xv) {
     const double* c = qcx::integrals::detail::kCoeffs.data() + piece.offset;
     const int deg = piece.deg;
 
@@ -171,7 +173,7 @@ void ChebSimdMixed(
                 const __m256d mask = _mm256_and_pd(
                     _mm256_and_pd(mA, _mm256_cmp_pd(xv, _mm256_set1_pd(piece.a), _CMP_GE_OQ)),
                     _mm256_cmp_pd(xv, _mm256_set1_pd(piece.b), _CMP_LT_OQ));
-                fA = _mm256_blendv_pd(fA, Clenshaw4Split(piece, xv), mask);
+                fA = _mm256_blendv_pd(fA, ReferenceClenshaw4Split(piece, xv), mask);
             }
         }
 

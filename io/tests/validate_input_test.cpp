@@ -653,12 +653,15 @@ screening_tolerance = 0.0
     EXPECT_TRUE(uks.IsValid()) << (uks.issues.empty() ? "" : uks.issues[0]);
 }
 
-TEST(RunInputValidationTest, TotalGradientIsRefusedOnEveryMethodButRhf) {
-    // The key is the closed-shell RHF assembly's, so it is legal exactly
-    // there and refused by name on the other three words. Refused, never
-    // ignored: an absent `total_gradient` block in the record would otherwise
-    // read as "no gradient was computed", which is true, while the file's own
-    // request vanished without a word.
+TEST(RunInputValidationTest,
+     TotalGradientIsAdmittedOnTheClosedShellMethodsAndRefusedOnTheUnrestricted) {
+    // The key is the closed-shell analytic gradient's: legal exactly on the two
+    // closed-shell words - the rhf reference and, through the density
+    // functional's kernel term, the rks one - and refused by name on the
+    // unrestricted lanes, whose references the closed-shell assembly does not
+    // describe. Refused, never ignored: an absent `total_gradient` block in the
+    // record would otherwise read as "no gradient was computed", which is true,
+    // while the file's own request vanished without a word.
     const auto rhf = Validate(R"(
 [molecule]
 atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
@@ -671,6 +674,20 @@ accuracy = "kNormal"
 total_gradient = true
 )");
     EXPECT_TRUE(rhf.IsValid()) << (rhf.issues.empty() ? "" : rhf.issues[0]);
+
+    const auto rks = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rks"
+accuracy = "kNormal"
+functional = "pbe"
+[properties]
+total_gradient = true
+)");
+    EXPECT_TRUE(rks.IsValid()) << (rks.issues.empty() ? "" : rks.issues[0]);
 
     const auto uhf = Validate(R"(
 [molecule]
@@ -686,26 +703,8 @@ total_gradient = true
     ASSERT_EQ(uhf.issues.size(), 1u);
     EXPECT_EQ(uhf.issues[0],
               "properties.total_gradient: uhf does not take the total analytic gradient (the "
-              "assembly differentiates a converged closed-shell RHF reference; the rhf method "
-              "is the only lane that runs one)");
-
-    const auto rks = Validate(R"(
-[molecule]
-atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
-[basis]
-orbital = "sto-3g"
-[method]
-type = "rks"
-accuracy = "kNormal"
-functional = "pbe"
-[properties]
-total_gradient = true
-)");
-    ASSERT_EQ(rks.issues.size(), 1u);
-    EXPECT_EQ(rks.issues[0],
-              "properties.total_gradient: rks does not take the total analytic gradient (the "
-              "assembly differentiates a converged closed-shell RHF reference; the rhf method "
-              "is the only lane that runs one)");
+              "assembly differentiates a converged closed-shell reference; the rhf and rks "
+              "methods are the only lanes that run one)");
 
     const auto uks = Validate(R"(
 [molecule]
@@ -722,8 +721,8 @@ total_gradient = true
     ASSERT_EQ(uks.issues.size(), 1u);
     EXPECT_EQ(uks.issues[0],
               "properties.total_gradient: uks does not take the total analytic gradient (the "
-              "assembly differentiates a converged closed-shell RHF reference; the rhf method "
-              "is the only lane that runs one)");
+              "assembly differentiates a converged closed-shell reference; the rhf and rks "
+              "methods are the only lanes that run one)");
 }
 
 TEST(RunInputValidationTest, DispersionIsMethodIndependent) {

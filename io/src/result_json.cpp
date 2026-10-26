@@ -355,13 +355,13 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                                      {"energy_hartree", xcGradient.energyHartree}};
         }
 
-        // The total analytic nuclear gradient (schema 45): absent unless the
+        // The total analytic nuclear gradient (schema 46): absent unless the
         // run asked for it, so an absent key is "no gradient was computed" and
-        // never "the gradient was zero". Inside the block, the dispersion term
-        // and its energy follow the same rule one level down: a correction
-        // nobody requested is absent, never a zero-filled vector or a
-        // fabricated 0.0 that a consumer could read as a computed
-        // contribution.
+        // never "the gradient was zero". Inside the block, the
+        // exchange-correlation skeleton term and the dispersion term and its
+        // energy follow the same rule one level down: a term nobody computed
+        // or requested is absent, never a zero-filled vector or a fabricated
+        // 0.0 that a consumer could read as a computed contribution.
         if (result.properties->totalGradient.has_value())
         {
             const auto& total = *result.properties->totalGradient;
@@ -371,6 +371,11 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                  {"coulomb", total.terms.coulomb},
                                  {"exchange", total.terms.exchange},
                                  {"response", total.terms.response}};
+
+            if (total.terms.xc.has_value())
+            {
+                terms["xc"] = *total.terms.xc;
+            }
 
             if (total.terms.dispersion.has_value())
             {
@@ -442,12 +447,19 @@ std::string SerializeRunResultJson(const RunResult& result) {
     }
 
     // The symmetry-blocking disclosure (schema 32): the guard's decision
-    // per spin channel, beside the labeling blocks it qualifies. The key is
-    // written when EITHER channel disclosed anything, and a channel that did
-    // not disclose is null inside it - never a fabricated kUsed, and never a
-    // fabricated kNotRequested either: a run that never asked carries no
-    // block at all, which is the statement.
-    if (result.symmetryBlockingAlpha.has_value() || result.symmetryBlockingBeta.has_value())
+    // beside the labeling blocks it qualifies. The restricted path (schema
+    // 47) writes its ONE report as the object's own body - there is no second
+    // channel for a wrapper to disambiguate - while the unrestricted path
+    // keeps the alpha/beta pair, written when EITHER channel disclosed
+    // anything with a channel that did not disclose null inside it - never a
+    // fabricated kUsed, and never a fabricated kNotRequested either: a run
+    // that never asked carries no block at all, which is the statement. One
+    // shape or the other, never both: the single report is the restricted
+    // form, and a result cannot legitimately carry it beside a spin pair.
+    if (result.symmetryBlocking.has_value())
+    {
+        document["symmetry_blocking"] = SerializeSymmetryBlocking(*result.symmetryBlocking);
+    } else if (result.symmetryBlockingAlpha.has_value() || result.symmetryBlockingBeta.has_value())
     {
         document["symmetry_blocking"] =
             nlohmann::json{{"alpha",
@@ -521,6 +533,9 @@ std::string SerializeRunResultJson(const RunResult& result) {
     // see. They are written on every present block, with the arm's own flag
     // as the answer for the builds that did not arm it - the
     // `certified_bound` rule, and the reason none of the seven is omitted.
+    // The near-field lane (schema 47) is written on every present block for
+    // the same reason: `false` states the lane is off (or the preset's gate),
+    // so a consumer never infers the lane's state from an absent key.
     if (result.qfmmModel.has_value())
     {
         const auto& model = *result.qfmmModel;
@@ -535,7 +550,8 @@ std::string SerializeRunResultJson(const RunResult& result) {
                            {"geometric_far_pair_count", model.geometricFarPairCount},
                            {"pairs_moved_to_near_field", model.pairsMovedToNearField},
                            {"fell_through_to_cap", model.fellThroughToCap},
-                           {"worst_truncation_bound", model.worstTruncationBound}};
+                           {"worst_truncation_bound", model.worstTruncationBound},
+                           {"certified_near_field_lane", model.certifiedNearFieldLane}};
     }
 
     // The resources_resolved block: the caps the run applied and the
