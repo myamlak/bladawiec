@@ -765,6 +765,9 @@ std::optional<Eigen::MatrixXd> ExpectedFixedDensityHessian(
     const excgrid::GridDerivativeProvider& provider,
     const Eigen::MatrixXd& densityAlpha,
     const Eigen::MatrixXd& densityBeta,
+    // partial is the pin's scale and atomCount the size of the coordinate block;
+    // the call site reads them in that order.
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
     double partial,
     std::size_t atomCount,
     std::span<const std::size_t> atomOfAo) {
