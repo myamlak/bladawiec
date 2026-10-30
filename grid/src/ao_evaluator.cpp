@@ -57,9 +57,12 @@ std::size_t FunctionCount(int angularMomentum, bool isSpherical) {
 
 // The termwise derivatives of one monomial c * x^ix y^iy z^iz: d/dx is
 // c * ix * x^(ix-1) y^iy z^iz, zero when the exponent is zero, and the
-// second derivatives repeat the rule (c * ix * (ix-1) * x^(ix-2) ...).
-// The accumulators cover the symmetric Hessian entries in the
-// (xx, xy, xz, yy, yz, zz) order the derivative evaluator writes.
+// second and third derivatives repeat the rule (c * ix * (ix-1) *
+// x^(ix-2) ...).  The accumulators cover the symmetric Hessian entries in
+// the (xx, xy, xz, yy, yz, zz) order and the fully symmetric third
+// derivatives in the (xxx, xxy, xxz, xyy, xyz, xzz, yyy, yyz, yzz, zzz)
+// order the derivative evaluator writes; the third-order slots stay zero
+// unless DifferentiateMonomialToThird fills them.
 struct MonomialDerivatives {
     double gx = 0.0;
     double gy = 0.0;
@@ -70,6 +73,16 @@ struct MonomialDerivatives {
     double hyy = 0.0;
     double hyz = 0.0;
     double hzz = 0.0;
+    double xxx = 0.0;
+    double xxy = 0.0;
+    double xxz = 0.0;
+    double xyy = 0.0;
+    double xyz = 0.0;
+    double xzz = 0.0;
+    double yyy = 0.0;
+    double yyz = 0.0;
+    double yzz = 0.0;
+    double zzz = 0.0;
 
     MonomialDerivatives& operator+=(const MonomialDerivatives& other) {
         gx += other.gx;
@@ -81,6 +94,29 @@ struct MonomialDerivatives {
         hyy += other.hyy;
         hyz += other.hyz;
         hzz += other.hzz;
+        return *this;
+    }
+
+    // The same addition for one tier: the third-order slots are touched only
+    // where that tier computes them, so the gradient and Hessian tiers
+    // accumulate exactly what they accumulated before the third tier existed.
+    template <bool kThirds> MonomialDerivatives& Accumulate(const MonomialDerivatives& other) {
+        *this += other;
+
+        if constexpr (kThirds)
+        {
+            xxx += other.xxx;
+            xxy += other.xxy;
+            xxz += other.xxz;
+            xyy += other.xyy;
+            xyz += other.xyz;
+            xzz += other.xzz;
+            yyy += other.yyy;
+            yyz += other.yyz;
+            yzz += other.yzz;
+            zzz += other.zzz;
+        }
+
         return *this;
     }
 };
@@ -143,6 +179,110 @@ MonomialDerivatives DifferentiateMonomial(
         {
             result.hzz = static_cast<double>(iz * (iz - 1)) * coefficient * powX[ix] * powY[iy] *
                          powZ[iz - 2];
+        }
+    }
+
+    return result;
+}
+
+// The third-order sibling of DifferentiateMonomial: the same termwise rule
+// one order further, into the ten distinct third derivatives.  It duplicates
+// no lower-order term - DifferentiateMonomial supplies those, so the gradient
+// and Hessian entries are the ones the cheaper tiers compute.
+MonomialDerivatives DifferentiateMonomialToThird(
+    double coefficient,
+    std::size_t ix,
+    std::size_t iy,
+    std::size_t iz,
+    const std::array<double, internal::kMaxSolidHarmonicL + 1>& powX,
+    const std::array<double, internal::kMaxSolidHarmonicL + 1>& powY,
+    const std::array<double, internal::kMaxSolidHarmonicL + 1>& powZ) {
+    MonomialDerivatives result = DifferentiateMonomial(coefficient, ix, iy, iz, powX, powY, powZ);
+
+    if (ix > 0)
+    {
+        if (ix > 1)
+        {
+            if (ix > 2)
+            {
+                result.xxx = static_cast<double>(ix * (ix - 1) * (ix - 2)) * coefficient *
+                             powX[ix - 3] * powY[iy] * powZ[iz];
+            }
+
+            if (iy > 0)
+            {
+                result.xxy = static_cast<double>(ix * (ix - 1) * iy) * coefficient * powX[ix - 2] *
+                             powY[iy - 1] * powZ[iz];
+            }
+
+            if (iz > 0)
+            {
+                result.xxz = static_cast<double>(ix * (ix - 1) * iz) * coefficient * powX[ix - 2] *
+                             powY[iy] * powZ[iz - 1];
+            }
+        }
+
+        if (iy > 0)
+        {
+            if (iy > 1)
+            {
+                result.xyy = static_cast<double>(ix * iy * (iy - 1)) * coefficient * powX[ix - 1] *
+                             powY[iy - 2] * powZ[iz];
+            }
+
+            if (iz > 0)
+            {
+                result.xyz = static_cast<double>(ix * iy * iz) * coefficient * powX[ix - 1] *
+                             powY[iy - 1] * powZ[iz - 1];
+            }
+        }
+
+        if (iz > 0)
+        {
+            if (iz > 1)
+            {
+                result.xzz = static_cast<double>(ix * iz * (iz - 1)) * coefficient * powX[ix - 1] *
+                             powY[iy] * powZ[iz - 2];
+            }
+        }
+    }
+
+    if (iy > 0)
+    {
+        if (iy > 1)
+        {
+            if (iy > 2)
+            {
+                result.yyy = static_cast<double>(iy * (iy - 1) * (iy - 2)) * coefficient *
+                             powX[ix] * powY[iy - 3] * powZ[iz];
+            }
+
+            if (iz > 0)
+            {
+                result.yyz = static_cast<double>(iy * (iy - 1) * iz) * coefficient * powX[ix] *
+                             powY[iy - 2] * powZ[iz - 1];
+            }
+        }
+
+        if (iz > 0)
+        {
+            if (iz > 1)
+            {
+                result.yzz = static_cast<double>(iy * iz * (iz - 1)) * coefficient * powX[ix] *
+                             powY[iy - 1] * powZ[iz - 2];
+            }
+        }
+    }
+
+    if (iz > 0)
+    {
+        if (iz > 1)
+        {
+            if (iz > 2)
+            {
+                result.zzz = static_cast<double>(iz * (iz - 1) * (iz - 2)) * coefficient *
+                             powX[ix] * powY[iy] * powZ[iz - 3];
+            }
         }
     }
 
@@ -363,16 +503,19 @@ void AoEvaluator::FillAngular(const ShellData& shell,
     }
 }
 
-template <bool kHessians>
+template <auto kTier>
 void AoEvaluator::FillAngularDerivativesTier(
     const ShellData& shell,
     const std::array<double, 3>& delta,
-    // (gradients, hessians) are the per-function gradient
-    // and Hessian output spans - 3 and 6 slots per function.
+    // (gradients, hessians, thirds) are the per-function derivative output
+    // spans - 3, 6 and 10 slots per function.
     //
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
     std::span<double> gradients,
-    std::span<double> hessians) {
+    std::span<double> hessians,
+    std::span<double> thirds) {
+    constexpr bool kHessians = kTier != DerivativeTier::kGradients;
+    constexpr bool kThirds = kTier == DerivativeTier::kThirds;
     const double x = delta[0];
     const double y = delta[1];
     const double z = delta[2];
@@ -408,7 +551,34 @@ void AoEvaluator::FillAngularDerivativesTier(
             hessians[6 * function + 4] = derivatives.hyz;
             hessians[6 * function + 5] = derivatives.hzz;
         }
+
+        if constexpr (kThirds)
+        {
+            thirds[10 * function + 0] = derivatives.xxx;
+            thirds[10 * function + 1] = derivatives.xxy;
+            thirds[10 * function + 2] = derivatives.xxz;
+            thirds[10 * function + 3] = derivatives.xyy;
+            thirds[10 * function + 4] = derivatives.xyz;
+            thirds[10 * function + 5] = derivatives.xzz;
+            thirds[10 * function + 6] = derivatives.yyy;
+            thirds[10 * function + 7] = derivatives.yyz;
+            thirds[10 * function + 8] = derivatives.yzz;
+            thirds[10 * function + 9] = derivatives.zzz;
+        }
     };
+
+    // The third tier differentiates each monomial one order further; the
+    // cheaper tiers call the function they called before.
+    const auto differentiate =
+        [&](double coefficient, std::size_t ix, std::size_t iy, std::size_t iz) {
+            if constexpr (kThirds)
+            {
+                return DifferentiateMonomialToThird(coefficient, ix, iy, iz, powX, powY, powZ);
+            } else
+            {
+                return DifferentiateMonomial(coefficient, ix, iy, iz, powX, powY, powZ);
+            }
+        };
 
     if (!shell.isSpherical)
     {
@@ -422,13 +592,10 @@ void AoEvaluator::FillAngularDerivativesTier(
             {
                 const int c = l - a - b;
                 write(function,
-                      DifferentiateMonomial(1.0,
-                                            static_cast<std::size_t>(a),
-                                            static_cast<std::size_t>(b),
-                                            static_cast<std::size_t>(c),
-                                            powX,
-                                            powY,
-                                            powZ));
+                      differentiate(1.0,
+                                    static_cast<std::size_t>(a),
+                                    static_cast<std::size_t>(b),
+                                    static_cast<std::size_t>(c)));
                 ++function;
             }
         }
@@ -450,27 +617,35 @@ void AoEvaluator::FillAngularDerivativesTier(
         for (std::size_t i = 0; i < row.count; ++i)
         {
             const internal::SolidHarmonicTerm& term = internal::kSolidHarmonicTerms[row.offset + i];
-            derivatives += DifferentiateMonomial(
-                term.coefficient, term.ix, term.iy, term.iz, powX, powY, powZ);
+            derivatives.Accumulate<kThirds>(
+                differentiate(term.coefficient, term.ix, term.iy, term.iz));
         }
 
         write(m, derivatives);
     }
 }
 
-template <bool kHessians>
+template <auto kTier>
 void AoEvaluator::EvaluateDerivativesTier(const std::array<double, 3>& pointBohr,
                                           std::span<const std::size_t> selection,
                                           std::span<double> values,
                                           std::span<double> gradients,
-                                          std::span<double> hessians) const {
+                                          std::span<double> hessians,
+                                          std::span<double> thirds) const {
+    constexpr bool kHessians = kTier != DerivativeTier::kGradients;
+    constexpr bool kThirds = kTier == DerivativeTier::kThirds;
+
     // Scratch for one shell's angular factors and their derivatives
-    // (max 28 functions per shell, 3 + 6 derivative slots per function).
+    // (max 28 functions per shell, 3 + 6 + 10 derivative slots per function).
+    // The third block is one element wide in the cheaper tiers, which neither
+    // fill nor read it, so they do not zero a buffer they never use.
     constexpr std::size_t kMaxGradientSlots = std::size_t{3} * 28;
     constexpr std::size_t kMaxHessianSlots = std::size_t{6} * 28;
+    constexpr std::size_t kThirdScratch = kThirds ? std::size_t{10} * 28 : 1;
     std::array<double, 28> angular{};
     std::array<double, kMaxGradientSlots> angularGradients{};
     std::array<double, kMaxHessianSlots> angularHessians{};
+    std::array<double, kThirdScratch> angularThirds{};
 
     for (const std::size_t shellIndex : selection)
     {
@@ -481,36 +656,45 @@ void AoEvaluator::EvaluateDerivativesTier(const std::array<double, 3>& pointBohr
         const double r2 = delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2];
 
         FillAngular(shell, delta, angular);
-        FillAngularDerivativesTier<kHessians>(shell, delta, angularGradients, angularHessians);
+        FillAngularDerivativesTier<kTier>(
+            shell, delta, angularGradients, angularHessians, angularThirds);
 
         std::span<double> valueBlock = values.subspan(shell.aoOffset);
         std::span<double> gradientBlock = gradients.subspan(shell.aoOffset * 3);
-        // Left empty by the gradient tier, which passes no hessian span at
-        // all: a subspan of an empty span would be out of range, and the
-        // hessian writes below are compiled out for that tier anyway.
+        // Left empty by the tiers above the one asked for, which pass no
+        // such span at all: a subspan of an empty span would be out of range,
+        // and the writes below are compiled out for those tiers anyway.
         [[maybe_unused]] std::span<double> hessianBlock;
+        [[maybe_unused]] std::span<double> thirdBlock;
 
         if constexpr (kHessians)
         {
             hessianBlock = hessians.subspan(shell.aoOffset * 6);
         }
 
+        if constexpr (kThirds)
+        {
+            thirdBlock = thirds.subspan(shell.aoOffset * 10);
+        }
+
         // The angular factors are shared by every contraction of the
         // shell; each contraction contributes functionCount AOs with its
         // own contracted radial part.  With R the contracted radial
         // factor, its derivatives are analytic per primitive
-        // (e^{-zeta r2} is computed once, then the 1 + 3 + 6 factors):
+        // (e^{-zeta r2} is computed once, then the 1 + 3 + 6 + 10 factors):
         //     grad R = -2 sum_i d_i N_l zeta_i e^{-zeta_i r2} Delta
         //     (H_R)_jk = sum_i d_i N_l e^{-zeta_i r2}
         //                (4 zeta_i^2 Delta_j Delta_k - 2 zeta_i delta_jk)
         // so, with phi = S R,
         //     grad phi = R grad S + S grad R
-        //     H_phi = R H_S + gradS gradR^T + gradR gradS^T + S H_R.
+        //     H_phi = R H_S + gradS gradR^T + gradR gradS^T + S H_R
+        // and the third derivative by one more differentiation of that line.
         for (std::size_t c = 0; c < shell.contractions.size(); ++c)
         {
             double radial = 0.0;
             std::array<double, 3> gradR{};
             [[maybe_unused]] std::array<double, 6> hessR{};
+            [[maybe_unused]] std::array<double, 10> thirdR{};
 
             for (const Primitive& primitive : shell.contractions[c].primitives)
             {
@@ -531,6 +715,31 @@ void AoEvaluator::EvaluateDerivativesTier(const std::array<double, 3>& pointBohr
                     hessR[3] += factor * (fourZ2 * delta[1] * delta[1] - twoZ);
                     hessR[4] += factor * fourZ2 * delta[1] * delta[2];
                     hessR[5] += factor * (fourZ2 * delta[2] * delta[2] - twoZ);
+                }
+
+                // One differentiation of the Hessian line, for
+                // f = N_l(zeta) exp(-zeta r2) and Delta = x - R_A:
+                //     d3_abc f = f [4 zeta^2 (delta_ab Delta_c
+                //                              + delta_ac Delta_b
+                //                              + delta_bc Delta_a)
+                //                   - 8 zeta^3 Delta_a Delta_b Delta_c],
+                // written out in the packed third-derivative order.
+                if constexpr (kThirds)
+                {
+                    const double x = delta[0];
+                    const double y = delta[1];
+                    const double z = delta[2];
+                    const double eightZ3 = twoZ * fourZ2;
+                    thirdR[0] += factor * (3.0 * fourZ2 * x - eightZ3 * x * x * x);
+                    thirdR[1] += factor * (fourZ2 * y - eightZ3 * x * x * y);
+                    thirdR[2] += factor * (fourZ2 * z - eightZ3 * x * x * z);
+                    thirdR[3] += factor * (fourZ2 * x - eightZ3 * x * y * y);
+                    thirdR[4] += factor * (-eightZ3 * x * y * z);
+                    thirdR[5] += factor * (fourZ2 * x - eightZ3 * x * z * z);
+                    thirdR[6] += factor * (3.0 * fourZ2 * y - eightZ3 * y * y * y);
+                    thirdR[7] += factor * (fourZ2 * z - eightZ3 * y * y * z);
+                    thirdR[8] += factor * (fourZ2 * y - eightZ3 * y * z * z);
+                    thirdR[9] += factor * (3.0 * fourZ2 * z - eightZ3 * z * z * z);
                 }
             }
 
@@ -567,6 +776,45 @@ void AoEvaluator::EvaluateDerivativesTier(const std::array<double, 3>& pointBohr
                     hessianBlock[h + 4] =
                         radial * hs4 + gs1 * gradR[2] + gs2 * gradR[1] + s * hessR[4];
                     hessianBlock[h + 5] = radial * hs5 + 2.0 * gs2 * gradR[2] + s * hessR[5];
+
+                    // The product rule one order further: R and S each carry a
+                    // third derivative, and every pairing of their lower
+                    // orders contributes one cross term.
+                    if constexpr (kThirds)
+                    {
+                        const double ts0 = angularThirds[10 * i + 0];
+                        const double ts1 = angularThirds[10 * i + 1];
+                        const double ts2 = angularThirds[10 * i + 2];
+                        const double ts3 = angularThirds[10 * i + 3];
+                        const double ts4 = angularThirds[10 * i + 4];
+                        const double ts5 = angularThirds[10 * i + 5];
+                        const double ts6 = angularThirds[10 * i + 6];
+                        const double ts7 = angularThirds[10 * i + 7];
+                        const double ts8 = angularThirds[10 * i + 8];
+                        const double ts9 = angularThirds[10 * i + 9];
+                        const std::size_t t = (offset + i) * 10;
+                        thirdBlock[t + 0] = radial * ts0 + 3.0 * gradR[0] * hs0 +
+                                            3.0 * gs0 * hessR[0] + s * thirdR[0];
+                        thirdBlock[t + 1] = radial * ts1 + gradR[1] * hs0 + 2.0 * gradR[0] * hs1 +
+                                            2.0 * gs0 * hessR[1] + gs1 * hessR[0] + s * thirdR[1];
+                        thirdBlock[t + 2] = radial * ts2 + gradR[2] * hs0 + 2.0 * gradR[0] * hs2 +
+                                            2.0 * gs0 * hessR[2] + gs2 * hessR[0] + s * thirdR[2];
+                        thirdBlock[t + 3] = radial * ts3 + 2.0 * gradR[1] * hs1 + gradR[0] * hs3 +
+                                            gs0 * hessR[3] + 2.0 * gs1 * hessR[1] + s * thirdR[3];
+                        thirdBlock[t + 4] = radial * ts4 + gradR[2] * hs1 + gradR[1] * hs2 +
+                                            gradR[0] * hs4 + gs0 * hessR[4] + gs1 * hessR[2] +
+                                            gs2 * hessR[1] + s * thirdR[4];
+                        thirdBlock[t + 5] = radial * ts5 + 2.0 * gradR[2] * hs2 + gradR[0] * hs5 +
+                                            gs0 * hessR[5] + 2.0 * gs2 * hessR[2] + s * thirdR[5];
+                        thirdBlock[t + 6] = radial * ts6 + 3.0 * gradR[1] * hs3 +
+                                            3.0 * gs1 * hessR[3] + s * thirdR[6];
+                        thirdBlock[t + 7] = radial * ts7 + gradR[2] * hs3 + 2.0 * gradR[1] * hs4 +
+                                            2.0 * gs1 * hessR[4] + gs2 * hessR[3] + s * thirdR[7];
+                        thirdBlock[t + 8] = radial * ts8 + 2.0 * gradR[2] * hs4 + gradR[1] * hs5 +
+                                            gs1 * hessR[5] + 2.0 * gs2 * hessR[4] + s * thirdR[8];
+                        thirdBlock[t + 9] = radial * ts9 + 3.0 * gradR[2] * hs5 +
+                                            3.0 * gs2 * hessR[5] + s * thirdR[9];
+                    }
                 }
             }
         }
@@ -583,14 +831,16 @@ void AoEvaluator::EvaluateGradientsSelected(const std::array<double, 3>& pointBo
                                             std::span<const std::size_t> selection,
                                             std::span<double> values,
                                             std::span<double> gradients) const {
-    EvaluateDerivativesTier<false>(pointBohr, selection, values, gradients, {});
+    EvaluateDerivativesTier<DerivativeTier::kGradients>(
+        pointBohr, selection, values, gradients, {}, {});
 }
 
 void AoEvaluator::EvaluateDerivatives(const std::array<double, 3>& pointBohr,
                                       std::span<double> values,
                                       std::span<double> gradients,
                                       std::span<double> hessians) const {
-    EvaluateDerivativesTier<true>(pointBohr, _allShells, values, gradients, hessians);
+    EvaluateDerivativesTier<DerivativeTier::kHessians>(
+        pointBohr, _allShells, values, gradients, hessians, {});
 }
 
 void AoEvaluator::EvaluateDerivativesSelected(const std::array<double, 3>& pointBohr,
@@ -598,30 +848,70 @@ void AoEvaluator::EvaluateDerivativesSelected(const std::array<double, 3>& point
                                               std::span<double> values,
                                               std::span<double> gradients,
                                               std::span<double> hessians) const {
-    EvaluateDerivativesTier<true>(pointBohr, selection, values, gradients, hessians);
+    EvaluateDerivativesTier<DerivativeTier::kHessians>(
+        pointBohr, selection, values, gradients, hessians, {});
 }
 
-// Both tier definitions live in this translation unit, so both instantiations
-// are emitted here.  The names in an explicit instantiation are not subject to
-// access checking, which is what lets the private ShellData appear in the
-// static one.
-template void AoEvaluator::EvaluateDerivativesTier<true>(const std::array<double, 3>&,
-                                                         std::span<const std::size_t>,
-                                                         std::span<double>,
-                                                         std::span<double>,
-                                                         std::span<double>) const;
-template void AoEvaluator::EvaluateDerivativesTier<false>(const std::array<double, 3>&,
-                                                          std::span<const std::size_t>,
-                                                          std::span<double>,
-                                                          std::span<double>,
-                                                          std::span<double>) const;
-template void AoEvaluator::FillAngularDerivativesTier<true>(const AoEvaluator::ShellData&,
-                                                            const std::array<double, 3>&,
-                                                            std::span<double>,
-                                                            std::span<double>);
-template void AoEvaluator::FillAngularDerivativesTier<false>(const AoEvaluator::ShellData&,
-                                                             const std::array<double, 3>&,
-                                                             std::span<double>,
-                                                             std::span<double>);
+void AoEvaluator::EvaluateDerivativesToThird(const std::array<double, 3>& pointBohr,
+                                             std::span<double> values,
+                                             std::span<double> gradients,
+                                             std::span<double> hessians,
+                                             std::span<double> thirds) const {
+    EvaluateDerivativesToThirdSelected(pointBohr, _allShells, values, gradients, hessians, thirds);
+}
+
+void AoEvaluator::EvaluateDerivativesToThirdSelected(const std::array<double, 3>& pointBohr,
+                                                     std::span<const std::size_t> selection,
+                                                     std::span<double> values,
+                                                     std::span<double> gradients,
+                                                     std::span<double> hessians,
+                                                     std::span<double> thirds) const {
+    EvaluateDerivativesTier<DerivativeTier::kThirds>(
+        pointBohr, selection, values, gradients, hessians, thirds);
+}
+
+// The tier definitions live in this translation unit, so every instantiation
+// is emitted here.  The names in an explicit instantiation are not subject to
+// access checking, which is what lets the private ShellData and the private
+// DerivativeTier appear in them.
+template void AoEvaluator::EvaluateDerivativesTier<AoEvaluator::DerivativeTier::kGradients>(
+    const std::array<double, 3>&,
+    std::span<const std::size_t>,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>) const;
+template void AoEvaluator::EvaluateDerivativesTier<AoEvaluator::DerivativeTier::kHessians>(
+    const std::array<double, 3>&,
+    std::span<const std::size_t>,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>) const;
+template void AoEvaluator::EvaluateDerivativesTier<AoEvaluator::DerivativeTier::kThirds>(
+    const std::array<double, 3>&,
+    std::span<const std::size_t>,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>) const;
+template void AoEvaluator::FillAngularDerivativesTier<AoEvaluator::DerivativeTier::kGradients>(
+    const AoEvaluator::ShellData&,
+    const std::array<double, 3>&,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>);
+template void AoEvaluator::FillAngularDerivativesTier<AoEvaluator::DerivativeTier::kHessians>(
+    const AoEvaluator::ShellData&,
+    const std::array<double, 3>&,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>);
+template void AoEvaluator::FillAngularDerivativesTier<AoEvaluator::DerivativeTier::kThirds>(
+    const AoEvaluator::ShellData&,
+    const std::array<double, 3>&,
+    std::span<double>,
+    std::span<double>,
+    std::span<double>);
 
 } // namespace qcx::grid

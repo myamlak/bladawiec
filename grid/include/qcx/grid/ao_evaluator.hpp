@@ -154,6 +154,49 @@ public:
                                      std::span<double> gradients,
                                      std::span<double> hessians) const;
 
+    /// Fills \p values, \p gradients, \p hessians and \p thirds with every AO
+    /// and its first, second and third derivatives at \p pointBohr (Bohr).
+    ///
+    /// One pass writes all four tiers: the third derivative's product rule
+    /// mixes the value, gradient and Hessian of the same shell at the same
+    /// point.  A consumer that stops at the Hessian calls
+    /// EvaluateDerivatives and pays for no third-order arithmetic.
+    /// \param pointBohr The evaluation point, in Bohr.
+    /// \param values size AOCount(); overwritten with phi_mu.
+    /// \param gradients size 3 * AOCount(); overwritten with dphi/dx,
+    /// dphi/dy, dphi/dz per AO, mu-major (each 3-vector contiguous).
+    /// \param hessians size 6 * AOCount(); overwritten with the symmetric
+    /// Hessian entries d2phi/dx2, dxdy, dxdz, dy2, dydz, dz2 per AO,
+    /// mu-major.
+    /// \param thirds size 10 * AOCount(); overwritten with the fully
+    /// symmetric third derivatives d3phi/dx3, dx2dy, dx2dz, dxdy2, dxdydz,
+    /// dxdz2, dy3, dy2dz, dydz2, dz3 per AO, mu-major.
+    void EvaluateDerivativesToThird(const std::array<double, 3>& pointBohr,
+                                    std::span<double> values,
+                                    std::span<double> gradients,
+                                    std::span<double> hessians,
+                                    std::span<double> thirds) const;
+
+    /// Fills \p values, \p gradients, \p hessians and \p thirds for the
+    /// shells named by \p selection.
+    ///
+    /// The screened form of EvaluateDerivativesToThird, with the same
+    /// contract on the untouched slots: a caller reads only the selected
+    /// ranges.  The span sizes are still AOCount(), 3 * AOCount(),
+    /// 6 * AOCount() and 10 * AOCount().
+    /// \param pointBohr The evaluation point, in Bohr.
+    /// \param selection Shell indices into ShellRanges(), in any order.
+    /// \param values Size AOCount(); the selected ranges are overwritten.
+    /// \param gradients Size 3 * AOCount(); the selected ranges are overwritten.
+    /// \param hessians Size 6 * AOCount(); the selected ranges are overwritten.
+    /// \param thirds Size 10 * AOCount(); the selected ranges are overwritten.
+    void EvaluateDerivativesToThirdSelected(const std::array<double, 3>& pointBohr,
+                                            std::span<const std::size_t> selection,
+                                            std::span<double> values,
+                                            std::span<double> gradients,
+                                            std::span<double> hessians,
+                                            std::span<double> thirds) const;
+
 private:
     struct Primitive {
         double exponent;
@@ -192,27 +235,42 @@ private:
                             const std::array<double, 3>& delta,
                             std::span<double> block);
 
+    /// The derivative depth one per-point evaluation computes.
+    ///
+    /// A compile-time tier: a consumer that asks for values and gradients
+    /// emits no second- or third-order arithmetic.
+    enum class DerivativeTier {
+        kGradients, ///< Values and first derivatives.
+        kHessians, ///< ... and the six second derivatives.
+        kThirds, ///< ... and the ten third derivatives.
+    };
+
     // The shared per-point evaluation, tier-selected at COMPILE time so a
-    // gradient-only consumer never pays for the second derivatives: when
-    // kHessians is false the hessian slots are neither computed nor written.
-    // Defined in the translation unit, instantiated there for both tiers.
-    template <bool kHessians>
+    // gradient-only consumer never pays for the deeper tiers: a tier computes
+    // nothing and writes nothing beyond its own depth.  The tier travels as
+    // `auto` so an out-of-line definition need not name the private
+    // enumerator ahead of its own declarator.  Defined in the translation
+    // unit, instantiated there for all three tiers.
+    template <auto kTier>
     void EvaluateDerivativesTier(const std::array<double, 3>& pointBohr,
                                  std::span<const std::size_t> selection,
                                  std::span<double> values,
                                  std::span<double> gradients,
-                                 std::span<double> hessians) const;
+                                 std::span<double> hessians,
+                                 std::span<double> thirds) const;
 
-    // First and second derivatives of the same angular factors (termwise
-    // monomial differentiation of the solid-harmonic rows), written into
-    // the shell's derivative blocks in the same function order: 3 entries
-    // per function into \p gradients, 6 (xx, xy, xz, yy, yz, zz) into
-    // \p hessians, which is untouched when kHessians is false.
-    template <bool kHessians>
+    // First, second and third derivatives of the same angular factors
+    // (termwise monomial differentiation of the solid-harmonic rows), written
+    // into the shell's derivative blocks in the same function order: 3
+    // entries per function into \p gradients, 6 (xx, xy, xz, yy, yz, zz) into
+    // \p hessians and 10 (xxx, xxy, xxz, xyy, xyz, xzz, yyy, yyz, yzz, zzz)
+    // into \p thirds; a block deeper than the tier is untouched.
+    template <auto kTier>
     static void FillAngularDerivativesTier(const ShellData& shell,
                                            const std::array<double, 3>& delta,
                                            std::span<double> gradients,
-                                           std::span<double> hessians);
+                                           std::span<double> hessians,
+                                           std::span<double> thirds);
 
     std::vector<ShellData> _shells;
     std::vector<ShellRange> _shellRanges;

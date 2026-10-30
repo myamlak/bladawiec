@@ -509,6 +509,185 @@ void AccumulateOrbitalMotion(std::span<double> gradient,
     }
 }
 
+// The components whose second total response this walk carries: the two spin
+// densities. The sigma invariants and the kinetic-energy densities need one
+// more x derivative of every AO through their own second response - the
+// third-derivative tier the evaluator does not supply - so a functional that
+// reads one of them is refused rather than answered with the density channel.
+bool IsDensityComponent(excgrid::Component id) noexcept {
+    return id == excgrid::Component::RhoA || id == excgrid::Component::RhoB;
+}
+
+// The spin a density component names: 0 alpha, 1 beta. Only the two identifiers
+// the density channel accepts reach it.
+std::size_t SpinOfDensity(excgrid::Component id) noexcept {
+    return id == excgrid::Component::RhoA ? 0U : 1U;
+}
+
+// A mask's component names, in identifier order, so a refusal names what it
+// could not answer for rather than saying that something is missing.
+std::string MaskComponentNames(const excgrid::ComponentMask& mask) {
+    std::string names;
+
+    for (std::size_t index = 0; index < excgrid::kComponentCapacity; ++index)
+    {
+        const auto id = static_cast<excgrid::Component>(index);
+
+        if (!mask.Test(id))
+        {
+            continue;
+        }
+
+        if (!names.empty())
+        {
+            names += ", ";
+        }
+
+        names += std::string(excgrid::Describe(id).name);
+    }
+
+    return names;
+}
+
+// The refusal the electronic channel owes before the walk starts, or an empty
+// string when it can answer.
+//
+// A functional that reads nothing has no second response to take and is
+// answered by the weight terms alone. One that reads past the two densities is
+// refused by name: its sigma or tau second response differentiates the AO
+// Hessian once more, and answering it with the density channel alone would be a
+// plausible wrong number rather than a refusal. One that reads only the
+// densities but declares no second-derivative tier is refused too, because the
+// tier is how a functional says which components it can be differentiated twice
+// in.
+std::string ChannelRefusal(const excgrid::XcFunctional& functional) {
+    const excgrid::ComponentMask required = functional.RequiredMask();
+
+    if (required.bits == 0)
+    {
+        return {};
+    }
+
+    excgrid::ComponentMask outside;
+
+    for (std::size_t index = 0; index < excgrid::kComponentCapacity; ++index)
+    {
+        const auto id = static_cast<excgrid::Component>(index);
+
+        if (required.Test(id) && !IsDensityComponent(id))
+        {
+            outside.Set(id);
+        }
+    }
+
+    if (outside.bits != 0)
+    {
+        return "the density channel does not span " + MaskComponentNames(outside) +
+               ": their second response needs the third-derivative AO tier";
+    }
+
+    const excgrid::KernelStatus status =
+        excgrid::SecondDerivativeStatus(required, required, functional.SecondDerivativeMask());
+
+    if (status == excgrid::KernelStatus::kRefusedUnsupportedCapability)
+    {
+        return "the functional declares no second-derivative tier";
+    }
+
+    if (status == excgrid::KernelStatus::kRefusedSecondDerivativeCoverage)
+    {
+        return "the functional's second-derivative tier does not span " +
+               MaskComponentNames(excgrid::UnspannedRequestComponents(
+                   required, required, functional.SecondDerivativeMask()));
+    }
+
+    return {};
+}
+
+// The density's second-order orbital partials at a point, per atom:
+//     U_A[a][b] = sum_{mu in A} (D phi)_mu hess phi_mu[a][b]
+//     R_A[b][mu] = sum_{nu in A} D_mu nu d_b phi_nu .
+// U is the curvature's density half. R is the blocked gradient contraction: the
+// density's second response pairs two atoms, pairing needs the contraction's
+// two slots on different atoms, and the block keeps B's contribution to every
+// mu rather than summing it away.
+//
+// Only the kept atoms and the kept slots are ever read, so only they are
+// cleared.
+struct SecondOrderSums {
+    std::vector<std::array<double, 9>> curvature;
+    std::vector<double> blocked;
+    std::size_t aoCount = 0;
+
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    SecondOrderSums(std::size_t atomCount, std::size_t aos) :
+        curvature(atomCount, std::array<double, 9>{}), blocked(atomCount * 3 * aos, 0.0),
+        aoCount(aos) {}
+
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    [[nodiscard]] double& Blocked(std::size_t atom,
+                                  std::size_t direction,
+                                  std::size_t ao) noexcept {
+        return blocked[(atom * 3 + direction) * aoCount + ao];
+    }
+
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    [[nodiscard]] double Blocked(std::size_t atom,
+                                 std::size_t direction,
+                                 std::size_t ao) const noexcept {
+        return blocked[(atom * 3 + direction) * aoCount + ao];
+    }
+};
+
+void ClearSecondOrderSums(SecondOrderSums& sums,
+                          const AoSlice& aos,
+                          std::span<const std::size_t> keptAtoms) noexcept {
+    for (const std::size_t atom : keptAtoms)
+    {
+        sums.curvature[atom] = std::array<double, 9>{};
+
+        for (std::size_t direction = 0; direction < 3; ++direction)
+        {
+            for (const std::size_t ao : aos.selectedAos)
+            {
+                sums.Blocked(atom, direction, ao) = 0.0;
+            }
+        }
+    }
+}
+
+// Fills one spin's second-order partials from the point's slice and the
+// contractions its density field was built from. The contracted gradient is
+// blocked by the atom its second slot sits on, so the pair term reads one
+// block per atom instead of a point-sized pair array.
+void AccumulateSecondOrderSums(SecondOrderSums& sums,
+                               const AoSlice& aos,
+                               const PointContractions& contractions,
+                               const Eigen::MatrixXd& density,
+                               std::span<const std::size_t> atomOfAo) {
+    for (const std::size_t mu : aos.selectedAos)
+    {
+        const std::size_t atom = atomOfAo[mu];
+        const double value = contractions.value[mu];
+        const std::array<double, 9> curvature = ExpandHessian(aos.hessians, mu);
+
+        for (std::size_t entry = 0; entry < 9; ++entry)
+        {
+            sums.curvature[atom][entry] += value * curvature[entry];
+        }
+
+        for (std::size_t direction = 0; direction < 3; ++direction)
+        {
+            for (const std::size_t nu : aos.selectedAos)
+            {
+                sums.Blocked(atomOfAo[nu], direction, mu) +=
+                    density(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu)) *
+                    aos.gradients[3 * nu + direction];
+            }
+        }
+    }
+}
+
 } // namespace
 
 qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
@@ -931,6 +1110,15 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                            ": the grid derivative provider must supply second-order derivatives"});
     }
 
+    // The channel's own refusal, before any allocation: a functional whose
+    // second response this walk cannot take is named here rather than answered
+    // with part of one.
+    if (const std::string refusal = ChannelRefusal(functional); !refusal.empty())
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kUnimplemented, std::string(operation) + ": " + refusal});
+    }
+
     auto atomOfAo = BuildAtomOfAo(operation, envelopes, evaluator.AOCount());
 
     if (!atomOfAo.has_value())
@@ -967,13 +1155,20 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     evaluation.hessian = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(nuclearCoordinateCount),
                                                static_cast<Eigen::Index>(nuclearCoordinateCount));
 
-    // The flags that decide what the walk fetches are the gradient walk's, from
-    // the same functional, so the two walks read the same tier at every point.
+    // What the functional reads decides both what the walk fetches and which
+    // second response it owes. The rho fields' second response is expressible
+    // with the value, gradient and Hessian tiers the evaluator already supplies,
+    // so a functional that reads a density runs the electronic channel and the
+    // walk fetches the AO Hessian for it even when it reads no density gradient
+    // - a real cost rise against the first-order walk, which the
+    // second-derivative call column makes visible.
     const excgrid::ComponentMask required = functional.RequiredMask();
     const bool usesTau =
         required.Test(excgrid::Component::TauA) || required.Test(excgrid::Component::TauB);
     const bool usesGradient = functional.UsesGradient();
-    const bool needsHessians = usesGradient || usesTau;
+    const bool electronicChannel = required.bits != 0;
+    const bool needsHessians = usesGradient || usesTau || electronicChannel;
+    const bool withSecond = usesGradient || electronicChannel;
 
     const std::size_t aoCount = evaluator.AOCount();
 
@@ -994,6 +1189,43 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     // T_r, the integrand's total first derivative at fixed density: the point's
     // own motion plus the orbitals'.
     std::vector<double> pointMotion(nuclearCoordinateCount);
+
+    // The electronic channel's scratch, reused across the grid. The components
+    // its contraction runs over, in identifier order; G1 and the kernel's
+    // contraction L, both flattened [nuclear coordinate][component]; the
+    // right-hand sides one call carries; H_s X_r, [spin][coordinate][axis]; the
+    // density partials' weighted AO curvature, [atom][row-major 3x3]; and the
+    // kept atoms of the current point.
+    std::vector<excgrid::Component> activeComponents;
+
+    for (std::size_t index = 0; index < excgrid::kComponentCapacity; ++index)
+    {
+        const auto id = static_cast<excgrid::Component>(index);
+
+        if (required.Test(id))
+        {
+            activeComponents.push_back(id);
+        }
+    }
+
+    const std::size_t activeCount = activeComponents.size();
+    // The tier's capacity is shared out between the active components, so one
+    // call carries as many right-hand sides as fit and no more.
+    const std::size_t contractionSides = std::max<std::size_t>(
+        1, excgrid::kSecondDerivativeCapacity / std::max<std::size_t>(activeCount, 1));
+    std::vector<double> firstResponse(nuclearCoordinateCount * activeCount);
+    std::vector<double> curvatureContraction(nuclearCoordinateCount * activeCount);
+    std::vector<double> rightHandSide(contractionSides * activeCount);
+    std::vector<double> curvaturePosition(2 * nuclearCoordinateCount * 3);
+    std::vector<double> curvaturePartial(atomCount * 9);
+    std::vector<std::size_t> keptAtoms(atomCount);
+    std::vector<char> atomKept(atomCount, 0);
+
+    // The density's second-order orbital partials. Sized only when the channel
+    // runs: a constant integrand must not pay for atomCount x AOCount storage it
+    // never reads.
+    SecondOrderSums alphaSecond(electronicChannel ? atomCount : 0, electronicChannel ? aoCount : 0);
+    SecondOrderSums betaSecond(electronicChannel ? atomCount : 0, electronicChannel ? aoCount : 0);
 
     // The provider's buffers, sized once for the largest block, at the order the
     // second derivative needs: the curvature arrays are the whole point of this
@@ -1142,8 +1374,9 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                     std::span<double>(aoGradients.data(), 3 * aoCount));
             }
 
-            // Empty when neither sigma nor tau is read: BuildPointField and the
-            // spin sums must not read a buffer that was never allocated.
+            // Empty when nothing needs it: BuildPointField, the spin sums and
+            // the density channel must not read a buffer that was never
+            // allocated.
             const std::span<const double> hessians =
                 needsHessians ? std::span<const double>(aoHessians.data(), 6 * aoCount)
                               : std::span<const double>();
@@ -1152,29 +1385,70 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                               hessians,
                               std::span<const std::size_t>(selectedAos.data(), selectedAoCount)};
 
+            // The atoms this point kept. The density channel's second response
+            // is accumulated in atom blocks, so this is the list its sums are
+            // cleared and read over; the flags are cleared with it, so the next
+            // point starts from an empty list.
+            std::size_t keptAtomCount = 0;
+
+            if (electronicChannel)
+            {
+                for (const std::size_t ao : aos.selectedAos)
+                {
+                    const std::size_t atom = (*atomOfAo)[ao];
+
+                    if (atomKept[atom] == 0)
+                    {
+                        atomKept[atom] = 1;
+                        keptAtoms[keptAtomCount++] = atom;
+                    }
+                }
+
+                const std::span<const std::size_t> atoms(keptAtoms.data(), keptAtomCount);
+                ClearSecondOrderSums(alphaSecond, aos, atoms);
+                ClearSecondOrderSums(betaSecond, aos, atoms);
+
+                for (std::size_t index = 0; index < keptAtomCount; ++index)
+                {
+                    atomKept[keptAtoms[index]] = 0;
+                }
+            }
+
             const PointField fieldA =
-                BuildPointField(densityAlpha, aos, contractions, usesGradient, usesTau);
+                BuildPointField(densityAlpha, aos, contractions, withSecond, usesTau);
 
             alphaSums.Clear();
             AccumulateSpinSums(alphaSums,
                                aos,
                                contractions,
                                *atomOfAo,
-                               usesGradient,
+                               withSecond,
                                usesTau,
                                evaluation.counts.aoDerivativeTerms);
 
+            if (electronicChannel)
+            {
+                // The contractions still belong to the alpha field, so this
+                // reads them before the beta field overwrites them.
+                AccumulateSecondOrderSums(alphaSecond, aos, contractions, densityAlpha, *atomOfAo);
+            }
+
             const PointField fieldB =
-                BuildPointField(densityBeta, aos, contractions, usesGradient, usesTau);
+                BuildPointField(densityBeta, aos, contractions, withSecond, usesTau);
 
             betaSums.Clear();
             AccumulateSpinSums(betaSums,
                                aos,
                                contractions,
                                *atomOfAo,
-                               usesGradient,
+                               withSecond,
                                usesTau,
                                evaluation.counts.aoDerivativeTerms);
+
+            if (electronicChannel)
+            {
+                AccumulateSecondOrderSums(betaSecond, aos, contractions, densityBeta, *atomOfAo);
+            }
 
             const auto kernel = EvaluateKernel(operation, functional, fieldA, fieldB);
 
@@ -1214,6 +1488,292 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                 }
             }
 
+            // The electronic channel: the integrand's second response at fixed
+            // density. For a functional that reads only the spin densities the
+            // chain rule over the fields is
+            //
+            //     D_qD_r e = sum_i F_i D_qD_r u_i + sum_ij F_ij (D_q u_i)(D_r u_j),
+            //
+            // with u the two densities, F the kernel's partials and
+            //
+            //     D_q u_s = X_q . grad rho_s - 2 P^s_A(q)
+            //
+            // the field's total first response: the point's own motion plus the
+            // orbitals'. The density's second response is
+            //
+            //     D_qD_r rho_s = X_q^T (hess rho_s) X_r - 2 X_q . Q^s_B[b, :]
+            //                    - 2 X_r . Q^s_A[a, :] + 2 C^s_{A,B}[a][b]
+            //                    + 2 U^s[e] on the diagonal atom block,
+            //
+            // where C pairs two atoms and U exists only where they coincide, and
+            // every term is a value, gradient or Hessian tier away, which is why
+            // this channel needs no new AO derivative. The position curvature
+            // X^c_,qr is deliberately absent: the walk's own triangle below
+            // carries it, once, and adding it here would double it.
+            if (electronicChannel)
+            {
+                const std::array<const PointField*, 2> fields = {&fieldA, &fieldB};
+                const std::array<const SpinSums*, 2> spinSums = {&alphaSums, &betaSums};
+                const std::array<const SecondOrderSums*, 2> secondSums = {&alphaSecond,
+                                                                          &betaSecond};
+                // A component the functional does not read has no partial, and
+                // its field is not in G1 either, so zeroing the unused slot is
+                // the same as never reading it.
+                const std::array<double, 2> partials = {
+                    required.Test(excgrid::Component::RhoA) ? kernel->vrhoA : 0.0,
+                    required.Test(excgrid::Component::RhoB) ? kernel->vrhoB : 0.0};
+
+                // G1, one entry per active component per nuclear coordinate.
+                for (std::size_t coordinate = 0; coordinate < nuclearCoordinateCount; ++coordinate)
+                {
+                    const std::size_t atom = coordinate / 3;
+                    const std::size_t direction = coordinate % 3;
+
+                    for (std::size_t slot = 0; slot < activeCount; ++slot)
+                    {
+                        const std::size_t spin = SpinOfDensity(activeComponents[slot]);
+                        const PointField& field = *fields[spin];
+                        double response = -2.0 * (*spinSums[spin]).position[atom][direction];
+
+                        for (std::size_t axis = 0; axis < 3; ++axis)
+                        {
+                            response += positionRow[axis * nuclearCoordinateCount + coordinate] *
+                                        field.gradient[axis];
+                        }
+
+                        firstResponse[coordinate * activeCount + slot] = response;
+                    }
+                }
+
+                // The kernel's curvature, contracted against G1 in chunks the
+                // tier's capacity holds. The inputs carry exactly the required
+                // components: the contraction's width and the right-hand side's
+                // layout are both read from this mask, so a wider one would
+                // misread the right-hand sides.
+                excgrid::PointInputs curvatureInputs;
+
+                for (const excgrid::Component id : activeComponents)
+                {
+                    curvatureInputs.Set(id, fields[SpinOfDensity(id)]->rho);
+                }
+
+                for (std::size_t start = 0; start < nuclearCoordinateCount;
+                     start += contractionSides)
+                {
+                    const std::size_t count =
+                        std::min(contractionSides, nuclearCoordinateCount - start);
+
+                    for (std::size_t side = 0; side < count; ++side)
+                    {
+                        for (std::size_t slot = 0; slot < activeCount; ++slot)
+                        {
+                            rightHandSide[side * activeCount + slot] =
+                                firstResponse[(start + side) * activeCount + slot];
+                        }
+                    }
+
+                    // The result the tier also fills is the kernel value the
+                    // walk already holds, so it is read from nowhere.
+                    excgrid::PointResult redundantResult;
+                    excgrid::PointSecondDerivative contracted;
+                    const excgrid::KernelStatus status =
+                        functional.EvaluatePointWithSecondDerivatives(
+                            curvatureInputs,
+                            std::span<const double>(rightHandSide.data(), count * activeCount),
+                            redundantResult,
+                            contracted);
+
+                    if (status != excgrid::KernelStatus::kOk)
+                    {
+                        return std::unexpected(
+                            qcx::Error{qcx::ErrorCode::kUnimplemented,
+                                       std::string(operation) + ": the functional " +
+                                           std::string(excgrid::DescribeStatus(status))});
+                    }
+
+                    // The refusal above is the functional's; this one is the
+                    // library answering a different question from the one asked,
+                    // which no finite difference would attribute to the kernel.
+                    // The mask is compared whole rather than by its population:
+                    // the contraction's layout is this walk's active order, so a
+                    // different set of the same size would be read wrongly.
+                    if (contracted.mask.bits != curvatureInputs.mask.bits ||
+                        contracted.rightHandSides != count)
+                    {
+                        return std::unexpected(qcx::Error{
+                            qcx::ErrorCode::kInternalError,
+                            std::string(operation) +
+                                ": the second-derivative contraction answered for a different "
+                                "component set or a different right-hand side count"});
+                    }
+
+                    for (std::size_t side = 0; side < count; ++side)
+                    {
+                        for (std::size_t slot = 0; slot < activeCount; ++slot)
+                        {
+                            curvatureContraction[(start + side) * activeCount + slot] =
+                                contracted.contracted[side * activeCount + slot];
+                        }
+                    }
+
+                    ++evaluation.counts.kernelSecondDerivativeCalls;
+                }
+
+                const std::span<const std::size_t> atoms(keptAtoms.data(), keptAtomCount);
+
+                // H_s X_r, per spin and nuclear coordinate: the position part of
+                // the density's second response is one quadratic form in these.
+                for (std::size_t spin = 0; spin < 2; ++spin)
+                {
+                    const PointField& field = *fields[spin];
+                    double* target = curvaturePosition.data() + spin * 3 * nuclearCoordinateCount;
+
+                    for (std::size_t coordinate = 0; coordinate < nuclearCoordinateCount;
+                         ++coordinate)
+                    {
+                        for (std::size_t rowAxis = 0; rowAxis < 3; ++rowAxis)
+                        {
+                            double value = 0.0;
+
+                            for (std::size_t columnAxis = 0; columnAxis < 3; ++columnAxis)
+                            {
+                                value +=
+                                    field.second[3 * rowAxis + columnAxis] *
+                                    positionRow[columnAxis * nuclearCoordinateCount + coordinate];
+                            }
+
+                            target[3 * coordinate + rowAxis] = value;
+                        }
+                    }
+                }
+
+                // The curvature's partials, the two spins' weighted by their
+                // density partials: every cross term of the density's second
+                // response reads one atom's block.
+                for (const std::size_t atom : atoms)
+                {
+                    for (std::size_t entry = 0; entry < 9; ++entry)
+                    {
+                        curvaturePartial[atom * 9 + entry] =
+                            partials[0] * alphaSums.curvature[atom][entry] +
+                            partials[1] * betaSums.curvature[atom][entry];
+                    }
+                }
+
+                // theta_q theta_r rho, the pair half:
+                //   2 sum_{mu,nu} D_mu nu grad phi_mu[a] grad phi_nu[b].
+                // It pairs two atoms, so it is scattered straight into the
+                // triangle from the blocked sums rather than through a
+                // point-sized pair array. Each spin's pair reads its own block,
+                // which is why the two blocked sums are weighted and added.
+                for (const std::size_t atomB : atoms)
+                {
+                    for (std::size_t directionB = 0; directionB < 3; ++directionB)
+                    {
+                        for (const std::size_t mu : aos.selectedAos)
+                        {
+                            const double blocked =
+                                partials[0] * secondSums[0]->Blocked(atomB, directionB, mu) +
+                                partials[1] * secondSums[1]->Blocked(atomB, directionB, mu);
+
+                            if (blocked == 0.0)
+                            {
+                                continue;
+                            }
+
+                            const std::size_t atomA = (*atomOfAo)[mu];
+
+                            for (std::size_t directionA = 0; directionA < 3; ++directionA)
+                            {
+                                const std::size_t rowIndex = 3 * atomA + directionA;
+                                const std::size_t columnIndex = 3 * atomB + directionB;
+
+                                if (rowIndex > columnIndex)
+                                {
+                                    continue;
+                                }
+
+                                evaluation.hessian(static_cast<Eigen::Index>(rowIndex),
+                                                   static_cast<Eigen::Index>(columnIndex)) +=
+                                    weight * 2.0 * aos.gradients[3 * mu + directionA] * blocked;
+                            }
+                        }
+                    }
+                }
+
+                // theta_q theta_r rho, the curvature half:
+                //   2 sum_{mu in A} (D phi)_mu hess phi_mu[a][b].
+                for (const std::size_t atom : atoms)
+                {
+                    const std::array<double, 9>& curvatureA = alphaSecond.curvature[atom];
+                    const std::array<double, 9>& curvatureB = betaSecond.curvature[atom];
+
+                    for (std::size_t rowAxis = 0; rowAxis < 3; ++rowAxis)
+                    {
+                        for (std::size_t columnAxis = rowAxis; columnAxis < 3; ++columnAxis)
+                        {
+                            const std::size_t entry = 3 * rowAxis + columnAxis;
+                            const double curvature =
+                                partials[0] * curvatureA[entry] + partials[1] * curvatureB[entry];
+
+                            evaluation.hessian(static_cast<Eigen::Index>(3 * atom + rowAxis),
+                                               static_cast<Eigen::Index>(3 * atom + columnAxis)) +=
+                                weight * 2.0 * curvature;
+                        }
+                    }
+                }
+
+                // What is left of the density's second response, one triangle
+                // entry at a time:
+                //     X_q^T (sum_s F_s hess rho_s) X_r - 2 X_q . Q_B[b, :]
+                //                                    - 2 X_r . Q_A[a, :]
+                //                                    + sum_i L_i[q] G1_i[r].
+                for (std::size_t rowIndex = 0; rowIndex < nuclearCoordinateCount; ++rowIndex)
+                {
+                    const std::size_t atomA = rowIndex / 3;
+                    const std::size_t directionA = rowIndex % 3;
+                    const double* xRow = positionRow + rowIndex;
+
+                    for (std::size_t columnIndex = rowIndex; columnIndex < nuclearCoordinateCount;
+                         ++columnIndex)
+                    {
+                        const std::size_t atomB = columnIndex / 3;
+                        const std::size_t directionB = columnIndex % 3;
+                        const double* xColumn = positionRow + columnIndex;
+                        double value = 0.0;
+
+                        for (std::size_t axis = 0; axis < 3; ++axis)
+                        {
+                            const double alpha = curvaturePosition[3 * columnIndex + axis];
+                            const double beta = curvaturePosition[3 * nuclearCoordinateCount +
+                                                                  3 * columnIndex + axis];
+                            value += xRow[axis * nuclearCoordinateCount] *
+                                     (partials[0] * alpha + partials[1] * beta);
+                        }
+
+                        for (std::size_t axis = 0; axis < 3; ++axis)
+                        {
+                            value -= 2.0 * xRow[axis * nuclearCoordinateCount] *
+                                     curvaturePartial[atomB * 9 + 3 * directionB + axis];
+                            value -= 2.0 * xColumn[axis * nuclearCoordinateCount] *
+                                     curvaturePartial[atomA * 9 + 3 * directionA + axis];
+                        }
+
+                        for (std::size_t slot = 0; slot < activeCount; ++slot)
+                        {
+                            value += curvatureContraction[rowIndex * activeCount + slot] *
+                                     firstResponse[columnIndex * activeCount + slot];
+                        }
+
+                        evaluation.hessian(static_cast<Eigen::Index>(rowIndex),
+                                           static_cast<Eigen::Index>(columnIndex)) +=
+                            weight * value;
+                    }
+                }
+
+                evaluation.counts.electronicCurvatureTerms += keptAtomCount * keptAtomCount * 9;
+            }
+
             // The gradient this walk owes the total: the weight's motion and the
             // integrand's, which is the whole of the first-order result.
             const double* weightRow = weightFirst.data() + point * nuclearCoordinateCount;
@@ -1225,9 +1785,12 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
             }
 
             //     d2(W e)/dR_q dR_r = W_,qr e + W_,q T_r + W_,r T_q
-            //                       + W sum_c (de/dx^c) X^c_,qr ,
-            // which is the derivative of the accumulated gradient above with the
-            // integrand's own response left to the electronic tier.
+            //                       + W sum_c (de/x^c) X^c_,qr + W M_qr ,
+            // with M the electronic channel accumulated just above. This is the
+            // derivative of the accumulated gradient with the integrand's own
+            // response split out, and the three pieces are disjoint: the weight
+            // terms differentiate the weight, the position-curvature term
+            // differentiates the fields' first derivatives, and M holds the rest.
             const std::size_t curvatureRow = nuclearCoordinateCount * nuclearCoordinateCount;
             const double* weightCurvature = weightSecond.data() + point * curvatureRow;
             const double* positionCurvature = positionSecond.data() + point * 3 * curvatureRow;
@@ -1270,6 +1833,8 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     evaluation.counts.aoSlotsDense = evaluation.counts.points * aoCount;
     evaluation.counts.contractionPairsDense = 2 * evaluation.counts.points * aoCount * aoCount;
     evaluation.counts.aoDerivativeTermsDense = 2 * evaluation.counts.points * aoCount;
+    evaluation.counts.electronicCurvatureTermsDense =
+        evaluation.counts.points * atomCount * atomCount * 9;
 
     return evaluation;
 }
