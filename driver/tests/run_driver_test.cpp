@@ -13,7 +13,6 @@
 #include "fast_test_mode.hpp"
 #include "qcx/backend/cpu_backend.hpp"
 #include "qcx/backend/gpu_compute_profile.hpp"
-#include "qcx/backend/host_compute_profile.hpp"
 #include "qcx/driver/accuracy_class_report.hpp"
 #include "qcx/driver/basis_counts.hpp"
 #include "qcx/driver/run_driver.hpp"
@@ -2450,31 +2449,43 @@ TEST(DriverPinTest, H2oDirectRhfReproducesThePin) {
 // calls>0 assertions go red. C is not falsifiable that way (absence is
 // its expected state) and stands as the honesty pin.
 //
-// A's and B's numerical readings are the fp32 LANE's, and since the compute profile the
-// lane's default is a probe's measured ratio rather than a switch - so A and
-// B assert the reading that goes with the state this box's own probe resolves
-// (CertifiedBoundLaneExpectedOn) instead of assuming the lane is on. The
+// A's and B's numerical readings are the fp32 LANE's, and the lane's default
+// is a probe's measured ratio rather than a switch - so A and B assert the
+// reading that goes with the state the RUN resolved
+// (CertifiedBoundLaneRecordedOn) instead of assuming the lane is on. The
 // block's presence and call count are lane-independent and stay
 // unconditional.
 //
-// The certified fp32 lane's expected state for this process (the
-// owner's ruling 2026-09-12; the host arm since): the driver probes
-// BOTH compute profiles at the run boundary and seeds the machinery options
-// from the one that matches the family the run wired - the host profile for a
-// CPU family, the device profile for a GPU one. Every fixture in this family
-// runs the direct (CPU) family, so the seed here is the HOST probe's measured
-// ratio (DetectHostComputeProfile, run_driver.cpp) against
-// kCertifiedLaneMinRatio, and the pins read that same verdict rather than
-// assuming a fixed lane state: a machine whose host probe answers above the
-// threshold turns the lane ON (an explicit request would win over it, but no
-// fixture in this family makes one).
-//
-// The host probe is NOT behind the device's GpuProbeFloorGiB cap gate - it
-// allocates nothing and initializes nothing, so a cap cannot distort it, and
-// the cap premise this helper used to assert is gone with that gate.
-bool CertifiedBoundLaneExpectedOn() {
-    return qcx::integrals::CertifiedLaneDefaultForRatio(
-        qcx::backend::DetectHostComputeProfile().fp32ToFp64Ratio);
+// The certified fp32 lane's expected state (the owner's ruling 2026-09-12; the
+// host arm since): the driver probes BOTH compute profiles at the run boundary
+// and seeds the machinery options from the one that matches the family the run
+// wired - the host profile for a CPU family, the device profile for a GPU one.
+// Every fixture in this family runs the direct (CPU) family, so the seed is the
+// HOST probe's measured ratio against kCertifiedLaneMinRatio, and the run's
+// compute_profile block carries both the ratio and the verdict it decided. The
+// tests read THAT verdict, never a second probe: the probe is a timing ratio,
+// and a machine sitting near the threshold can resolve either way between the
+// run's measurement and a test's, which is how a re-probing test goes red on a
+// green run.
+std::optional<bool> CertifiedBoundLaneRecordedOn(const std::string& result) {
+    const auto blockPos = result.find("\"compute_profile\"");
+
+    if (blockPos == std::string::npos)
+    {
+        return std::nullopt;
+    }
+
+    if (result.find("\"certified_lane_default\": true", blockPos) != std::string::npos)
+    {
+        return true;
+    }
+
+    if (result.find("\"certified_lane_default\": false", blockPos) != std::string::npos)
+    {
+        return false;
+    }
+
+    return std::nullopt;
 }
 
 // The certified lane's DECIDED record: the compute
@@ -2580,8 +2591,8 @@ TEST(DriverPinTest, CertifiedBoundReportsTheMachineryLaneAtKNormal) {
     // The delivered bound is a real quantity, not a placeholder, WHEN the
     // lane is on: the density-weighted per-quartet bounds the fp32 lane
     // actually delivered sum to something strictly positive. The lane's
-    // state is this run's own probe verdict (the compute profile,
-    // CertifiedBoundLaneExpectedOn), so the arm below is the reading that
+    // state is this run's own recorded verdict (the compute profile,
+    // CertifiedBoundLaneRecordedOn), so the arm below is the reading that
     // goes with the state the box resolves - on a CUDA-less build the lane
     // is off by construction and the block reads its observed zero, which
     // is the other half of the contract.
@@ -2590,7 +2601,10 @@ TEST(DriverPinTest, CertifiedBoundReportsTheMachineryLaneAtKNormal) {
     const auto lastCall = JsonNumber(*result, "\"last_call_ha\":");
     ASSERT_TRUE(lastCall.has_value());
 
-    if (CertifiedBoundLaneExpectedOn())
+    const auto laneOn = CertifiedBoundLaneRecordedOn(*result);
+    ASSERT_TRUE(laneOn.has_value()) << "the run must record the certified lane default it resolved";
+
+    if (*laneOn)
     {
         // Butane/STO-3G at kNormal routes fp32 quartets with the lane on
         // (the lane's own probe, 2026-09-11: methane 0, butane 17056), so
@@ -3120,7 +3134,7 @@ TEST(DriverPinTest, CertifiedBoundEnforcementDecidesTheRouting) {
     // The comparison: the routed sum, the preset-derived budget, and the
     // verdict the builder took on it. These are the LANE's numbers - the
     // comparison runs only for a live lane (fock_build.cpp) - so the arm
-    // below is chosen by the same probe verdict the delivery pins read.
+    // below is read from the run's own recorded verdict.
     const auto budget = JsonNumber(*enforced, "\"budget_ha\":");
     const auto routed = JsonNumber(*enforced, "\"routed_ha\":");
     const auto refusedQuartets = JsonNumber(*enforced, "\"routed_quartets\":");
@@ -3128,7 +3142,10 @@ TEST(DriverPinTest, CertifiedBoundEnforcementDecidesTheRouting) {
     ASSERT_TRUE(routed.has_value());
     ASSERT_TRUE(refusedQuartets.has_value());
 
-    if (CertifiedBoundLaneExpectedOn())
+    const auto laneOn = CertifiedBoundLaneRecordedOn(*enforced);
+    ASSERT_TRUE(laneOn.has_value()) << "the run must record the certified lane default it resolved";
+
+    if (*laneOn)
     {
         EXPECT_GT(*budget, 0.0);
         EXPECT_GT(*routed, *budget);
@@ -3250,7 +3267,11 @@ TEST(DriverPinTest, ForcedCertifiedLaneEngagesThroughTheInputAlone) {
     const auto probedMax = JsonNumber(*probed, "\"max_call_ha\":");
     ASSERT_TRUE(probedMax.has_value());
 
-    if (!CertifiedBoundLaneExpectedOn())
+    const auto probedLaneOn = CertifiedBoundLaneRecordedOn(*probed);
+    ASSERT_TRUE(probedLaneOn.has_value())
+        << "the run must record the certified lane default it resolved";
+
+    if (!*probedLaneOn)
     {
         EXPECT_DOUBLE_EQ(*probedMax, 0.0)
             << "this box's probe resolves OFF, so the unforced run must read the OFF arm - "
