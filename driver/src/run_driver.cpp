@@ -4639,8 +4639,10 @@ qcx::Result<UhfRun> RunDirectUhfScf(
         {
             leanCoulombOptions.symmetryReduction = &*leanReduction;
             leanCoulombOptions.symmetryOrbitExpansion = true;
+            leanCoulombOptions.symmetryStrongForm = true;
             leanExchangeOptions.symmetryReduction = &*leanReduction;
             leanExchangeOptions.symmetryOrbitExpansion = true;
+            leanExchangeOptions.symmetryStrongForm = true;
         }
 
         auto leanCoulomb = qcx::integrals::LeanDirectFockBuilder::Create(
@@ -8117,6 +8119,7 @@ qcx::Result<double> CheckPreGateSetupAdmission(const qcx::io::RunInput& input,
         {
             leanOptions.symmetryReduction = &*leanReduction;
             leanOptions.symmetryOrbitExpansion = true;
+            leanOptions.symmetryStrongForm = true;
         }
 
         auto envelope = qcx::integrals::EstimateLeanEnvelope(molecule, basisSet, leanOptions);
@@ -8503,6 +8506,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
         {
             leanOptions.symmetryReduction = &*leanReduction;
             leanOptions.symmetryOrbitExpansion = true;
+            leanOptions.symmetryStrongForm = true;
         }
 
         auto lean =
@@ -8547,6 +8551,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
                 {
                     leanExchangeOptions.symmetryReduction = &*leanReduction;
                     leanExchangeOptions.symmetryOrbitExpansion = true;
+                    leanExchangeOptions.symmetryStrongForm = true;
                 }
 
                 auto leanExchange = qcx::integrals::LeanDirectFockBuilder::Create(
