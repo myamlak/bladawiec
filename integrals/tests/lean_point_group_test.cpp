@@ -2089,10 +2089,6 @@ TEST(LeanPointGroupTest, StrongFormMatchesThePlainAndExpandedBuilds) {
         return projected;
     };
 
-    std::cout << "strong top-left:\n"
-              << strongMatrix.topLeftCorner(4, 4) << "\nplain top-left:\n"
-              << plainMatrix.topLeftCorner(4, 4) << "\n";
-
     const Eigen::MatrixXd coreMatrix = ToMatrix(strong->CoreHamiltonian());
     EXPECT_LT(MaxAbsoluteDelta(projectUnderReduction(coreMatrix), coreMatrix), 1e-12)
         << "the core Hamiltonian must be invariant under the reduction";
