@@ -1535,7 +1535,11 @@ TEST(DirectJkFockBuilderTest, StrongFormLightPathDemotesAndMatchesTheWeakBuild) 
     auto weakBudget = qcx::memory::WorkspaceBudget::Create(std::size_t{64} * 1024 * 1024);
     ASSERT_TRUE(weakBudget.has_value()) << weakBudget.error().message;
     qcx::integrals::FockBuildOptions weakOptions;
-    weakOptions.useCertifiedMixedPrecision = false;
+    // kLoose with the lane requested keeps a NONZERO certified sum in play,
+    // so "the certifiedBoundSum is unchanged" is a reading, not a 0 == 0
+    // tautology.
+    weakOptions.accuracy = qcx::integrals::AccuracyPreset::kLoose;
+    weakOptions.useCertifiedMixedPrecision = true;
     weakOptions.maxParallelChunks = 1;
     weakOptions.workspaceBudget = &*weakBudget;
     weakOptions.lightPathChunkPairs = 5;
@@ -1568,10 +1572,15 @@ TEST(DirectJkFockBuilderTest, StrongFormLightPathDemotesAndMatchesTheWeakBuild) 
     auto strongFock = strongBuilder->BuildFock(*densityTensor, &strongBoundSum, &strongStats);
     ASSERT_TRUE(strongFock.has_value()) << strongFock.error().message;
 
+    std::cout << "LightPath demotion: fallbacks = " << strongStats.strongFormFallbacks
+              << ", closure misses = " << strongStats.strongFormClosureMisses
+              << ", strong sum = " << strongBoundSum << ", weak sum = " << weakBoundSum << "\n";
+
     EXPECT_TRUE(BitIdenticalMatrices(ToMatrix(*strongFock), ToMatrix(*weakFock)))
         << "the demoted build must BE the weak build";
     EXPECT_EQ(strongStats.strongFormFallbacks, 1u) << "the LightPath demotion must be recorded";
     EXPECT_EQ(strongStats.strongFormClosureMisses, 0u);
+    EXPECT_GT(weakBoundSum, 0.0) << "the lane must route on this fixture (a live certified sum)";
     EXPECT_EQ(strongBoundSum, weakBoundSum);
 }
 
