@@ -110,7 +110,11 @@ struct FockBuildStats {
     /// audit had to reconstruct by hand. One per call per task/member cell,
     /// summed over the row windows (the same race-free partials as
     /// `pairBuildCount`); zero on the machinery paths (the field is
-    /// lean-backed by contract, like its neighbours).
+    /// lean-backed by contract, like its neighbours). With
+    /// `LeanFockBuildOptions::symmetryStrongForm` the member contractions are
+    /// replaced by the post-fold group projection: the count is then one per
+    /// orbit (the skeleton contraction), equal to `fp64QuartetCount`, and the
+    /// accumulation is reduced with the evaluation.
     std::size_t contractBlockCalls = 0;
     std::chrono::nanoseconds eriWallTime{}; ///< The ERI-phase span: at k = 1 the batch-computation
                                             ///< wall time (the part a value cache would eliminate);

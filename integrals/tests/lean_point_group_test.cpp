@@ -1946,3 +1946,251 @@ TEST(LeanPointGroupTest, OrbitExpansionInertsAndRefusals) {
             .has_value())
         << "the orbit action must refuse a reduction that splits a shell";
 }
+
+namespace {
+
+// The group projection of a density under one reduction - the SCF's
+// D_sym = (1/|G|) sum_g A(g) D A(g)^T - used to give the strong form the
+// totally symmetric input its precondition requires.
+Eigen::MatrixXd SymmetrizeUnderReduction(const Eigen::MatrixXd& density,
+                                         const qcx::integrals::SymmetryReduction& reduction) {
+    const Eigen::Index n = density.rows();
+    const std::size_t order = reduction.groupOrder;
+    Eigen::MatrixXd averaged = Eigen::MatrixXd::Zero(n, n);
+
+    for (std::size_t g = 0; g < order; ++g)
+    {
+        for (Eigen::Index i = 0; i < n; ++i)
+        {
+            const auto indexI = static_cast<std::size_t>(i);
+            const auto imageI = static_cast<Eigen::Index>(reduction.permutation[g][indexI]);
+            const double signI = static_cast<double>(reduction.sign[g][indexI]);
+
+            for (Eigen::Index j = 0; j < n; ++j)
+            {
+                const auto indexJ = static_cast<std::size_t>(j);
+                const auto imageJ = static_cast<Eigen::Index>(reduction.permutation[g][indexJ]);
+                const double signJ = static_cast<double>(reduction.sign[g][indexJ]);
+                averaged(i, j) += signI * signJ * density(imageI, imageJ);
+            }
+        }
+    }
+
+    averaged /= static_cast<double>(order);
+    return averaged;
+}
+
+// max |a - b| with the NaN-propagating form the pins above use.
+double MaxAbsoluteDelta(const Eigen::MatrixXd& a, const Eigen::MatrixXd& b) {
+    double maxDelta = 0.0;
+
+    for (Eigen::Index i = 0; i < a.rows(); ++i)
+    {
+        for (Eigen::Index j = 0; j < a.cols(); ++j)
+        {
+            const double delta = std::abs(a(i, j) - b(i, j));
+
+            if (!(delta <= maxDelta))
+            {
+                maxDelta = delta;
+            }
+        }
+    }
+
+    return maxDelta;
+}
+
+} // namespace
+
+// The strong form: the walk contracts one representative per orbit, weighted
+// by the orbit's multiplicity, and the post-fold group projection recovers
+// the member contributions. The result must be the plain build's F(D) to the
+// same 1e-12 the class path's reduction pins, and the accumulation count must
+// drop to one per orbit - the counter the weak expansion leaves invariant.
+TEST(LeanPointGroupTest, StrongFormMatchesThePlainAndExpandedBuilds) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction reduction = MakeWaterC2vReductionHFirst();
+
+    auto plain = qcx::integrals::LeanDirectFockBuilder::Create(
+        *molecule, *basis, *core, LeanSerialOptions());
+    ASSERT_TRUE(plain.has_value()) << plain.error().message;
+
+    qcx::integrals::LeanFockBuildOptions expandedOptions = LeanSerialOptions();
+    expandedOptions.symmetryReduction = &reduction;
+    expandedOptions.symmetryOrbitExpansion = true;
+    auto expanded =
+        qcx::integrals::LeanDirectFockBuilder::Create(*molecule, *basis, *core, expandedOptions);
+    ASSERT_TRUE(expanded.has_value()) << expanded.error().message;
+
+    qcx::integrals::LeanFockBuildOptions strongOptions = LeanSerialOptions();
+    strongOptions.symmetryReduction = &reduction;
+    strongOptions.symmetryStrongForm = true;
+    auto strong =
+        qcx::integrals::LeanDirectFockBuilder::Create(*molecule, *basis, *core, strongOptions);
+    ASSERT_TRUE(strong.has_value()) << strong.error().message;
+    auto fresh =
+        qcx::integrals::LeanDirectFockBuilder::Create(*molecule, *basis, *core, strongOptions);
+    ASSERT_TRUE(fresh.has_value()) << fresh.error().message;
+
+    const Eigen::MatrixXd density = SymmetrizeUnderReduction(PhysicalDensity(7, 4242), reduction);
+
+    qcx::integrals::FockBuildStats expandedStats;
+    qcx::integrals::FockBuildStats strongStats;
+
+    auto plainFock = plain->BuildFock(*ToTensor(density));
+    ASSERT_TRUE(plainFock.has_value()) << plainFock.error().message;
+    auto expandedFock = expanded->BuildFock(*ToTensor(density), &expandedStats);
+    ASSERT_TRUE(expandedFock.has_value()) << expandedFock.error().message;
+    auto strongFock = strong->BuildFock(*ToTensor(density), &strongStats);
+    ASSERT_TRUE(strongFock.has_value()) << strongFock.error().message;
+    auto secondFock = strong->BuildFock(*ToTensor(density));
+    ASSERT_TRUE(secondFock.has_value()) << secondFock.error().message;
+    auto freshFock = fresh->BuildFock(*ToTensor(density));
+    ASSERT_TRUE(freshFock.has_value()) << freshFock.error().message;
+
+    const Eigen::MatrixXd plainMatrix = ToMatrix(*plainFock);
+    const Eigen::MatrixXd expandedMatrix = ToMatrix(*expandedFock);
+    const Eigen::MatrixXd strongMatrix = ToMatrix(*strongFock);
+
+    const auto projectUnderReduction = [&reduction](const Eigen::MatrixXd& matrix) {
+        const Eigen::Index n = matrix.rows();
+        Eigen::MatrixXd projected = Eigen::MatrixXd::Zero(n, n);
+
+        for (std::size_t g = 0; g < reduction.groupOrder; ++g)
+        {
+            for (Eigen::Index i = 0; i < n; ++i)
+            {
+                const auto indexI = static_cast<std::size_t>(i);
+                const auto imageI = static_cast<Eigen::Index>(reduction.permutation[g][indexI]);
+                const double signI = static_cast<double>(reduction.sign[g][indexI]);
+
+                for (Eigen::Index j = 0; j < n; ++j)
+                {
+                    const auto indexJ = static_cast<std::size_t>(j);
+                    const auto imageJ = static_cast<Eigen::Index>(reduction.permutation[g][indexJ]);
+                    const double signJ = static_cast<double>(reduction.sign[g][indexJ]);
+                    projected(imageI, imageJ) += signI * signJ * matrix(i, j);
+                }
+            }
+        }
+
+        projected /= static_cast<double>(reduction.groupOrder);
+        return projected;
+    };
+
+    std::cout << "strong top-left:\n"
+              << strongMatrix.topLeftCorner(4, 4) << "\nplain top-left:\n"
+              << plainMatrix.topLeftCorner(4, 4) << "\n";
+
+    const Eigen::MatrixXd coreMatrix = ToMatrix(strong->CoreHamiltonian());
+    EXPECT_LT(MaxAbsoluteDelta(projectUnderReduction(coreMatrix), coreMatrix), 1e-12)
+        << "the core Hamiltonian must be invariant under the reduction";
+    EXPECT_LT(MaxAbsoluteDelta(projectUnderReduction(plainMatrix), plainMatrix), 1e-12)
+        << "the plain Fock must be invariant under the reduction";
+
+    EXPECT_LT(MaxAbsoluteDelta(strongMatrix, plainMatrix), 1e-12)
+        << "the projected skeleton must reproduce the plain build";
+    EXPECT_LT(MaxAbsoluteDelta(strongMatrix, expandedMatrix), 1e-12)
+        << "the strong and weak forms must answer the same Fock";
+    EXPECT_TRUE(strongMatrix.isApprox(strongMatrix.transpose(), 1e-12))
+        << "the projected Fock must stay symmetric";
+
+    EXPECT_EQ(strongStats.fp64QuartetCount, expandedStats.fp64QuartetCount)
+        << "both forms evaluate one block per orbit";
+    EXPECT_EQ(strongStats.contractBlockCalls, strongStats.fp64QuartetCount)
+        << "the strong form contracts one block per orbit (the accumulation is reduced)";
+    EXPECT_GT(expandedStats.contractBlockCalls, expandedStats.fp64QuartetCount)
+        << "the weak expansion contracts one block per surviving member";
+
+    EXPECT_TRUE(BitIdentical(strongMatrix, ToMatrix(*secondFock)))
+        << "a second call on one builder must be byte-identical";
+    EXPECT_TRUE(BitIdentical(strongMatrix, ToMatrix(*freshFock)))
+        << "a fresh builder must be byte-identical";
+}
+
+// The projection is exact only for a density the group leaves invariant; a
+// symmetric density that carries a non-totally-symmetric component is
+// refused by name rather than averaged into a wrong Fock.
+TEST(LeanPointGroupTest, StrongFormRefusesANonTotallySymmetricDensity) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction reduction = MakeWaterC2vReductionHFirst();
+    qcx::integrals::LeanFockBuildOptions options = LeanSerialOptions();
+    options.symmetryReduction = &reduction;
+    options.symmetryStrongForm = true;
+    auto strong = qcx::integrals::LeanDirectFockBuilder::Create(*molecule, *basis, *core, options);
+    ASSERT_TRUE(strong.has_value()) << strong.error().message;
+
+    auto fock = strong->BuildFock(*ToTensor(PhysicalDensity(7, 4242)));
+    ASSERT_FALSE(fock.has_value());
+    EXPECT_EQ(fock.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(fock.error().message.find("totally symmetric"), std::string::npos)
+        << fock.error().message;
+}
+
+// The engagement boundary: a trivial reduction leaves the action unbuilt and
+// the call is the plain path's byte for byte; a missing reduction is refused
+// at Create, like the weak expansion's own missing-reduction refusal.
+TEST(LeanPointGroupTest, StrongFormInertsAndRefusals) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction trivial;
+    auto plain = qcx::integrals::LeanDirectFockBuilder::Create(
+        *molecule, *basis, *core, LeanSerialOptions());
+    ASSERT_TRUE(plain.has_value()) << plain.error().message;
+
+    qcx::integrals::LeanFockBuildOptions trivialOptions = LeanSerialOptions();
+    trivialOptions.symmetryReduction = &trivial;
+    trivialOptions.symmetryStrongForm = true;
+    auto inert =
+        qcx::integrals::LeanDirectFockBuilder::Create(*molecule, *basis, *core, trivialOptions);
+    ASSERT_TRUE(inert.has_value()) << inert.error().message;
+
+    const Eigen::MatrixXd density = PhysicalDensity(7, 777);
+    auto plainFock = plain->BuildFock(*ToTensor(density));
+    ASSERT_TRUE(plainFock.has_value()) << plainFock.error().message;
+    auto inertFock = inert->BuildFock(*ToTensor(density));
+    ASSERT_TRUE(inertFock.has_value()) << inertFock.error().message;
+    EXPECT_TRUE(BitIdentical(ToMatrix(*plainFock), ToMatrix(*inertFock)))
+        << "a trivial reduction must leave the plain path's bytes untouched";
+
+    qcx::integrals::LeanFockBuildOptions nullOptions = LeanSerialOptions();
+    nullOptions.symmetryStrongForm = true;
+    auto refused =
+        qcx::integrals::LeanDirectFockBuilder::Create(*molecule, *basis, *core, nullOptions);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(refused.error().message.find("symmetryStrongForm"), std::string::npos)
+        << refused.error().message;
+}
