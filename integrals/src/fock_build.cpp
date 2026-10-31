@@ -860,6 +860,7 @@ struct FockContractor {
                          const ShellQuartet& quartet,
                          std::size_t pairBra,
                          std::size_t pairKet,
+                         // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                          double blockWeight = 1.0) const {
         // The per-element filter rides on the pair-max vector
         // (null = filter off, the flag contract) and the per-preset density
@@ -1850,6 +1851,7 @@ struct FockContractor {
                 auto contractRep = [&](const FockContractor& contractor,
                                        std::size_t t,
                                        std::vector<double>& scratchSlot,
+                                       // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                                        double& boundSum,
                                        std::size_t& contractCalls) -> ClassTaskOutcome {
                     const ShellQuartet& repQuartet = half->computed[t];
