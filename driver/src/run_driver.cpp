@@ -4639,10 +4639,8 @@ qcx::Result<UhfRun> RunDirectUhfScf(
         {
             leanCoulombOptions.symmetryReduction = &*leanReduction;
             leanCoulombOptions.symmetryOrbitExpansion = true;
-            leanCoulombOptions.symmetryStrongForm = true;
             leanExchangeOptions.symmetryReduction = &*leanReduction;
             leanExchangeOptions.symmetryOrbitExpansion = true;
-            leanExchangeOptions.symmetryStrongForm = true;
         }
 
         auto leanCoulomb = qcx::integrals::LeanDirectFockBuilder::Create(
