@@ -43,7 +43,9 @@ struct SymmetryReduction; // The class-aware contraction seam (fock_build.hpp).
 /// want to account for; on the class-aware path the counts are
 /// filled and the per-phase split time fields stay zero (the class pass
 /// is a separate contraction path and is not time-split; totalWallTime
-/// still covers the whole call). The lean builder is its own
+/// still covers the whole call, and strongFormWallTime is the class
+/// path's one own span - the strong form's density check plus its
+/// post-fold projection). The lean builder is its own
 /// filler: fp64QuartetCount, batchCount, the eri split (with its prep
 /// sub-span, the prep's own three-part split and the kernel-span probe's
 /// three sub-spans and four counters), the pair-build count,
@@ -301,6 +303,52 @@ struct FockBuildStats {
     /// fp64 and fp32 lanes. Zero under the same conditions as
     /// significantPairCount.
     std::size_t primitiveProductSum = 0;
+    /// The class-aware path's CONTRACT-BLOCK count: how many times the
+    /// contraction ran one ERI block into the Fock. The weak class build
+    /// contracts one block per SCREENED MEMBER quartet (the orbit rep's
+    /// block expanded into the member's frame), so the count reproduces the
+    /// screened set exactly - `classBlockContractCalls == fp64QuartetCount +
+    /// fp32QuartetCount`. The strong form
+    /// (FockBuildOptions::symmetryStrongForm) contracts one block per ORBIT
+    /// TASK, so the count equals classOrbitTaskCount; read against the
+    /// quartet counts it is the accumulation ratio the strong form delivers.
+    /// Summed over the LightPath chunks (the per-chunk task lists), like the
+    /// quartet counts; zero on the plain path and on a call that ran no
+    /// class pass (no class table, or an empty screened class-task set).
+    std::size_t classBlockContractCalls = 0;
+    /// The class-aware path's ORBIT TASK count: the class tasks the call
+    /// built over both precision lanes - one per orbit with at least one
+    /// screened member, per lane. The strong form's identity is
+    /// `classBlockContractCalls == classOrbitTaskCount` (one contraction
+    /// per task) while the weak build contracts one block per member
+    /// instead. Summed over the LightPath chunks; zero on the plain path.
+    std::size_t classOrbitTaskCount = 0;
+    /// The strong form's DEMOTIONS this call: 1 when
+    /// FockBuildOptions::symmetryStrongForm was requested and ELIGIBLE (a
+    /// class table present, the class decomposition not pair-trivial) but
+    /// the strong form did not run - the LightPath (demoted unconditionally
+    /// in v1: its per-chunk screening has no whole-call orbit ownership) or
+    /// a closure miss (strongFormClosureMisses). 0 when the strong form ran
+    /// and 0 when it was not requested or was ineligible. The demoted build
+    /// IS the weak build, byte for byte - the field records what ran, not a
+    /// numerical difference.
+    std::size_t strongFormFallbacks = 0;
+    /// The strong form's CLOSURE misses: the class tasks (either precision
+    /// lane) whose screened member set is not the FULL orbit
+    /// (`screenedMembers.size() != orbit.members.size()`). The class path
+    /// screens per member, so its screened set is not structurally
+    /// orbit-closed; the strong form's projection distributes the
+    /// representative to every member, so a partial orbit would over-count.
+    /// A nonzero count demotes the whole call to the weak build
+    /// (strongFormFallbacks == 1 in the same call). 0 when the strong form
+    /// ran.
+    std::size_t strongFormClosureMisses = 0;
+    /// The strong form's own wall span (the class path only): the density's
+    /// total-symmetry check plus the post-fold group projection. Both are
+    /// class-path phases outside the ERI/contract split, and both run
+    /// serially, so this is a true wall span at every chunk count. Zero
+    /// when the strong form did not run.
+    std::chrono::nanoseconds strongFormWallTime{};
 };
 
 /// The QFMM near-field restriction: when engaged, BuildFock only screens and
@@ -579,6 +627,69 @@ struct FockBuildOptions {
     /// (the escape-hatch host-RAM guard, 2026-09-01) - a clean refusal,
     /// never a raw allocation death.
     const SymmetryReduction* symmetryReduction = nullptr;
+    /// The STRONG form of the class-aware reduction: skeleton accumulation
+    /// plus the post-fold group projection.
+    ///
+    /// With this true AND an ELIGIBLE reduction, the class pass contracts
+    /// each orbit's representative ONCE - its block weight carrying the
+    /// orbit's multiplicity - so the accumulated two-electron part is a
+    /// SKELETON whose every orbit contributes its representative's full
+    /// weight. After the assembly the skeleton is projected onto the totally
+    /// symmetric subspace, S = (1/|G|) sum_g A(g) S_skel A(g)^T (the lean
+    /// builder's projection body, integrals/src/lean_fock_build.cpp), and the
+    /// core Hamiltonian is added last - it never enters the skeleton. The
+    /// accumulation therefore drops from one contraction per screened member
+    /// quartet (the weak class path) to one per orbit task
+    /// (FockBuildStats::classBlockContractCalls == classOrbitTaskCount),
+    /// which is the petite-list saving's accumulation half; the ERI
+    /// evaluation count is the weak class path's (one block per orbit).
+    ///
+    /// ELIGIBILITY is measured, never assumed: a class table is present (a
+    /// non-null reduction with groupOrder > 1 that the budget gate did not
+    /// disengage) AND the class decomposition is not pair-trivial
+    /// (table.classes.size() != the canonical pair count). A trivial
+    /// reduction (the C1 default, groupOrder 1) keeps the plain path; a
+    /// pair-trivial group (a sign-only action that fixes every canonical
+    /// shell pair, every class a singleton) keeps the weak class path -
+    /// both are the option-off bytes exactly. A null reduction is REFUSED
+    /// at Create (kInvalidArgument naming this option): the reduction
+    /// defines the group the skeleton is projected over.
+    ///
+    /// The projection is exact only for a TOTALLY SYMMETRIC density (the
+    /// SCF energy path's), so BuildFock checks A(g) rho A(g)^T = rho for
+    /// every g (tolerance 1e-9 * max(1, max|rho|)) before a term is
+    /// computed, and refuses by name (kInvalidArgument) otherwise. A
+    /// response right-hand side that is not totally symmetric must not
+    /// engage this form, and a UHF path engages it only where its spin
+    /// densities are known invariant - this option is the caller's
+    /// assertion of that precondition, never a guess.
+    ///
+    /// The strong form is EXACT only when every contracted orbit's screened
+    /// set is the FULL orbit: the class path screens per member (its
+    /// density-weighted gate decides member by member), so the screened set
+    /// is not structurally orbit-closed. BuildFock therefore scans both
+    /// precision lanes' class tasks against their orbits' full member
+    /// counts before the pass; a miss DEMOTES the call to the weak build
+    /// (the core Hamiltonian restored by assignment before any contraction,
+    /// so the demoted build IS the option-off build, byte for byte) and
+    /// records it in FockBuildStats::strongFormFallbacks /
+    /// strongFormClosureMisses. The LightPath is demoted unconditionally in
+    /// v1 - its per-chunk screening has no whole-call orbit ownership - and
+    /// records the same way. A demotion is a recorded fallback, never an
+    /// approximation.
+    ///
+    /// The certified fp32 lane engages exactly as on the weak class path
+    /// and is honoured: the strong branch contracts the representative
+    /// once in the member's routed precision and keeps the per-member
+    /// certified sum (weight(member) * bound(orbit rep)) unchanged and in
+    /// the same order, so the certifiedBoundSumOut contract is the same
+    /// quantity on both forms. The fp64/fp32 quartet counts are the weak
+    /// build's - the routing partition is untouched.
+    ///
+    /// Composition: the class path's own. A precision ladder or a
+    /// GPU/RI-family builder is not this class path and does not engage it;
+    /// the option is inert (byte-identical) whenever it is ineligible.
+    bool symmetryStrongForm = false;
     PairPairRestriction restrictToPairPairs; ///< QFMM near-field restriction: when
                                              ///< engaged, BuildFock only screens and contracts
                                              ///< quartets whose pair-pair (bra, ket) is in the
@@ -931,7 +1042,12 @@ public:
     /// - the same weight the routing gate uses. The weighted sum bounds
     /// every Fock-element error from the fp32 lane (an upper bound on the
     /// delivered Fock error, consumable as certified); the committed sweep
-    /// checks the per-quartet bounds against the preset J/K budgets.
+    /// checks the per-quartet bounds against the preset J/K budgets. With
+    /// FockBuildOptions::symmetryStrongForm engaged the out-parameter
+    /// carries the SAME member-weighted sum: the strong branch contracts
+    /// the orbit representative once but still accumulates every screened
+    /// member's weight(member) * bound(orbit rep), in the member order, so
+    /// the sum and its order are the weak class build's.
     /// \param statsOut Optional per-call diagnostics sink (FockBuildStats);
     /// null (the default) keeps the zero-cost path.
     /// \param ladderInputs The per-call precision-ladder inputs

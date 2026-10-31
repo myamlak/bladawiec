@@ -9537,6 +9537,17 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
     if (reduction.has_value() && reduction->groupOrder > 1)
     {
         directOptions.symmetryReduction = &*reduction;
+        // The reduction's strong form: the closed-shell energy path's
+        // density is totally symmetric (the SCF's invariant D), so the
+        // class pass may contract one weighted representative per orbit and
+        // project the skeleton (FockBuildOptions::symmetryStrongForm). The
+        // driver's demotion/refusal surface stays the builder's: a
+        // pair-trivial group is inert, the LightPath and a closure miss
+        // fall back to the weak class build (recorded), and a density the
+        // group does not leave invariant is refused by name instead of
+        // being averaged into a wrong Fock. The direct-UHF runner is NOT
+        // wired: per-spin densities need not be totally symmetric.
+        directOptions.symmetryStrongForm = true;
     }
 
     // The Kohn-Sham machinery run: TWO split builders out of the same

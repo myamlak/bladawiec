@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <random>
 #include <string>
 
@@ -135,6 +136,73 @@ Eigen::MatrixXd PhysicalDensity(std::size_t n) {
     }
 
     return d;
+}
+
+// The group projection of a density under one reduction - the SCF's
+// D_sym = (1/|G|) sum_g A(g) D A(g)^T - the input the strong form's
+// precondition (A(g) rho A(g)^T = rho) requires (the
+// lean_point_group_test.cpp helper's shape; the integrals tests share the
+// definition, not a fixture header).
+Eigen::MatrixXd SymmetrizeUnderReduction(const Eigen::MatrixXd& density,
+                                         const qcx::integrals::SymmetryReduction& reduction) {
+    const Eigen::Index n = density.rows();
+    const std::size_t order = reduction.groupOrder;
+    Eigen::MatrixXd averaged = Eigen::MatrixXd::Zero(n, n);
+
+    for (std::size_t g = 0; g < order; ++g)
+    {
+        for (Eigen::Index i = 0; i < n; ++i)
+        {
+            const auto indexI = static_cast<std::size_t>(i);
+            const auto imageI = static_cast<Eigen::Index>(reduction.permutation[g][indexI]);
+            const double signI = static_cast<double>(reduction.sign[g][indexI]);
+
+            for (Eigen::Index j = 0; j < n; ++j)
+            {
+                const auto indexJ = static_cast<std::size_t>(j);
+                const auto imageJ = static_cast<Eigen::Index>(reduction.permutation[g][indexJ]);
+                const double signJ = static_cast<double>(reduction.sign[g][indexJ]);
+                averaged(i, j) += signI * signJ * density(imageI, imageJ);
+            }
+        }
+    }
+
+    averaged /= static_cast<double>(order);
+    return averaged;
+}
+
+// max |a - b| with the NaN-propagating form the class-path pins use.
+double MaxAbsoluteDelta(const Eigen::MatrixXd& a, const Eigen::MatrixXd& b) {
+    double maxDelta = 0.0;
+
+    for (Eigen::Index i = 0; i < a.rows(); ++i)
+    {
+        for (Eigen::Index j = 0; j < a.cols(); ++j)
+        {
+            const double delta = std::abs(a(i, j) - b(i, j));
+
+            if (!(delta <= maxDelta))
+            {
+                maxDelta = delta;
+            }
+        }
+    }
+
+    return maxDelta;
+}
+
+// True when two same-shaped matrices agree bit for bit (the determinism
+// pins' oracle; doubles do not have unique object representations, but the
+// contract here is exact bits).
+bool BitIdenticalMatrices(const Eigen::MatrixXd& a, const Eigen::MatrixXd& b) {
+    if (a.rows() != b.rows() || a.cols() != b.cols())
+    {
+        return false;
+    }
+
+    // NOLINTNEXTLINE(bugprone-suspicious-memory-comparison)
+    return std::memcmp(a.data(), b.data(), static_cast<std::size_t>(a.size()) * sizeof(double)) ==
+           0;
 }
 
 void CheckDirectMatchesDense(
@@ -1065,6 +1133,448 @@ TEST(DirectJkFockBuilderTest, WaterC2vClassPathMixedPrecisionMatchesPlain) {
               (randomPlainBoundSum + randomClassBoundSum) * 1.001 + 1e-14);
 }
 
+// The strong form (FockBuildOptions::symmetryStrongForm): the class pass
+// contracts one weighted representative per orbit and the post-fold group
+// projection recovers the members. On a density the reduction leaves
+// invariant (the option's documented precondition), the result must equal
+// the plain and the WEAK class builds to the 1e-12 the class path's pins
+// use (the projection and expansion are exact arithmetic, not bit
+// identities), stay symmetric, and be reproducible byte for byte on a
+// second call and a fresh builder at the serial pin.
+TEST(DirectJkFockBuilderTest, StrongFormMatchesPlainAndWeak) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction reduction = MakeWaterC2vReductionHFirst();
+    const Eigen::MatrixXd density = SymmetrizeUnderReduction(PhysicalDensity(7), reduction);
+    auto densityTensor = ToTensor(density);
+    ASSERT_TRUE(densityTensor.has_value()) << densityTensor.error().message;
+
+    qcx::integrals::FockBuildOptions plainOptions;
+    plainOptions.useCertifiedMixedPrecision = false;
+    plainOptions.maxParallelChunks = 1;
+    auto plainBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, plainOptions);
+    ASSERT_TRUE(plainBuilder.has_value()) << plainBuilder.error().message;
+
+    qcx::integrals::FockBuildOptions classOptions = plainOptions;
+    classOptions.symmetryReduction = &reduction;
+    auto weakBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, classOptions);
+    ASSERT_TRUE(weakBuilder.has_value()) << weakBuilder.error().message;
+
+    qcx::integrals::FockBuildOptions strongOptions = classOptions;
+    strongOptions.symmetryStrongForm = true;
+    auto strongBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, strongOptions);
+    ASSERT_TRUE(strongBuilder.has_value()) << strongBuilder.error().message;
+    auto freshBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, strongOptions);
+    ASSERT_TRUE(freshBuilder.has_value()) << freshBuilder.error().message;
+
+    qcx::integrals::FockBuildStats strongStats;
+    auto plainFock = plainBuilder->BuildFock(*densityTensor);
+    ASSERT_TRUE(plainFock.has_value()) << plainFock.error().message;
+    auto weakFock = weakBuilder->BuildFock(*densityTensor);
+    ASSERT_TRUE(weakFock.has_value()) << weakFock.error().message;
+    auto strongFock = strongBuilder->BuildFock(*densityTensor, nullptr, &strongStats);
+    ASSERT_TRUE(strongFock.has_value()) << strongFock.error().message;
+    auto secondFock = strongBuilder->BuildFock(*densityTensor);
+    ASSERT_TRUE(secondFock.has_value()) << secondFock.error().message;
+    auto freshFock = freshBuilder->BuildFock(*densityTensor);
+    ASSERT_TRUE(freshFock.has_value()) << freshFock.error().message;
+
+    const Eigen::MatrixXd plain = ToMatrix(*plainFock);
+    const Eigen::MatrixXd weak = ToMatrix(*weakFock);
+    const Eigen::MatrixXd strong = ToMatrix(*strongFock);
+
+    std::cout << "strong-form deltas: weak-vs-plain = " << MaxAbsoluteDelta(weak, plain)
+              << ", strong-vs-plain = " << MaxAbsoluteDelta(strong, plain)
+              << ", strong-vs-weak = " << MaxAbsoluteDelta(strong, weak)
+              << ", strong wall = " << strongStats.strongFormWallTime.count() << " ns\n";
+
+    EXPECT_LT(MaxAbsoluteDelta(weak, plain), 1e-12)
+        << "the weak class build must equal the plain build";
+    EXPECT_LT(MaxAbsoluteDelta(strong, plain), 1e-12)
+        << "the projected skeleton must reproduce the plain build";
+    EXPECT_LT(MaxAbsoluteDelta(strong, weak), 1e-12)
+        << "the strong and weak forms must answer the same Fock";
+    EXPECT_TRUE(strong.isApprox(strong.transpose(), 1e-12))
+        << "the projected Fock must stay symmetric";
+
+    // The exactness pins: the strong form ran (no demotion) and the call is
+    // reproducible at the serial pin.
+    EXPECT_EQ(strongStats.strongFormFallbacks, 0u);
+    EXPECT_EQ(strongStats.strongFormClosureMisses, 0u);
+    EXPECT_TRUE(BitIdenticalMatrices(strong, ToMatrix(*secondFock)))
+        << "a second call on one builder must be byte-identical";
+    EXPECT_TRUE(BitIdenticalMatrices(strong, ToMatrix(*freshFock)))
+        << "a fresh builder must be byte-identical";
+    EXPECT_TRUE(BitIdenticalMatrices(ToMatrix(strongBuilder->CoreHamiltonian()), ToMatrix(*core)))
+        << "CoreHamiltonian() is the construction-time H, unchanged by the call";
+}
+
+// The projection is exact only for a density the group leaves invariant; a
+// symmetric density carrying a non-totally-symmetric component is refused
+// by name rather than averaged into a wrong Fock.
+TEST(DirectJkFockBuilderTest, StrongFormRefusesANonTotallySymmetricDensity) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction reduction = MakeWaterC2vReductionHFirst();
+    qcx::integrals::FockBuildOptions options;
+    options.useCertifiedMixedPrecision = false;
+    options.symmetryReduction = &reduction;
+    options.symmetryStrongForm = true;
+    auto builder = qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, options);
+    ASSERT_TRUE(builder.has_value()) << builder.error().message;
+
+    // PhysicalDensity is symmetric but not invariant under the reduction.
+    auto densityTensor = ToTensor(PhysicalDensity(7));
+    ASSERT_TRUE(densityTensor.has_value()) << densityTensor.error().message;
+    auto fock = builder->BuildFock(*densityTensor);
+    ASSERT_FALSE(fock.has_value());
+    EXPECT_EQ(fock.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(fock.error().message.find("symmetryStrongForm"), std::string::npos)
+        << fock.error().message;
+    EXPECT_NE(fock.error().message.find("totally symmetric"), std::string::npos)
+        << fock.error().message;
+}
+
+// The accumulation census: the weak class build contracts one block per
+// screened member quartet (so its contract count reproduces the screened
+// set exactly), while the strong form contracts one block per orbit TASK
+// (classBlockContractCalls == classOrbitTaskCount, and strictly fewer
+// contracts than the weak build on a fixture with non-singleton orbits).
+// The fp64/fp32 quartet counts are the weak build's - the screening and
+// routing partitions are untouched - and water's orbits close, so the
+// strong form runs without a demotion.
+TEST(DirectJkFockBuilderTest, StrongFormCountsAndOrbitTasks) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction reduction = MakeWaterC2vReductionHFirst();
+    const Eigen::MatrixXd density = SymmetrizeUnderReduction(PhysicalDensity(7), reduction);
+    auto densityTensor = ToTensor(density);
+    ASSERT_TRUE(densityTensor.has_value()) << densityTensor.error().message;
+
+    qcx::integrals::FockBuildOptions options;
+    options.useCertifiedMixedPrecision = false;
+    options.maxParallelChunks = 1;
+    options.symmetryReduction = &reduction;
+    auto weakBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, options);
+    ASSERT_TRUE(weakBuilder.has_value()) << weakBuilder.error().message;
+
+    options.symmetryStrongForm = true;
+    auto strongBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, options);
+    ASSERT_TRUE(strongBuilder.has_value()) << strongBuilder.error().message;
+
+    qcx::integrals::FockBuildStats weakStats;
+    auto weakFock = weakBuilder->BuildFock(*densityTensor, nullptr, &weakStats);
+    ASSERT_TRUE(weakFock.has_value()) << weakFock.error().message;
+    qcx::integrals::FockBuildStats strongStats;
+    auto strongFock = strongBuilder->BuildFock(*densityTensor, nullptr, &strongStats);
+    ASSERT_TRUE(strongFock.has_value()) << strongFock.error().message;
+
+    std::cout << "class census: weak contracts = " << weakStats.classBlockContractCalls
+              << ", weak orbit tasks = " << weakStats.classOrbitTaskCount
+              << ", strong contracts = " << strongStats.classBlockContractCalls
+              << ", strong orbit tasks = " << strongStats.classOrbitTaskCount
+              << ", fp64 = " << strongStats.fp64QuartetCount
+              << ", fp32 = " << strongStats.fp32QuartetCount << "\n";
+
+    // The weak build's contracts reproduce the screened set exactly.
+    EXPECT_EQ(weakStats.classBlockContractCalls,
+              weakStats.fp64QuartetCount + weakStats.fp32QuartetCount)
+        << "one weak contraction per screened member quartet";
+    EXPECT_GT(weakStats.classOrbitTaskCount, 0u);
+
+    // The strong form: one contract per orbit task, and strictly fewer than
+    // the member count (the orbit multiplicity is > 1 somewhere).
+    EXPECT_EQ(strongStats.classBlockContractCalls, strongStats.classOrbitTaskCount)
+        << "the strong form contracts one block per orbit task";
+    EXPECT_LT(strongStats.classOrbitTaskCount, weakStats.classBlockContractCalls)
+        << "the strong form's accumulation must be reduced on non-singleton orbits";
+
+    // The evaluation/routing counts are unchanged between the forms.
+    EXPECT_EQ(strongStats.fp64QuartetCount, weakStats.fp64QuartetCount);
+    EXPECT_EQ(strongStats.fp32QuartetCount, weakStats.fp32QuartetCount);
+    EXPECT_EQ(strongStats.classOrbitTaskCount, weakStats.classOrbitTaskCount);
+
+    // Water's screened orbits close, so the strong form ran.
+    EXPECT_EQ(strongStats.strongFormFallbacks, 0u);
+    EXPECT_EQ(strongStats.strongFormClosureMisses, 0u);
+    EXPECT_LT(MaxAbsoluteDelta(ToMatrix(*strongFock), ToMatrix(*weakFock)), 1e-12);
+}
+
+// The engagement boundary is measured, never the group order alone:
+//   - a default SymmetryReduction (groupOrder 1) keeps the plain path, so
+//     the strong option is the option-off bytes exactly;
+//   - an order-2 SIGN-ONLY reduction (every element the identity
+//     permutation, one flipping a function's sign - the planar mirror) acts
+//     trivially on every canonical shell pair: every class is a singleton,
+//     the class decomposition is pair-trivial, and the strong option is
+//     again inert (the weak class build's bytes);
+//   - the option without a reduction is refused at Create by name.
+TEST(DirectJkFockBuilderTest, StrongFormIsInertOnTrivialAndPairTrivialReductions) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+    auto densityTensor = ToTensor(PhysicalDensity(7));
+    ASSERT_TRUE(densityTensor.has_value()) << densityTensor.error().message;
+
+    // (a) The C1 default: no class table, the plain path both ways.
+    const qcx::integrals::SymmetryReduction trivial;
+    qcx::integrals::FockBuildOptions trivialOptions;
+    trivialOptions.useCertifiedMixedPrecision = false;
+    trivialOptions.maxParallelChunks = 1;
+    trivialOptions.symmetryReduction = &trivial;
+    auto trivialOff =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, trivialOptions);
+    ASSERT_TRUE(trivialOff.has_value()) << trivialOff.error().message;
+    trivialOptions.symmetryStrongForm = true;
+    auto trivialOn =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, trivialOptions);
+    ASSERT_TRUE(trivialOn.has_value()) << trivialOn.error().message;
+
+    auto trivialOffFock = trivialOff->BuildFock(*densityTensor);
+    ASSERT_TRUE(trivialOffFock.has_value()) << trivialOffFock.error().message;
+    auto trivialOnFock = trivialOn->BuildFock(*densityTensor);
+    ASSERT_TRUE(trivialOnFock.has_value()) << trivialOnFock.error().message;
+    EXPECT_TRUE(BitIdenticalMatrices(ToMatrix(*trivialOnFock), ToMatrix(*trivialOffFock)))
+        << "a groupOrder-1 reduction keeps the plain path byte for byte";
+
+    // (b) The order-2 sign-only group: the identity permutation on both
+    // elements, one sign flip - the pair action fixes every pair, so the
+    // class decomposition is pair-trivial and the strong form is ineligible.
+    qcx::integrals::SymmetryReduction signOnly;
+    signOnly.groupOrder = 2;
+    signOnly.isTrivial = true;
+    signOnly.permutation = {
+        {0, 1, 2, 3, 4, 5, 6}, // I.
+        {0, 1, 2, 3, 4, 5, 6}, // the sign-only element fixes every function.
+    };
+    signOnly.sign = {
+        {1, 1, 1, 1, 1, 1, 1}, // I.
+        {1, 1, 1, 1, 1, -1, 1}, // O p_z -> -O p_z.
+    };
+    qcx::integrals::FockBuildOptions signOptions;
+    signOptions.useCertifiedMixedPrecision = false;
+    signOptions.maxParallelChunks = 1;
+    signOptions.symmetryReduction = &signOnly;
+    auto signOff =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, signOptions);
+    ASSERT_TRUE(signOff.has_value()) << signOff.error().message;
+    signOptions.symmetryStrongForm = true;
+    auto signOn =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, signOptions);
+    ASSERT_TRUE(signOn.has_value()) << signOn.error().message;
+
+    qcx::integrals::FockBuildStats signStats;
+    auto signOffFock = signOff->BuildFock(*densityTensor);
+    ASSERT_TRUE(signOffFock.has_value()) << signOffFock.error().message;
+    auto signOnFock = signOn->BuildFock(*densityTensor, nullptr, &signStats);
+    ASSERT_TRUE(signOnFock.has_value()) << signOnFock.error().message;
+    EXPECT_TRUE(BitIdenticalMatrices(ToMatrix(*signOnFock), ToMatrix(*signOffFock)))
+        << "a pair-trivial class decomposition keeps the weak class path byte for byte";
+    EXPECT_GT(signStats.classOrbitTaskCount, 0u)
+        << "the class path itself is live (one singleton class per pair)";
+    EXPECT_EQ(signStats.strongFormFallbacks, 0u)
+        << "an ineligible strong request is not a demotion";
+
+    // (c) The missing-reduction refusal.
+    qcx::integrals::FockBuildOptions nullOptions;
+    nullOptions.symmetryStrongForm = true;
+    auto refused =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, nullOptions);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(refused.error().message.find("symmetryStrongForm"), std::string::npos)
+        << refused.error().message;
+}
+
+// The certified fp32 lane under the strong form: the routing partition and
+// the per-member certified sum are the weak build's (same terms, same
+// order), so the delivered fp32 error stays inside the sum exactly as on
+// the weak class path - the dominance test that decides fp32 participation.
+TEST(DirectJkFockBuilderTest, StrongFormMixedPrecisionLaneDominance) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction reduction = MakeWaterC2vReductionHFirst();
+    const Eigen::MatrixXd density = SymmetrizeUnderReduction(PhysicalDensity(7), reduction);
+    auto densityTensor = ToTensor(density);
+    ASSERT_TRUE(densityTensor.has_value()) << densityTensor.error().message;
+
+    qcx::integrals::FockBuildOptions weakOptions;
+    weakOptions.accuracy = qcx::integrals::AccuracyPreset::kLoose;
+    weakOptions.useCertifiedMixedPrecision = true;
+    weakOptions.maxParallelChunks = 1;
+    weakOptions.symmetryReduction = &reduction;
+    auto weakBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, weakOptions);
+    ASSERT_TRUE(weakBuilder.has_value()) << weakBuilder.error().message;
+
+    qcx::integrals::FockBuildOptions strongOptions = weakOptions;
+    strongOptions.symmetryStrongForm = true;
+    auto strongBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, strongOptions);
+    ASSERT_TRUE(strongBuilder.has_value()) << strongBuilder.error().message;
+
+    // The strong form's fp64 reference (the lane off, everything else the
+    // same).
+    qcx::integrals::FockBuildOptions strongFp64Options = strongOptions;
+    strongFp64Options.useCertifiedMixedPrecision = false;
+    auto strongFp64Builder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, strongFp64Options);
+    ASSERT_TRUE(strongFp64Builder.has_value()) << strongFp64Builder.error().message;
+
+    double weakBoundSum = -1.0;
+    auto weakFock = weakBuilder->BuildFock(*densityTensor, &weakBoundSum);
+    ASSERT_TRUE(weakFock.has_value()) << weakFock.error().message;
+    double strongBoundSum = -1.0;
+    qcx::integrals::FockBuildStats strongStats;
+    auto strongFock = strongBuilder->BuildFock(*densityTensor, &strongBoundSum, &strongStats);
+    ASSERT_TRUE(strongFock.has_value()) << strongFock.error().message;
+    auto strongFp64Fock = strongFp64Builder->BuildFock(*densityTensor);
+    ASSERT_TRUE(strongFp64Fock.has_value()) << strongFp64Fock.error().message;
+
+    // The lane actually routed, and the strong form's certified sum is the
+    // weak build's (same member-weighted terms, same order).
+    std::cout << "strong fp32 lane: fp32 quartets = " << strongStats.fp32QuartetCount
+              << ", fp64 quartets = " << strongStats.fp64QuartetCount
+              << ", contracts = " << strongStats.classBlockContractCalls
+              << ", orbit tasks = " << strongStats.classOrbitTaskCount
+              << ", fallbacks = " << strongStats.strongFormFallbacks
+              << ", closure misses = " << strongStats.strongFormClosureMisses
+              << ", strong sum = " << strongBoundSum << ", weak sum = " << weakBoundSum << "\n";
+    EXPECT_GT(strongStats.fp32QuartetCount, 0u);
+    EXPECT_NEAR(strongBoundSum, weakBoundSum, 1e-12);
+
+    // The dominance test: the strongest deviation the lane may deliver is
+    // the certified sum, composed; 1.001 absorbs the composition's own
+    // rounding.
+    EXPECT_LE((ToMatrix(*strongFock) - ToMatrix(*strongFp64Fock)).cwiseAbs().maxCoeff(),
+              strongBoundSum * 1.001 + 1e-14)
+        << "the strong form's fp32-lane deviation escapes its certified sum";
+    EXPECT_LT(MaxAbsoluteDelta(ToMatrix(*strongFock), ToMatrix(*weakFock)),
+              (strongBoundSum + weakBoundSum) * 1.001 + 1e-14);
+}
+
+// The LightPath demotion: the per-chunk screening has no whole-call orbit
+// ownership, so the strong form is demoted unconditionally in v1 - the
+// build IS the weak build (byte for byte), the fallback is recorded, and
+// the certified sum is unchanged.
+TEST(DirectJkFockBuilderTest, StrongFormLightPathDemotesAndMatchesTheWeakBuild) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction reduction = MakeWaterC2vReductionHFirst();
+    const Eigen::MatrixXd density = SymmetrizeUnderReduction(PhysicalDensity(7), reduction);
+    auto densityTensor = ToTensor(density);
+    ASSERT_TRUE(densityTensor.has_value()) << densityTensor.error().message;
+
+    // The forced LightPath (the same 64 MiB band the certified-budget
+    // demotion test uses; the knob needs a budget to reach the mode
+    // decision).
+    auto weakBudget = qcx::memory::WorkspaceBudget::Create(std::size_t{64} * 1024 * 1024);
+    ASSERT_TRUE(weakBudget.has_value()) << weakBudget.error().message;
+    qcx::integrals::FockBuildOptions weakOptions;
+    weakOptions.useCertifiedMixedPrecision = false;
+    weakOptions.maxParallelChunks = 1;
+    weakOptions.workspaceBudget = &*weakBudget;
+    weakOptions.lightPathChunkPairs = 5;
+    weakOptions.symmetryReduction = &reduction;
+    auto weakBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, weakOptions);
+    ASSERT_TRUE(weakBuilder.has_value()) << weakBuilder.error().message;
+
+    auto strongBudget = qcx::memory::WorkspaceBudget::Create(std::size_t{64} * 1024 * 1024);
+    ASSERT_TRUE(strongBudget.has_value()) << strongBudget.error().message;
+    qcx::integrals::FockBuildOptions strongOptions = weakOptions;
+    strongOptions.workspaceBudget = &*strongBudget;
+    strongOptions.symmetryStrongForm = true;
+    auto strongBuilder =
+        qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, strongOptions);
+    ASSERT_TRUE(strongBuilder.has_value()) << strongBuilder.error().message;
+
+    // Both decisions must be the class-path LightPath (the demotion under
+    // test is the strong form's, not the budget gate's).
+    ASSERT_TRUE(weakBuilder->ModeInfo().has_value());
+    ASSERT_TRUE(strongBuilder->ModeInfo().has_value());
+    EXPECT_EQ(strongBuilder->ModeInfo()->mode, qcx::integrals::FockBuildMode::kLightPath);
+    EXPECT_FALSE(strongBuilder->ModeInfo()->classPathDisengaged);
+
+    double weakBoundSum = -1.0;
+    auto weakFock = weakBuilder->BuildFock(*densityTensor, &weakBoundSum);
+    ASSERT_TRUE(weakFock.has_value()) << weakFock.error().message;
+    double strongBoundSum = -1.0;
+    qcx::integrals::FockBuildStats strongStats;
+    auto strongFock = strongBuilder->BuildFock(*densityTensor, &strongBoundSum, &strongStats);
+    ASSERT_TRUE(strongFock.has_value()) << strongFock.error().message;
+
+    EXPECT_TRUE(BitIdenticalMatrices(ToMatrix(*strongFock), ToMatrix(*weakFock)))
+        << "the demoted build must BE the weak build";
+    EXPECT_EQ(strongStats.strongFormFallbacks, 1u) << "the LightPath demotion must be recorded";
+    EXPECT_EQ(strongStats.strongFormClosureMisses, 0u);
+    EXPECT_EQ(strongBoundSum, weakBoundSum);
+}
+
 // A trivial reduction (groupOrder 1) keeps the plain path: Create() never
 // engages the class table, so the build takes the null reduction's exact
 // code path - including the certified lane routing (the reduction pointer
@@ -1223,6 +1733,80 @@ TEST(FockBuildTest, Avx2DispatchPathsAreBitIdenticalSplitModes) {
     coulombOnly.buildCoulombOnly = true;
     coulombOnly.maxParallelChunks = 1;
     CheckDispatchPathsBitIdentical(*molecule, *basis, coulombOnly, 7);
+}
+
+// The strong form in the split modes, and the weighted kernel's dispatch
+// A/B: the projection is linear, so each half (H + 2J, H - K) reproduces
+// the weak build's half at 1e-12; and because the strong form's block
+// weight is the orbit multiplicity (never 1.0 on water), the scalar and
+// AVX2 kernel copies are exercised WITH the weight and must still agree to
+// the cross-platform dispatch band.
+TEST(FockBuildTest, StrongFormSplitModesAndWeightedDispatch) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "fast mode";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeH2oSto3g();
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const qcx::integrals::SymmetryReduction reduction = MakeWaterC2vReductionHFirst();
+    const Eigen::MatrixXd density = SymmetrizeUnderReduction(PhysicalDensity(7), reduction);
+    auto densityTensor = ToTensor(density);
+    ASSERT_TRUE(densityTensor.has_value()) << densityTensor.error().message;
+
+    for (const bool coulombOnly : {true, false})
+    {
+        qcx::integrals::FockBuildOptions weakOptions;
+        weakOptions.useCertifiedMixedPrecision = false;
+        weakOptions.maxParallelChunks = 1;
+        weakOptions.symmetryReduction = &reduction;
+
+        if (coulombOnly)
+        {
+            weakOptions.buildCoulombOnly = true;
+        } else
+        {
+            weakOptions.buildExchangeOnly = true;
+        }
+
+        auto weakBuilder =
+            qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, weakOptions);
+        ASSERT_TRUE(weakBuilder.has_value()) << weakBuilder.error().message;
+
+        qcx::integrals::FockBuildOptions strongOptions = weakOptions;
+        strongOptions.symmetryStrongForm = true;
+        auto strongBuilder =
+            qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, strongOptions);
+        ASSERT_TRUE(strongBuilder.has_value()) << strongBuilder.error().message;
+
+        auto weakFock = weakBuilder->BuildFock(*densityTensor);
+        ASSERT_TRUE(weakFock.has_value()) << weakFock.error().message;
+        auto strongFock = strongBuilder->BuildFock(*densityTensor);
+        ASSERT_TRUE(strongFock.has_value()) << strongFock.error().message;
+
+        EXPECT_LT(MaxAbsoluteDelta(ToMatrix(*strongFock), ToMatrix(*weakFock)), 1e-12)
+            << (coulombOnly ? "Coulomb-only" : "exchange-only") << " strong vs weak";
+
+        // The weighted kernel's dispatch A/B: the strong form's orbit
+        // weights are > 1 on this fixture's non-singleton orbits, so both
+        // kernel copies run the weighted arithmetic.
+        qcx::integrals::FockBuildOptions scalarOptions = strongOptions;
+        scalarOptions.forceScalarContract = true;
+        auto scalarBuilder =
+            qcx::integrals::DirectJkFockBuilder::Create(*molecule, *basis, *core, scalarOptions);
+        ASSERT_TRUE(scalarBuilder.has_value()) << scalarBuilder.error().message;
+        auto scalarFock = scalarBuilder->BuildFock(*densityTensor);
+        ASSERT_TRUE(scalarFock.has_value()) << scalarFock.error().message;
+
+        EXPECT_LE((ToMatrix(*strongFock) - ToMatrix(*scalarFock)).cwiseAbs().maxCoeff(),
+                  kDispatchCopyMaxAbsDiff)
+            << "the AVX2 and scalar kernel copies diverge beyond the band with the orbit weight";
+    }
 }
 
 // The parallel-path agreement: at the default chunk schedule
