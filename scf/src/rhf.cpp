@@ -1361,8 +1361,10 @@ qcx::Result<HfResult> RunRhfScf(const qcx::molecule::Molecule& molecule,
     // The supermatrix Fock build as a FockBuilderFn: the J/K supermatrices
     // are density-independent and built once, so the callback only contracts
     // the current density (BuildFock keeps the standard Fock-build argument
-    // order, density then core Hamiltonian).
-    const FockBuilderFn buildFock = [super, coreHamiltonian](const Eigen::MatrixXd& density) {
+    // order, density then core Hamiltonian). The supermatrices are captured
+    // by reference: they are two n^4 arrays, and a by-value capture copies
+    // all of it for the length of the SCF.
+    const FockBuilderFn buildFock = [&super, coreHamiltonian](const Eigen::MatrixXd& density) {
         return BuildFock(super, density, coreHamiltonian);
     };
 

@@ -8,9 +8,12 @@
 #include "qcx/grid/ao_evaluator.hpp"
 #include "qcx/grid/molecular_grid.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <gtest/gtest.h>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -78,6 +81,23 @@ qcx::Result<qcx::molecule::Molecule> MakeSingleHydrogen() {
     coordinates->MarkHostDirty();
     return qcx::molecule::Molecule::Create(
         std::vector<qcx::molecule::Atom>{{"H", 1, 0.0}}, std::move(*coordinates), 0, 1);
+}
+
+// One oxygen at the origin, for the production-exponent gate.
+qcx::Result<qcx::molecule::Molecule> MakeSingleOxygen() {
+    auto coordinates = qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>::Create({1, 3});
+
+    if (!coordinates.has_value())
+    {
+        return std::unexpected(coordinates.error());
+    }
+
+    (*coordinates)(0, 0) = 0.0;
+    (*coordinates)(0, 1) = 0.0;
+    (*coordinates)(0, 2) = 0.0;
+    coordinates->MarkHostDirty();
+    return qcx::molecule::Molecule::Create(
+        std::vector<qcx::molecule::Atom>{{"O", 8, 0.0}}, std::move(*coordinates), 0, 3);
 }
 
 TEST(AoEvaluatorTest, STypeMatchesClosedForm) {
@@ -931,6 +951,650 @@ TEST(AoEvaluatorTest, SelectedEvaluationMatchesTheFullOneAndTouchesOnlyItsShells
                 {
                     EXPECT_EQ(gradients[slot], kSentinel)
                         << "gradient slot " << slot << " must be left untouched";
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The third-derivative tier (EvaluateDerivativesToThird): ten fully symmetric
+// components per AO per point, packed (xxx, xxy, xxz, xyy, xyz, xzz, yyy,
+// yyz, yzz, zzz) per AO, mu-major.  The cases below are its acceptance: the
+// analytic tier against a Richardson central difference of the analytic
+// Hessian tier, the s contraction's closed-form pin, the packing's structural
+// symmetry, and the selected form's untouched-slots contract.
+// ---------------------------------------------------------------------------
+
+// The ten packed third-derivative slots, each with one ordered index triple
+// realising it: xxx, xxy, xxz, xyy, xyz, xzz, yyy, yyz, yzz, zzz.
+constexpr std::size_t kThirdTriples[10][3] = {
+    {0, 0, 0},
+    {0, 0, 1},
+    {0, 0, 2},
+    {0, 1, 1},
+    {0, 1, 2},
+    {0, 2, 2},
+    {1, 1, 1},
+    {1, 1, 2},
+    {1, 2, 2},
+    {2, 2, 2},
+};
+
+// The slot of every ordered index triple: the ten packed entries expanded
+// into the full symmetric third-rank tensor.
+constexpr std::size_t kThirdSlot[3][3][3] = {
+    {{0, 1, 2}, {1, 3, 4}, {2, 4, 5}},
+    {{1, 3, 4}, {3, 6, 7}, {4, 7, 8}},
+    {{2, 4, 5}, {4, 7, 8}, {5, 8, 9}},
+};
+
+// The packed Hessian slot (xx, xy, xz, yy, yz, zz) of an index pair.
+constexpr std::size_t kHessianSlot[3][3] = {{0, 1, 2}, {1, 3, 4}, {2, 4, 5}};
+
+// A recorded measurement in the precision it deserves: the default stream
+// conversion keeps six decimals, and a third-order residual lives below the
+// point where that shows anything.
+std::string Scientific(double value) {
+    std::array<char, 32> buffer{};
+    std::snprintf(buffer.data(), buffer.size(), "%.3e", value);
+
+    return std::string(buffer.data());
+}
+
+TEST(AoEvaluatorTest, ThirdDerivativesMatchClosedFormForSPrimitive) {
+    // The closed-form pin of the third tier, extending
+    // DerivativesMatchClosedFormForSPrimitive by one differentiation: S00 = 1,
+    // so every third derivative of the s AO is the third derivative of the
+    // contracted radial factor.  Differentiating the Hessian line of that test
+    // once more gives, for f = N_0(zeta) exp(-zeta r2) and Delta = x - R_A,
+    //     d3_abc f = f [4 zeta^2 (delta_ab Delta_c + delta_ac Delta_b
+    //                              + delta_bc Delta_a)
+    //                   - 8 zeta^3 Delta_a Delta_b Delta_c].
+    // The reference below is written from that line per packed slot, so a
+    // wrong exponent or a swapped slot parts from it.
+    const auto basis = qcx::basisset::ParseNwchemText(kSto3gH);
+    ASSERT_TRUE(basis.has_value());
+    const auto molecule = MakeSingleHydrogen();
+    ASSERT_TRUE(molecule.has_value());
+
+    const auto evaluator = AoEvaluator::Create(*molecule, *basis);
+    ASSERT_TRUE(evaluator.has_value());
+    ASSERT_EQ(evaluator->AOCount(), 1u);
+
+    const auto* element = basis->Find(1);
+    ASSERT_NE(element, nullptr);
+    const auto& exponents = element->shells[0].exponents;
+    const auto& coefficients = element->shells[0].coefficients[0];
+
+    const std::array<double, 3> point = {0.3, -0.2, 0.1};
+    const double r2 = point[0] * point[0] + point[1] * point[1] + point[2] * point[2];
+
+    std::array<double, 1> values{};
+    std::array<double, 3> gradients{};
+    std::array<double, 6> hessians{};
+    std::array<double, 10> thirds{};
+    evaluator->EvaluateDerivativesToThird(point, values, gradients, hessians, thirds);
+
+    EXPECT_NEAR(values[0], RadialReference(0, r2, exponents, coefficients), 1e-10);
+
+    // Relative, so the same bar holds at any contraction scale.
+    constexpr double kRelativeTolerance = 1e-12;
+
+    for (std::size_t slot = 0; slot < 10; ++slot)
+    {
+        const std::size_t a = kThirdTriples[slot][0];
+        const std::size_t b = kThirdTriples[slot][1];
+        const std::size_t c = kThirdTriples[slot][2];
+        double expected = 0.0;
+
+        for (std::size_t i = 0; i < exponents.size(); ++i)
+        {
+            const double factor = coefficients[i] * SOrbitalNormalization(exponents[i]) *
+                                  std::exp(-exponents[i] * r2);
+            const double fourZ2 = 4.0 * exponents[i] * exponents[i];
+            const double eightZ3 = 8.0 * exponents[i] * exponents[i] * exponents[i];
+            const double deltaSum =
+                (a == b ? point[c] : 0.0) + (a == c ? point[b] : 0.0) + (b == c ? point[a] : 0.0);
+            expected += factor * (fourZ2 * deltaSum - eightZ3 * point[a] * point[b] * point[c]);
+        }
+
+        const double error = std::abs(thirds[slot] - expected);
+        const double scale = 1.0 + std::max(std::abs(thirds[slot]), std::abs(expected));
+        EXPECT_LT(error, kRelativeTolerance * scale) << "third slot " << slot;
+    }
+}
+
+TEST(AoEvaluatorTest, ThirdDerivativeTierMatchesTheHessianDifference) {
+    // The third tier is the x-derivative of the analytic Hessian tier by
+    // construction, so a central difference of that tier gates it without a
+    // second reference implementation.  At third order the gate must be
+    // relative: a core exponent scales the third derivative by (2 zeta)^(3/2)
+    // against the value, so an absolute bar that fits an s shell fails a core
+    // shell by construction.  Richardson's two-step combination removes the
+    // h^2 term that dominates a plain central difference at h = 1e-4.  The
+    // residual is recorded per shell as a test property, so the run's own
+    // record carries it.  What this does not prove: the difference
+    // differentiates the same evaluator it checks, so it verifies the
+    // derivative arithmetic, not the shell model.
+    constexpr double kStep = 1e-4;
+    constexpr double kRelativeTolerance = 1e-9;
+
+    struct ShellCase {
+        std::string_view label;
+        std::string_view basis;
+    };
+
+    // The radial-only path, the solid-harmonic derivative terms, the
+    // Cartesian monomial path, and the deepest shipped shell (l = 6).
+    const std::array<ShellCase, 4> shellCases = {{
+        {"s", kSto3gH},
+        {"p", kP1},
+        {"p-cartesian", kP1Cartesian},
+        {"i", kI1},
+    }};
+
+    const auto molecule = MakeSingleHydrogen();
+    ASSERT_TRUE(molecule.has_value());
+
+    const std::array<std::array<double, 3>, 2> points = {{
+        {0.3, -0.2, 0.1},
+        {1.1, 0.7, -0.9},
+    }};
+
+    for (const ShellCase& shellCase : shellCases)
+    {
+        const auto basis = qcx::basisset::ParseNwchemText(shellCase.basis);
+        ASSERT_TRUE(basis.has_value()) << shellCase.label;
+        const auto evaluator = AoEvaluator::Create(*molecule, *basis);
+        ASSERT_TRUE(evaluator.has_value()) << shellCase.label;
+
+        const std::size_t count = evaluator->AOCount();
+        std::vector<double> values(count);
+        std::vector<double> gradients(3 * count);
+        std::vector<double> hessians(6 * count);
+        std::vector<double> thirds(10 * count);
+        std::vector<double> shiftedValues(count);
+        std::vector<double> shiftedGradients(3 * count);
+        double maxRelativeResidual = 0.0;
+
+        for (const std::array<double, 3>& point : points)
+        {
+            evaluator->EvaluateDerivativesToThird(point, values, gradients, hessians, thirds);
+
+            // The Hessian tier at x +- h and x +- h/2 on each axis.
+            std::array<std::vector<double>, 3> coarsePlus;
+            std::array<std::vector<double>, 3> coarseMinus;
+            std::array<std::vector<double>, 3> finePlus;
+            std::array<std::vector<double>, 3> fineMinus;
+
+            for (std::size_t axis = 0; axis < 3; ++axis)
+            {
+                coarsePlus[axis].assign(6 * count, 0.0);
+                coarseMinus[axis].assign(6 * count, 0.0);
+                finePlus[axis].assign(6 * count, 0.0);
+                fineMinus[axis].assign(6 * count, 0.0);
+
+                std::array<double, 3> shifted = point;
+                shifted[axis] = point[axis] + kStep;
+                evaluator->EvaluateDerivatives(
+                    shifted, shiftedValues, shiftedGradients, coarsePlus[axis]);
+                shifted[axis] = point[axis] - kStep;
+                evaluator->EvaluateDerivatives(
+                    shifted, shiftedValues, shiftedGradients, coarseMinus[axis]);
+                shifted[axis] = point[axis] + 0.5 * kStep;
+                evaluator->EvaluateDerivatives(
+                    shifted, shiftedValues, shiftedGradients, finePlus[axis]);
+                shifted[axis] = point[axis] - 0.5 * kStep;
+                evaluator->EvaluateDerivatives(
+                    shifted, shiftedValues, shiftedGradients, fineMinus[axis]);
+            }
+
+            for (std::size_t mu = 0; mu < count; ++mu)
+            {
+                for (std::size_t slot = 0; slot < 10; ++slot)
+                {
+                    const std::size_t a = kThirdTriples[slot][0];
+                    const std::size_t b = kThirdTriples[slot][1];
+                    const std::size_t c = kThirdTriples[slot][2];
+                    const std::size_t entry = 6 * mu + kHessianSlot[a][b];
+                    const double coarse =
+                        (coarsePlus[c][entry] - coarseMinus[c][entry]) / (2.0 * kStep);
+                    const double fine = (finePlus[c][entry] - fineMinus[c][entry]) / kStep;
+                    const double difference = (4.0 * fine - coarse) / 3.0;
+                    const double analytic = thirds[10 * mu + slot];
+                    const double error = std::abs(analytic - difference);
+                    const double scale = 1.0 + std::max(std::abs(analytic), std::abs(difference));
+                    maxRelativeResidual = std::max(maxRelativeResidual, error / scale);
+                    EXPECT_LT(error, kRelativeTolerance * scale)
+                        << shellCase.label << " mu=" << mu << " third slot " << slot;
+                }
+            }
+        }
+
+        const std::string residualPrefix =
+            "third tier vs Hessian difference, max relative residual, ";
+        RecordProperty(residualPrefix + std::string(shellCase.label),
+                       Scientific(maxRelativeResidual));
+    }
+}
+
+// The def2-TZVP oxygen basis as shipped in data/basis/def2-tzvp/O.nwchem;
+// its core exponent, 27032.3826310, is the production scale the closed-form
+// pins never reach and the reason the gate is relative.
+constexpr std::string_view kDef2TzvpO = R"(
+BASIS "ao basis" SPHERICAL PRINT
+O    S
+  27032.3826310              0.21726302465E-03
+   4052.3871392              0.16838662199E-02
+    922.32722710             0.87395616265E-02
+    261.24070989             0.35239968808E-01
+     85.354641351            0.11153519115
+     31.035035245            0.25588953961
+O    S
+     12.260860728            0.39768730901
+      4.9987076005           0.24627849430
+O    S
+      1.1703108158           1.0000000
+O    S
+      0.46474740994          1.0000000
+O    S
+      0.18504536357          1.0000000
+O    P
+     63.274954801            0.60685103418E-02
+     14.627049379            0.41912575824E-01
+      4.4501223456           0.16153841088
+      1.5275799647           0.35706951311
+O    P
+      0.52935117943           .44794207502
+O    P
+      0.17478421270           .24446069663
+O    D
+      2.31400000             1.0000000
+O    D
+      0.64500000             1.0000000
+O    F
+      1.42800000             1.0000000
+END
+)";
+
+TEST(AoEvaluatorTest, ThirdDerivativeTierHoldsAtProductionExponents) {
+    // The stop-condition measurement: the contracted third tier on the
+    // def2-TZVP oxygen basis, whose seven decades of exponent are the scale
+    // the other fixtures never reach, against a Richardson central
+    // difference of the same evaluator's Hessian tier.  The residual is
+    // recorded per shell rather than as one maximum, because a contraction
+    // loses its digits unevenly: the core shell is dominated by one
+    // primitive while the valence shells sum several.
+    //
+    // The step is 2e-5 rather than the fixture gate's 1e-4: the core
+    // exponent's decay length is 1/zeta = 3.7e-5, so at 1e-4 the
+    // difference's own Taylor remainder dominates and floors the residual
+    // at 1.6e-8, while below about 1.5e-5 its rounding grows as 1/h.  Both
+    // are the difference's own errors, not the tier's; 2e-5 sits at the
+    // measured floor, where the residual is 1.8e-10.
+    constexpr double kStep = 2e-5;
+    constexpr double kRelativeTolerance = 1e-9;
+
+    const auto basis = qcx::basisset::ParseNwchemText(kDef2TzvpO);
+    ASSERT_TRUE(basis.has_value());
+    const auto molecule = MakeSingleOxygen();
+    ASSERT_TRUE(molecule.has_value());
+
+    const auto evaluator = AoEvaluator::Create(*molecule, *basis);
+    ASSERT_TRUE(evaluator.has_value());
+    ASSERT_EQ(evaluator->AOCount(), 31u);
+
+    const auto* element = basis->Find(8);
+    ASSERT_NE(element, nullptr);
+    ASSERT_EQ(element->shells.size(), evaluator->ShellRanges().size());
+
+    const std::size_t count = evaluator->AOCount();
+    std::vector<double> values(count);
+    std::vector<double> gradients(3 * count);
+    std::vector<double> hessians(6 * count);
+    std::vector<double> thirds(10 * count);
+    std::vector<double> shiftedValues(count);
+    std::vector<double> shiftedGradients(3 * count);
+
+    // Two points close to the nucleus, where the core primitive carries the
+    // contraction, and two valence points.
+    const std::array<std::array<double, 3>, 4> points = {{
+        {0.005, -0.003, 0.002},
+        {0.01, 0.0, 0.0},
+        {0.3, -0.2, 0.1},
+        {1.1, 0.7, -0.9},
+    }};
+
+    std::vector<double> maxPerShell(evaluator->ShellRanges().size(), 0.0);
+
+    for (const std::array<double, 3>& point : points)
+    {
+        evaluator->EvaluateDerivativesToThird(point, values, gradients, hessians, thirds);
+
+        std::array<std::vector<double>, 3> coarsePlus;
+        std::array<std::vector<double>, 3> coarseMinus;
+        std::array<std::vector<double>, 3> finePlus;
+        std::array<std::vector<double>, 3> fineMinus;
+
+        for (std::size_t axis = 0; axis < 3; ++axis)
+        {
+            coarsePlus[axis].assign(6 * count, 0.0);
+            coarseMinus[axis].assign(6 * count, 0.0);
+            finePlus[axis].assign(6 * count, 0.0);
+            fineMinus[axis].assign(6 * count, 0.0);
+
+            std::array<double, 3> shifted = point;
+            shifted[axis] = point[axis] + kStep;
+            evaluator->EvaluateDerivatives(
+                shifted, shiftedValues, shiftedGradients, coarsePlus[axis]);
+            shifted[axis] = point[axis] - kStep;
+            evaluator->EvaluateDerivatives(
+                shifted, shiftedValues, shiftedGradients, coarseMinus[axis]);
+            shifted[axis] = point[axis] + 0.5 * kStep;
+            evaluator->EvaluateDerivatives(
+                shifted, shiftedValues, shiftedGradients, finePlus[axis]);
+            shifted[axis] = point[axis] - 0.5 * kStep;
+            evaluator->EvaluateDerivatives(
+                shifted, shiftedValues, shiftedGradients, fineMinus[axis]);
+        }
+
+        for (std::size_t shellIndex = 0; shellIndex < evaluator->ShellRanges().size(); ++shellIndex)
+        {
+            const ShellRange& range = evaluator->ShellRanges()[shellIndex];
+
+            for (std::size_t mu = range.aoOffset; mu < range.aoOffset + range.functionCount; ++mu)
+            {
+                for (std::size_t slot = 0; slot < 10; ++slot)
+                {
+                    const std::size_t a = kThirdTriples[slot][0];
+                    const std::size_t b = kThirdTriples[slot][1];
+                    const std::size_t c = kThirdTriples[slot][2];
+                    const std::size_t entry = 6 * mu + kHessianSlot[a][b];
+                    const double coarse =
+                        (coarsePlus[c][entry] - coarseMinus[c][entry]) / (2.0 * kStep);
+                    const double fine = (finePlus[c][entry] - fineMinus[c][entry]) / kStep;
+                    const double difference = (4.0 * fine - coarse) / 3.0;
+                    const double analytic = thirds[10 * mu + slot];
+                    const double error = std::abs(analytic - difference);
+                    const double scale = 1.0 + std::max(std::abs(analytic), std::abs(difference));
+                    maxPerShell[shellIndex] = std::max(maxPerShell[shellIndex], error / scale);
+                    EXPECT_LT(error, kRelativeTolerance * scale)
+                        << "shell " << shellIndex << " mu=" << mu << " third slot " << slot;
+                }
+            }
+        }
+    }
+
+    for (std::size_t shellIndex = 0; shellIndex < maxPerShell.size(); ++shellIndex)
+    {
+        // Named by angular momentum in the parse order, which is the shell
+        // order the ranges tile.
+        const int angularMomentum = element->shells[shellIndex].angularMomentum;
+        char label[32];
+        std::snprintf(
+            label, sizeof(label), "def2-tzvp O, l=%d shell %zu", angularMomentum, shellIndex);
+        RecordProperty(std::string("third tier vs Hessian difference, max relative residual, ") +
+                           label,
+                       Scientific(maxPerShell[shellIndex]));
+    }
+}
+
+TEST(AoEvaluatorTest, ThirdDerivativePackingIsPermutationInvariant) {
+    // Structural, not an accuracy gate: the ten packed components, expanded
+    // through the documented slot table into the full 3 x 3 x 3 tensor, must
+    // be unchanged by every permutation of its three indices.  By itself that
+    // restates the table, so the second part makes the check bite: an s AO is
+    // isotropic, so evaluating it at a point with the axes cycled must give
+    // the same tensor with its slots cycled the same way.  A mis-packed order
+    // breaks that; an inaccurate one does not, which is the finite-difference
+    // case's business.
+    struct ShellCase {
+        std::string_view label;
+        std::string_view basis;
+    };
+
+    const std::array<ShellCase, 4> shellCases = {{
+        {"s", kSto3gH},
+        {"p", kP1},
+        {"p-cartesian", kP1Cartesian},
+        {"i", kI1},
+    }};
+
+    const auto molecule = MakeSingleHydrogen();
+    ASSERT_TRUE(molecule.has_value());
+    const std::array<double, 3> point = {0.3, -0.2, 0.1};
+
+    for (const ShellCase& shellCase : shellCases)
+    {
+        const auto basis = qcx::basisset::ParseNwchemText(shellCase.basis);
+        ASSERT_TRUE(basis.has_value()) << shellCase.label;
+        const auto evaluator = AoEvaluator::Create(*molecule, *basis);
+        ASSERT_TRUE(evaluator.has_value()) << shellCase.label;
+
+        const std::size_t count = evaluator->AOCount();
+        std::vector<double> values(count);
+        std::vector<double> gradients(3 * count);
+        std::vector<double> hessians(6 * count);
+        std::vector<double> thirds(10 * count);
+        evaluator->EvaluateDerivativesToThird(point, values, gradients, hessians, thirds);
+
+        for (std::size_t mu = 0; mu < count; ++mu)
+        {
+            std::array<double, 27> tensor{};
+
+            for (std::size_t a = 0; a < 3; ++a)
+            {
+                for (std::size_t b = 0; b < 3; ++b)
+                {
+                    for (std::size_t c = 0; c < 3; ++c)
+                    {
+                        tensor[9 * a + 3 * b + c] = thirds[10 * mu + kThirdSlot[a][b][c]];
+                    }
+                }
+            }
+
+            for (std::size_t a = 0; a < 3; ++a)
+            {
+                for (std::size_t b = 0; b < 3; ++b)
+                {
+                    for (std::size_t c = 0; c < 3; ++c)
+                    {
+                        EXPECT_EQ(tensor[9 * a + 3 * b + c], tensor[9 * b + 3 * a + c])
+                            << shellCase.label << " mu=" << mu << " swap of " << a << " and " << b;
+                        EXPECT_EQ(tensor[9 * a + 3 * b + c], tensor[9 * a + 3 * c + b])
+                            << shellCase.label << " mu=" << mu << " swap of " << b << " and " << c;
+                    }
+                }
+            }
+        }
+    }
+
+    // The axis cycle x -> y -> z -> x sends a point p to q = (p_y, p_z, p_x)
+    // and the packed slots with it: kSlotCycle[k] is the slot at p holding
+    // the component slot k names at q.  Its blocks are {0, 6, 9}, {1, 5, 7},
+    // {2, 3, 8} and the fixed point 4.
+    const auto sBasis = qcx::basisset::ParseNwchemText(kSto3gH);
+    ASSERT_TRUE(sBasis.has_value());
+    const auto sEvaluator = AoEvaluator::Create(*molecule, *sBasis);
+    ASSERT_TRUE(sEvaluator.has_value());
+    ASSERT_EQ(sEvaluator->AOCount(), 1u);
+
+    const std::array<double, 3> rotated = {point[1], point[2], point[0]};
+    std::array<double, 1> values{};
+    std::array<double, 3> gradients{};
+    std::array<double, 6> hessians{};
+    std::array<double, 10> atPoint{};
+    std::array<double, 10> atRotated{};
+    sEvaluator->EvaluateDerivativesToThird(point, values, gradients, hessians, atPoint);
+    sEvaluator->EvaluateDerivativesToThird(rotated, values, gradients, hessians, atRotated);
+
+    constexpr std::size_t kSlotCycle[10] = {6, 7, 3, 8, 4, 1, 9, 5, 2, 0};
+
+    for (std::size_t slot = 0; slot < 10; ++slot)
+    {
+        const double expected = atPoint[kSlotCycle[slot]];
+        const double error = std::abs(atRotated[slot] - expected);
+        const double scale = 1.0 + std::max(std::abs(atRotated[slot]), std::abs(expected));
+        EXPECT_LT(error, 1e-12 * scale) << "third slot " << slot << " under the axis cycle";
+    }
+}
+
+TEST(AoEvaluatorTest, ThirdDerivativeSelectedFormMatchesTheFullOneAndTouchesOnlyItsShells) {
+    // The third tier's selected form, on the two-shell H2 fixture: over the
+    // full selection it reproduces the unselected entry point exactly, over a
+    // partial selection it writes its own shells' slots and leaves every other
+    // slot alone.  The first three spans must also agree with the Hessian
+    // tier, so a consumer switching tiers sees its values, gradients and
+    // Hessians stay put - EXPECT_DOUBLE_EQ rather than exact equality for the
+    // reason GradientTierMatchesTheFullTier gives.
+    const auto molecule = qcx::testing::MakeH2Sto3g();
+    ASSERT_TRUE(molecule.has_value());
+    const auto basis = qcx::testing::MakeSto3gBasis();
+    ASSERT_TRUE(basis.has_value());
+    const auto evaluator = AoEvaluator::Create(*molecule, *basis);
+    ASSERT_TRUE(evaluator.has_value());
+
+    const std::size_t count = evaluator->AOCount();
+    const std::span<const ShellRange> ranges = evaluator->ShellRanges();
+    ASSERT_EQ(ranges.size(), 2u) << "the fixture must carry two shells";
+
+    std::vector<std::size_t> allShells;
+    allShells.reserve(ranges.size());
+
+    for (std::size_t index = 0; index < ranges.size(); ++index)
+    {
+        allShells.push_back(index);
+    }
+
+    const std::array<double, 3> point = {0.7, -0.3, 0.4};
+    constexpr double kSentinel = 1234.5;
+
+    std::vector<double> referenceValues(count);
+    std::vector<double> referenceGradients(3 * count);
+    std::vector<double> referenceHessians(6 * count);
+    std::vector<double> referenceThirds(10 * count);
+    evaluator->EvaluateDerivativesToThird(
+        point, referenceValues, referenceGradients, referenceHessians, referenceThirds);
+
+    {
+        std::vector<double> values(count);
+        std::vector<double> gradients(3 * count);
+        std::vector<double> hessians(6 * count);
+        evaluator->EvaluateDerivatives(point, values, gradients, hessians);
+
+        for (std::size_t mu = 0; mu < count; ++mu)
+        {
+            EXPECT_DOUBLE_EQ(values[mu], referenceValues[mu]) << "value " << mu;
+        }
+
+        for (std::size_t slot = 0; slot < 3 * count; ++slot)
+        {
+            EXPECT_DOUBLE_EQ(gradients[slot], referenceGradients[slot]) << "gradient " << slot;
+        }
+
+        for (std::size_t slot = 0; slot < 6 * count; ++slot)
+        {
+            EXPECT_DOUBLE_EQ(hessians[slot], referenceHessians[slot]) << "hessian " << slot;
+        }
+    }
+
+    {
+        std::vector<double> values(count, kSentinel);
+        std::vector<double> gradients(3 * count, kSentinel);
+        std::vector<double> hessians(6 * count, kSentinel);
+        std::vector<double> thirds(10 * count, kSentinel);
+        evaluator->EvaluateDerivativesToThirdSelected(
+            point, allShells, values, gradients, hessians, thirds);
+
+        for (std::size_t mu = 0; mu < count; ++mu)
+        {
+            EXPECT_DOUBLE_EQ(values[mu], referenceValues[mu]) << "value " << mu;
+        }
+
+        for (std::size_t slot = 0; slot < 3 * count; ++slot)
+        {
+            EXPECT_DOUBLE_EQ(gradients[slot], referenceGradients[slot]) << "gradient " << slot;
+        }
+
+        for (std::size_t slot = 0; slot < 6 * count; ++slot)
+        {
+            EXPECT_DOUBLE_EQ(hessians[slot], referenceHessians[slot]) << "hessian " << slot;
+        }
+
+        for (std::size_t slot = 0; slot < 10 * count; ++slot)
+        {
+            EXPECT_DOUBLE_EQ(thirds[slot], referenceThirds[slot]) << "third " << slot;
+        }
+    }
+
+    for (std::size_t chosen = 0; chosen < ranges.size(); ++chosen)
+    {
+        const std::vector<std::size_t> selection = {chosen};
+        std::vector<double> values(count, kSentinel);
+        std::vector<double> gradients(3 * count, kSentinel);
+        std::vector<double> hessians(6 * count, kSentinel);
+        std::vector<double> thirds(10 * count, kSentinel);
+        evaluator->EvaluateDerivativesToThirdSelected(
+            point, selection, values, gradients, hessians, thirds);
+
+        const ShellRange range = ranges[chosen];
+
+        for (std::size_t mu = 0; mu < count; ++mu)
+        {
+            const bool selected = mu >= range.aoOffset && mu < range.aoOffset + range.functionCount;
+
+            if (selected)
+            {
+                EXPECT_DOUBLE_EQ(values[mu], referenceValues[mu])
+                    << "shell " << chosen << " value " << mu;
+            } else
+            {
+                EXPECT_EQ(values[mu], kSentinel) << "slot " << mu << " must be left untouched";
+            }
+
+            for (std::size_t axis = 0; axis < 3; ++axis)
+            {
+                const std::size_t slot = 3 * mu + axis;
+
+                if (selected)
+                {
+                    EXPECT_DOUBLE_EQ(gradients[slot], referenceGradients[slot])
+                        << "shell " << chosen << " gradient " << slot;
+                } else
+                {
+                    EXPECT_EQ(gradients[slot], kSentinel)
+                        << "gradient slot " << slot << " must be left untouched";
+                }
+            }
+
+            for (std::size_t entry = 0; entry < 6; ++entry)
+            {
+                const std::size_t slot = 6 * mu + entry;
+
+                if (selected)
+                {
+                    EXPECT_DOUBLE_EQ(hessians[slot], referenceHessians[slot])
+                        << "shell " << chosen << " hessian " << slot;
+                } else
+                {
+                    EXPECT_EQ(hessians[slot], kSentinel)
+                        << "hessian slot " << slot << " must be left untouched";
+                }
+            }
+
+            for (std::size_t entry = 0; entry < 10; ++entry)
+            {
+                const std::size_t slot = 10 * mu + entry;
+
+                if (selected)
+                {
+                    EXPECT_DOUBLE_EQ(thirds[slot], referenceThirds[slot])
+                        << "shell " << chosen << " third " << slot;
+                } else
+                {
+                    EXPECT_EQ(thirds[slot], kSentinel)
+                        << "third slot " << slot << " must be left untouched";
                 }
             }
         }

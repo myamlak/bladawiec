@@ -1852,8 +1852,10 @@ qcx::Result<AtomicFragmentResult> RunAtomicFragment(int atomicNumber,
     const internal::JkSupermatrices super = internal::BuildJkSupermatrices(inputs.eri, nZ);
     const Eigen::MatrixXd coreHamiltonian = inputs.coreHamiltonian;
 
-    const UhfFockBuilderFn buildFock = [super, coreHamiltonian](const Eigen::MatrixXd& dAlpha,
-                                                                const Eigen::MatrixXd& dBeta) {
+    // The supermatrices are two n^4 arrays; the callback contracts them and is
+    // used within this scope, so they are captured by reference, not copied.
+    const UhfFockBuilderFn buildFock = [&super, coreHamiltonian](const Eigen::MatrixXd& dAlpha,
+                                                                 const Eigen::MatrixXd& dBeta) {
         return BuildUhfFock(super, dAlpha, dBeta, coreHamiltonian);
     };
 
@@ -1941,9 +1943,11 @@ qcx::Result<UhfResult> RunUhfScf(const qcx::molecule::Molecule& molecule,
     const internal::JkSupermatrices super = internal::BuildJkSupermatrices(eri, n);
 
     // The lambda captures the core Hamiltonian by copy (a reference capture
-    // here would dangle once this function's parameters go out of scope).
-    const UhfFockBuilderFn buildFock = [super, coreHamiltonian](const Eigen::MatrixXd& dAlpha,
-                                                                const Eigen::MatrixXd& dBeta) {
+    // here would dangle once this function's parameters go out of scope). The
+    // supermatrices are a local of this scope and a by-value capture copies two
+    // n^4 arrays, so they are captured by reference.
+    const UhfFockBuilderFn buildFock = [&super, coreHamiltonian](const Eigen::MatrixXd& dAlpha,
+                                                                 const Eigen::MatrixXd& dBeta) {
         return BuildUhfFock(super, dAlpha, dBeta, coreHamiltonian);
     };
 

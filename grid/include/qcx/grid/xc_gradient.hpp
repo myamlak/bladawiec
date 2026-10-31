@@ -49,6 +49,15 @@ struct XcGradientCounts {
     // whole and these columns are its bill rather than a screened fraction.
     std::size_t weightCurvatureTerms = 0; ///< (point, q, r) weight entries read.
     std::size_t coordinateCurvatureTerms = 0; ///< (point, direction, q, r) entries read.
+    // The density channel's second response: one entry per atom pair per
+    // direction pair at each point, and the kernel contractions that supply its
+    // curvature. The dense column is the same as if no shell had ever been
+    // dropped, which is what turns these two into a ratio. The call column is
+    // the channel's visible cost against the first-order walk: a functional that
+    // reads a density now fetches the AO Hessian tier it did not fetch before.
+    std::size_t electronicCurvatureTerms = 0; ///< Atom-pair second-response entries filled.
+    std::size_t electronicCurvatureTermsDense = 0; ///< points x atomCount^2 x 9, no screening.
+    std::size_t kernelSecondDerivativeCalls = 0; ///< Second-derivative contractions issued.
 };
 
 /// One grid integration's exchange-correlation gradient, at fixed density.
@@ -170,7 +179,8 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
     const XcIntegrationThresholds& thresholds,
     const XcBatchSettings& batch = {});
 
-/// One grid integration's second-order contribution from the grid's own motion.
+/// One grid integration's second-order contribution to the fixed-density XC
+/// Hessian.
 ///
 /// At fixed density the exchange-correlation energy is
 /// `E_xc(R) = sum_p W_p(R) e(X_p(R), R)`, and its second nuclear derivative
@@ -180,18 +190,24 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
 ///
 /// with `T_r` the integrand's total first derivative - the point's own motion
 /// and the orbitals', the two channels EvaluateXcGradient accumulates
-/// separately. This object is the derivative of what that walk accumulates,
-/// with one channel left out: the integrand's own response along the point's
-/// motion, `W (dF_c/dR_q) X^c_,r` and the density's second response. That
-/// channel needs a third-derivative AO tier, which the evaluator does not
-/// supply yet, so a complete Hessian is this object PLUS it and never this
-/// object alone.
+/// separately - and `d2e/dR_q dR_r` its total second. This object is the
+/// derivative of what that walk accumulates.
 ///
-/// What it holds is the whole of the grid's own contribution at that order: the
+/// That derivative is complete for a functional that reads only the two spin
+/// densities. The rho fields' second total response is expressible with the
+/// value, gradient and Hessian tiers the evaluator already supplies, so for such
+/// a functional this object is the whole fixed-density Hessian. A functional
+/// that reads a sigma invariant or a kinetic-energy density is refused by name
+/// instead: that field's second response differentiates the AO Hessian once
+/// more and needs a third-derivative tier the evaluator does not supply yet, so
+/// answering it with the density channel alone would be a plausible wrong
+/// number.
+///
+/// The grid's own contribution at that order is accumulated in full: the
 /// quadrature weight's curvature, the two cross terms the weight's first
 /// derivative carries, and the point's own position curvature. The default grid
-/// rides each point on its owning atom, so its position curvature is zero and
-/// the weight curvature is the entire object.
+/// rides each point on its owning atom, so the point's position curvature
+/// vanishes and that channel's carrier is the weight's own derivatives.
 ///
 /// Public aggregate: the fields are the API (aggregate-struct exemption).
 /// \ingroup qcx-grid
@@ -215,18 +231,21 @@ struct XcGridMotionHessian {
     XcGradientCounts counts;
 };
 
-/// Assembles the grid-motion part of the exchange-correlation Hessian.
+/// Assembles the fixed-density exchange-correlation Hessian.
 ///
 /// The same walk as EvaluateXcGradient - the same blocks, the same thresholds,
 /// the same per-point selection, kernel call and orbital-motion sums - with the
 /// derivative provider asked for second order, accumulating at each visited
 /// point
 ///
-///     H_qr += W_,qr e + W_,q T_r + W_,r T_q + W sum_c (de/dx^c) X^c_,qr .
+///     H_qr += W_,qr e + W_,q T_r + W_,r T_q
+///           + W sum_c (de/dx^c) X^c_,qr + W M_qr ,
 ///
-/// Sharing the first-order pieces is what makes the two walks one derivative
-/// apart: a point set or a screening rule that differed between them would make
-/// this the curvature of a different gradient.
+/// where `M` is the integrand's second total response at fixed density: the
+/// functional's partials against the fields' second responses and its second
+/// partials against their first. Sharing the first-order pieces is what makes
+/// the two walks one derivative apart: a point set or a screening rule that
+/// differed between them would make this the curvature of a different gradient.
 ///
 /// \param blocks The grid blocks, in the order the energy path walks them.
 /// \param provider The grid's geometric derivatives for these blocks. It must
@@ -243,9 +262,12 @@ struct XcGridMotionHessian {
 /// \param densityBeta The beta spin density, same shape, order, and contract.
 /// \returns The Hessian, the gradient this walk accumulated, the energy, the
 /// thresholds and the counted cost, or an Error: kInvalidArgument for a shape
-/// mismatch or a provider that does not supply second order, and the provider's
-/// own refusal, by name, when it declines a block rather than answering it with
-/// zeros.
+/// mismatch or a provider that does not supply second order; kUnimplemented, by
+/// name, for a functional that reads a sigma invariant or a kinetic-energy
+/// density, whose second response needs the third-derivative AO tier, or that
+/// declares no second-derivative tier, or one that does not span the components
+/// it reads; and the provider's own refusal, by name, when it declines a block
+/// rather than answering it with zeros.
 /// \ingroup qcx-grid
 qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     std::span<const excgrid::Block> blocks,
@@ -257,7 +279,8 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     const Eigen::MatrixXd& densityAlpha,
     const Eigen::MatrixXd& densityBeta);
 
-/// Assembles the grid-motion part of the Hessian on an engine's own grid.
+/// Assembles the fixed-density exchange-correlation Hessian on an engine's own
+/// grid.
 ///
 /// The form a consumer uses: the engine already holds the blocks, the AO tier,
 /// the envelopes and the functional, so the second derivative cannot be taken
