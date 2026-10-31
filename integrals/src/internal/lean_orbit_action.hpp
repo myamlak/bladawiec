@@ -268,6 +268,55 @@ inline bool LeanCellIsOrbitRep(const LeanOrbitAction& action,
     return best == own;
 }
 
+/// The size of one canonical cell's orbit under the action - the number of
+/// DISTINCT member cells, the representative included.
+///
+/// The strong form scales a representative's contribution by this count so
+/// that the group projection, which distributes the representative to every
+/// image with equal weight, recovers exactly one contribution per member.
+/// The count is independent of screening: every image of the cell is a
+/// canonical cell, the group is closed, and the identity is the first
+/// element, so the dedup set is the orbit itself (at most |group| <= 8).
+/// \param action The orbit action (pairImage is this helper's only input).
+/// \param braPair The cell's bra pair index.
+/// \param ketPair The cell's ket pair index (<= braPair).
+/// \returns The orbit's distinct-cell count, at least 1.
+inline std::size_t LeanOrbitSize(const LeanOrbitAction& action,
+                                 std::size_t braPair,
+                                 std::size_t ketPair) noexcept {
+    const std::size_t order = action.order;
+    std::array<std::size_t, kSymmetryMaskBits> cells{};
+    std::size_t count = 1;
+    // The caller may hand the pair indices in the batch's canonical ROLE
+    // order (the bra pair is the lower-L role, not necessarily the larger
+    // index), so the seed is canonicalized like every image below. Without
+    // this the seed's rank is not a cell rank, the dedup misses the
+    // representative, and the count can exceed the group order.
+    cells[0] = LeanCellIndex(std::max(braPair, ketPair), std::min(braPair, ketPair));
+
+    for (std::size_t g = 1; g < order; ++g)
+    {
+        const std::size_t imageBra = action.pairImage[braPair * order + g];
+        const std::size_t imageKet = action.pairImage[ketPair * order + g];
+        const std::size_t cell =
+            LeanCellIndex(std::max(imageBra, imageKet), std::min(imageBra, imageKet));
+        bool duplicate = false;
+
+        for (std::size_t s = 0; s < count; ++s)
+        {
+            duplicate = duplicate || cells[s] == cell;
+        }
+
+        if (!duplicate)
+        {
+            cells[count] = cell;
+            ++count;
+        }
+    }
+
+    return count;
+}
+
 /// The fp64 element count of one canonical pair's ERI block: the product of
 /// its two shells' function counts (the same per-pair block mass the
 /// machinery's pair store carries as nFuncs, computed here from the pair list
