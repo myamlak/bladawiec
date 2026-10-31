@@ -236,7 +236,10 @@ struct LeanFockBuildOptions {
     /// The projection is exact only for a TOTALLY SYMMETRIC density (the SCF
     /// energy path's), so BuildFock checks A(g) rho A(g)^T = rho and refuses
     /// by name otherwise - a response right-hand side that is not totally
-    /// symmetric must not engage this form. A trivial reduction is the plain
+    /// symmetric must not engage this form, and an open-shell spin density
+    /// need not be totally symmetric even when the total density is, so a
+    /// UHF path engages it only where its spin densities are known invariant.
+    /// A trivial reduction is the plain
     /// path byte for byte (no action, nothing projected); a null reduction is
     /// refused at Create, like the expansion. When both this and
     /// symmetryOrbitExpansion are set, the strong form wins: it is the same
