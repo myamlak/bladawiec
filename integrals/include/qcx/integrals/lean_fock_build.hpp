@@ -224,6 +224,28 @@ struct LeanFockBuildOptions {
     /// plain path's byte for byte. True without a reduction is refused
     /// (kInvalidArgument) at Create: the reduction is what defines the orbits.
     bool symmetryOrbitExpansion = false;
+    /// The STRONG form of the same reduction: skeleton accumulation plus the
+    /// group projection. With this true AND a non-trivial reduction, the walk
+    /// contracts each orbit's representative ONCE with its block scaled by
+    /// the orbit's multiplicity - so the window accumulators are a skeleton
+    /// whose every orbit carries its representative's full weight - and after
+    /// the fold the two-electron part is projected,
+    /// S = (1/|G|) sum_g A(g) S_skel A(g)^T, before the core Hamiltonian is
+    /// added. The accumulation drops from one contraction per surviving
+    /// member cell to one per orbit; the ERI work is the expansion's own.
+    /// The projection is exact only for a TOTALLY SYMMETRIC density (the SCF
+    /// energy path's), so BuildFock checks A(g) rho A(g)^T = rho and refuses
+    /// by name otherwise - a response right-hand side that is not totally
+    /// symmetric must not engage this form, and an open-shell spin density
+    /// need not be totally symmetric even when the total density is, so a
+    /// UHF path engages it only where its spin densities are known invariant.
+    /// A trivial reduction is the plain
+    /// path byte for byte (no action, nothing projected); a null reduction is
+    /// refused at Create, like the expansion. When both this and
+    /// symmetryOrbitExpansion are set, the strong form wins: it is the same
+    /// representative walk with the accumulation reduced instead of the
+    /// members contracted.
+    bool symmetryStrongForm = false;
     /// Split-mode flags (the direct-UHF adapter's halves): with
     /// buildCoulombOnly the builder contracts J(rho) only
     /// (F = H + 2J(rho)); with buildExchangeOnly, K(rho) only

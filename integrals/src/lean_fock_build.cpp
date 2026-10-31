@@ -33,6 +33,13 @@
 // representative's and therefore does (the ERI's symmetry is exact in exact
 // arithmetic, not in IEEE double - a 2026-09-12 amendment). The
 // two are independent and neither is engaged unless the caller asks.
+//
+// The STRONG form (options.symmetryStrongForm) uses the same action but
+// reduces the ACCUMULATION as well: each orbit's representative is contracted
+// once, scaled by the orbit's multiplicity, and the folded two-electron Fock
+// is projected onto the totally symmetric subspace,
+// (1/|G|) sum_g A(g) S A(g)^T, before the core Hamiltonian is added. It is
+// exact only for a totally symmetric density and refuses by name otherwise.
 
 #include "qcx/integrals/lean_fock_build.hpp"
 
@@ -375,6 +382,87 @@ void ContractBlock(const double* block,
     }
 }
 
+// The strong form's projection: S = (1/|G|) sum_g A(g) S_skel A(g)^T, with
+// A(g) the reduction's signed permutation. The scatter below applies
+// A(g)^T S A(g); the full group is closed under inversion, so the sum is the
+// same one - each skeleton entry lands on its images with the sign pattern.
+// \param skeleton The accumulated two-electron skeleton (no core Hamiltonian).
+// \param action The orbit action carrying the function images and signs.
+// \returns The projected two-electron Fock.
+Eigen::MatrixXd ProjectOrbitSkeleton(const Eigen::MatrixXd& skeleton,
+                                     const internal::LeanOrbitAction& action) {
+    const Eigen::Index n = skeleton.rows();
+    const std::size_t order = action.order;
+    Eigen::MatrixXd projected = Eigen::MatrixXd::Zero(n, n);
+
+    for (std::size_t g = 0; g < order; ++g)
+    {
+        for (Eigen::Index i = 0; i < n; ++i)
+        {
+            const auto indexI = static_cast<std::size_t>(i);
+            const auto imageI = static_cast<Eigen::Index>(action.functionImage[indexI * order + g]);
+            const double signI = static_cast<double>(action.functionSign[indexI * order + g]);
+
+            for (Eigen::Index j = 0; j < n; ++j)
+            {
+                const auto indexJ = static_cast<std::size_t>(j);
+                const auto imageJ =
+                    static_cast<Eigen::Index>(action.functionImage[indexJ * order + g]);
+                const double signJ = static_cast<double>(action.functionSign[indexJ * order + g]);
+
+                projected(imageI, imageJ) += signI * signJ * skeleton(i, j);
+            }
+        }
+    }
+
+    projected /= static_cast<double>(order);
+    return projected;
+}
+
+// The strong form's density precondition: A(g) rho A(g)^T = rho for every
+// element. A density that fails it carries a component the projection would
+// average away, so the call refuses rather than answering a Fock the caller
+// did not ask for.
+// \param density The spatial closed-shell density the call was given.
+// \param action The orbit action carrying the function images and signs.
+// \returns The refusal text, or nothing when the density is totally symmetric.
+std::optional<std::string> DensitySymmetryViolation(const Eigen::MatrixXd& density,
+                                                    const internal::LeanOrbitAction& action) {
+    const Eigen::Index n = density.rows();
+    const std::size_t order = action.order;
+    const double scale = n == 0 ? 1.0 : std::max(1.0, density.cwiseAbs().maxCoeff());
+    const double tolerance = 1e-9 * scale;
+
+    for (std::size_t g = 1; g < order; ++g)
+    {
+        for (Eigen::Index i = 0; i < n; ++i)
+        {
+            const auto indexI = static_cast<std::size_t>(i);
+            const auto imageI = static_cast<Eigen::Index>(action.functionImage[indexI * order + g]);
+            const double signI = static_cast<double>(action.functionSign[indexI * order + g]);
+
+            for (Eigen::Index j = 0; j < n; ++j)
+            {
+                const auto indexJ = static_cast<std::size_t>(j);
+                const auto imageJ =
+                    static_cast<Eigen::Index>(action.functionImage[indexJ * order + g]);
+                const double signJ = static_cast<double>(action.functionSign[indexJ * order + g]);
+                const double transformed = signI * signJ * density(imageI, imageJ);
+
+                if (std::abs(transformed - density(i, j)) > tolerance)
+                {
+                    return "the density is not totally symmetric under the reduction "
+                           "(A(g) rho A(g)^T differs at element " +
+                           std::to_string(i) + "," + std::to_string(j) +
+                           "); the strong form projects only a totally symmetric density";
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
 // The resident contracted payload of one store entry (the retention band's
 // byte measure): the capacity - not the size - of every container the pair
 // builder fills, because capacity is what a release gives back and what the
@@ -672,7 +760,8 @@ PeakEstimate EstimatePeakBytes(const qcx::molecule::Molecule& molecule,
     // group the orbits are singletons, so the flags below describe the
     // plain path and the call is the C1 call byte for byte.
     const std::size_t orbitOrder =
-        (options.symmetryOrbitExpansion && !IsTrivialReduction(options.symmetryReduction))
+        ((options.symmetryOrbitExpansion || options.symmetryStrongForm) &&
+         !IsTrivialReduction(options.symmetryReduction))
             ? options.symmetryReduction->groupOrder
             : 0;
     const double orbitActionBytes =
@@ -942,6 +1031,16 @@ qcx::Result<LeanDirectFockBuilder> LeanDirectFockBuilder::Create(
             "the orbits the walk enumerates)"});
     }
 
+    // The strong form is defined by the group it projects over, so the same
+    // refusal: without a reduction there is no skeleton to symmetrize.
+    if (options.symmetryStrongForm && options.symmetryReduction == nullptr)
+    {
+        return std::unexpected(qcx::Error{
+            qcx::ErrorCode::kInvalidArgument,
+            "symmetryStrongForm requires a symmetry reduction (the reduction defines the "
+            "group the skeleton is projected over)"});
+    }
+
     auto pairList = BuildShellPairs(molecule, basisSet);
 
     if (!pairList.has_value())
@@ -1007,7 +1106,8 @@ qcx::Result<LeanDirectFockBuilder> LeanDirectFockBuilder::Create(
     // what the call produces anyway.
     std::optional<internal::LeanOrbitAction> orbitAction;
 
-    if (options.symmetryOrbitExpansion && !IsTrivialReduction(options.symmetryReduction))
+    if ((options.symmetryOrbitExpansion || options.symmetryStrongForm) &&
+        !IsTrivialReduction(options.symmetryReduction))
     {
         auto action = internal::LeanOrbitAction::Create(*options.symmetryReduction, *pairList);
 
@@ -1201,6 +1301,20 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> LeanDirectFock
     // the plain path's, byte for byte. Hoisted out of the loops: the branch
     // cost is once per call, not once per cell.
     const bool expandOrbits = state.orbitAction.has_value();
+    const bool strongForm = expandOrbits && state.options.symmetryStrongForm;
+
+    // The strong form's precondition, checked before a term is computed: the
+    // projection is exact only for a density the group leaves invariant.
+    if (strongForm)
+    {
+        const std::optional<std::string> violation =
+            DensitySymmetryViolation(d, *state.orbitAction);
+
+        if (violation.has_value())
+        {
+            return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument, *violation});
+        }
+    }
 
     // The row windows: the plan PlanWindows derives (auto oversubscribes
     // the team, the k = 1 pin and an explicit override stay exact), rows
@@ -1727,17 +1841,46 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> LeanDirectFock
                     const ShellQuartet quartet{bra.i, bra.j, ket.i, ket.j};
                     const double* repBlock = values.data() + base + task.outputOffset;
 
-                    ++workerContractBlockCalls[w];
-                    ContractBlock(repBlock,
-                                  quartet,
-                                  task.braPair,
-                                  task.ketPair,
-                                  context,
-                                  state.options.forceScalarContract);
-
-                    if (expandOrbits)
+                    if (strongForm)
                     {
-                        contractOrbitMembers(task, repBlock);
+                        // The strong form: contract the representative ONCE,
+                        // its block weighted by the orbit's multiplicity, and
+                        // let the post-fold projection place the members. The
+                        // block is the task's own tile slice, so the weight
+                        // cannot leak into another task.
+                        const std::size_t orbitSize =
+                            internal::LeanOrbitSize(*state.orbitAction, task.braPair, task.ketPair);
+                        const std::size_t blockElements =
+                            internal::LeanPairBlockElements(state.pairList, task.braPair) *
+                            internal::LeanPairBlockElements(state.pairList, task.ketPair);
+                        double* weightedBlock = values.data() + base + task.outputOffset;
+
+                        for (std::size_t e = 0; e < blockElements; ++e)
+                        {
+                            weightedBlock[e] *= static_cast<double>(orbitSize);
+                        }
+
+                        ++workerContractBlockCalls[w];
+                        ContractBlock(weightedBlock,
+                                      quartet,
+                                      task.braPair,
+                                      task.ketPair,
+                                      context,
+                                      state.options.forceScalarContract);
+                    } else
+                    {
+                        ++workerContractBlockCalls[w];
+                        ContractBlock(repBlock,
+                                      quartet,
+                                      task.braPair,
+                                      task.ketPair,
+                                      context,
+                                      state.options.forceScalarContract);
+
+                        if (expandOrbits)
+                        {
+                            contractOrbitMembers(task, repBlock);
+                        }
                     }
                 }
             }
@@ -1935,7 +2078,12 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> LeanDirectFock
     // across widths (the wave pin in LeanDirectFockBuilderTest). The wave
     // width therefore bounds the accumulator residency without touching the
     // arithmetic - the property this path's reproducibility rests on.
-    Eigen::MatrixXd fock = state.coreH;
+    // The strong form accumulates the two-electron skeleton alone: the core
+    // Hamiltonian is added AFTER the projection, so the averaging touches
+    // only the part the group acts on non-trivially as a sum of quartet
+    // terms (and a symmetric H would pass through unchanged anyway).
+    Eigen::MatrixXd fock =
+        strongForm ? Eigen::MatrixXd::Zero(state.coreH.rows(), state.coreH.cols()) : state.coreH;
     const qcx::backend::Backend<qcx::backend::CpuTag> backend;
 
     for (std::size_t waveStart = 0; waveStart < windowCount; waveStart += waveWidth)
@@ -1977,6 +2125,15 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> LeanDirectFock
 
             fock += workerFocks[slot];
         }
+    }
+
+    // The strong form's one post-fold step: the skeleton becomes the full
+    // two-electron Fock by the group projection, and the core Hamiltonian is
+    // added last (it did not enter the skeleton).
+    if (strongForm)
+    {
+        fock = ProjectOrbitSkeleton(fock, *state.orbitAction);
+        fock += state.coreH;
     }
 
     // The bridge handles the tensor allocation and the copy; the stats

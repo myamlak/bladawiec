@@ -8117,6 +8117,7 @@ qcx::Result<double> CheckPreGateSetupAdmission(const qcx::io::RunInput& input,
         {
             leanOptions.symmetryReduction = &*leanReduction;
             leanOptions.symmetryOrbitExpansion = true;
+            leanOptions.symmetryStrongForm = true;
         }
 
         auto envelope = qcx::integrals::EstimateLeanEnvelope(molecule, basisSet, leanOptions);
@@ -8503,6 +8504,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
         {
             leanOptions.symmetryReduction = &*leanReduction;
             leanOptions.symmetryOrbitExpansion = true;
+            leanOptions.symmetryStrongForm = true;
         }
 
         auto lean =
@@ -8547,6 +8549,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
                 {
                     leanExchangeOptions.symmetryReduction = &*leanReduction;
                     leanExchangeOptions.symmetryOrbitExpansion = true;
+                    leanExchangeOptions.symmetryStrongForm = true;
                 }
 
                 auto leanExchange = qcx::integrals::LeanDirectFockBuilder::Create(
