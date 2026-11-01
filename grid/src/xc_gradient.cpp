@@ -22,6 +22,15 @@ using internal::PointDensity;
 constexpr std::array<std::array<std::size_t, 2>, 6> kHessianComponent = {
     {{0, 0}, {0, 1}, {0, 2}, {1, 1}, {1, 2}, {2, 2}}};
 
+// The packed hessian slot of an index pair, and the packed third-derivative
+// slot of an ordered index triple: xxx, xxy, xxz, xyy, xyz, xzz, yyy, yyz,
+// yzz, zzz. The third derivative of a smooth function is fully symmetric in its
+// three indices, so one slot serves every ordering of the same triple.
+constexpr std::size_t kHessianSlot[3][3] = {{0, 1, 2}, {1, 3, 4}, {2, 4, 5}};
+constexpr std::size_t kThirdSlot[3][3][3] = {{{0, 1, 2}, {1, 3, 4}, {2, 4, 5}},
+                                             {{1, 3, 4}, {3, 6, 7}, {4, 7, 8}},
+                                             {{2, 4, 5}, {4, 7, 8}, {5, 8, 9}}};
+
 // The slot value every AO is filled with before the envelopes claim it, so that
 // an envelope set that does not cover the basis is refused rather than walked.
 constexpr std::size_t kNoAtom = std::numeric_limits<std::size_t>::max();
@@ -143,15 +152,39 @@ std::array<double, 9> ExpandHessian(std::span<const double> hessians, std::size_
     return expanded;
 }
 
+// One AO's third derivative, in the evaluator's ten packed components. The
+// accessor below reads it as the fully symmetric rank-3 tensor it is.
+std::array<double, 10> ExpandThird(std::span<const double> thirds, std::size_t ao) {
+    std::array<double, 10> expanded{};
+
+    for (std::size_t slot = 0; slot < expanded.size(); ++slot)
+    {
+        expanded[slot] = thirds[10 * ao + slot];
+    }
+
+    return expanded;
+}
+
+// d_a d_b d_c phi_mu, from the packed slots: every ordering of a triple names
+// the same entry.
+double ThirdEntry(const std::array<double, 10>& thirds,
+                  std::size_t a,
+                  std::size_t b,
+                  std::size_t c) noexcept {
+    return thirds[kThirdSlot[a][b][c]];
+}
+
 // One point's fetched AO slice: the values and their first and second
 // derivatives as the evaluator wrote them, and the AO slots the envelopes kept.
 // Carried as one object because the three arrays are the same tier read at three
 // strides, and a caller that handed two of them over in the other order would
-// read one array's tail as another's data.
+// read one array's tail as another's data. The third derivatives are present
+// only for a functional whose fields differentiate the AO Hessian once more.
 struct AoSlice {
     std::span<const double> values;
     std::span<const double> gradients;
     std::span<const double> hessians;
+    std::span<const double> thirds;
     std::span<const std::size_t> selectedAos;
 };
 
@@ -510,16 +543,28 @@ void AccumulateOrbitalMotion(std::span<double> gradient,
 }
 
 // The components whose second total response this walk carries: the two spin
-// densities. The sigma invariants and the kinetic-energy densities need one
-// more x derivative of every AO through their own second response - the
-// third-derivative tier the evaluator does not supply - so a functional that
-// reads one of them is refused rather than answered with the density channel.
-bool IsDensityComponent(excgrid::Component id) noexcept {
-    return id == excgrid::Component::RhoA || id == excgrid::Component::RhoB;
+// densities, the three sigma invariants and the two kinetic-energy densities,
+// which is the collinear set the kernel's tau tier spans. The sigma and tau
+// fields differentiate the AO Hessian once more than the density does, and the
+// evaluator's third-derivative tier supplies exactly those contractions.
+bool HasSecondResponse(excgrid::Component id) noexcept {
+    switch (id)
+    {
+    case excgrid::Component::RhoA:
+    case excgrid::Component::RhoB:
+    case excgrid::Component::SigmaAa:
+    case excgrid::Component::SigmaAb:
+    case excgrid::Component::SigmaBb:
+    case excgrid::Component::TauA:
+    case excgrid::Component::TauB:
+        return true;
+    default:
+        return false;
+    }
 }
 
-// The spin a density component names: 0 alpha, 1 beta. Only the two identifiers
-// the density channel accepts reach it.
+// The spin a density component names: 0 alpha, 1 beta. Only the two density
+// identifiers reach it, and the density channel's own columns keep it.
 std::size_t SpinOfDensity(excgrid::Component id) noexcept {
     return id == excgrid::Component::RhoA ? 0U : 1U;
 }
@@ -553,13 +598,13 @@ std::string MaskComponentNames(const excgrid::ComponentMask& mask) {
 // string when it can answer.
 //
 // A functional that reads nothing has no second response to take and is
-// answered by the weight terms alone. One that reads past the two densities is
-// refused by name: its sigma or tau second response differentiates the AO
-// Hessian once more, and answering it with the density channel alone would be a
-// plausible wrong number rather than a refusal. One that reads only the
-// densities but declares no second-derivative tier is refused too, because the
-// tier is how a functional says which components it can be differentiated twice
-// in.
+// answered by the weight terms alone. One that reads a component outside the
+// seven collinear fields is refused by name: the walk differentiates the two
+// densities, the three sigma invariants and the two kinetic-energy densities
+// twice, and answering anything else with the density channel alone would be a
+// plausible wrong number rather than a refusal. The two tier refusals say which
+// contract the functional is missing: no second-derivative tier at all, or one
+// that does not span the components the functional reads.
 std::string ChannelRefusal(const excgrid::XcFunctional& functional) {
     const excgrid::ComponentMask required = functional.RequiredMask();
 
@@ -574,7 +619,7 @@ std::string ChannelRefusal(const excgrid::XcFunctional& functional) {
     {
         const auto id = static_cast<excgrid::Component>(index);
 
-        if (required.Test(id) && !IsDensityComponent(id))
+        if (required.Test(id) && !HasSecondResponse(id))
         {
             outside.Set(id);
         }
@@ -582,8 +627,9 @@ std::string ChannelRefusal(const excgrid::XcFunctional& functional) {
 
     if (outside.bits != 0)
     {
-        return "the density channel does not span " + MaskComponentNames(outside) +
-               ": their second response needs the third-derivative AO tier";
+        return "the walk does not span " + MaskComponentNames(outside) +
+               ": its fixed-density second response covers the two spin densities, the three "
+               "sigma invariants and the two kinetic-energy densities";
     }
 
     const excgrid::KernelStatus status =
@@ -685,6 +731,296 @@ void AccumulateSecondOrderSums(SecondOrderSums& sums,
                     aos.gradients[3 * nu + direction];
             }
         }
+    }
+}
+
+// One spin's third-derivative sums at a point, per atom, already folded with
+// the field-side weight: w_s for the sigma channel and the scalar vtau_s for
+// the tau channel. The raw tensors are
+//     T1_A[a][b][c] = sum_{mu in A} (D phi)_mu d_a d_b d_c phi_mu
+//     M_A[a][b][c]  = sum_{mu in A} d_a d_b phi_mu (D d_c phi)_mu
+//     N_A[a][b][c]  = sum_{mu in A} d_a phi_mu (D d_b d_c phi)_mu
+//     T2_A[a][b]    = sum_{mu in A} sum_j (D d_j phi)_mu d_j d_a d_b phi_mu
+//     P2_A[a][b]    = sum_{mu in A} sum_j (D d_a d_j phi)_mu d_j d_b phi_mu
+// with T1 fully symmetric, M symmetric in its first two indices and N in its
+// last two. Two different folds of M are needed because the spatial and the
+// cross terms contract different indices, and the folded sizes are six for T1,
+// six for M over its last index, nine for M over its middle index, nine for N,
+// six for T2 and nine for P2.
+struct ThirdResponseSums {
+    std::vector<std::array<double, 6>> t1; ///< T1 folded over one index, per atom.
+    std::vector<std::array<double, 6>> mw; ///< M folded over its last index, per atom.
+    std::vector<double> mw2; ///< M folded over its middle index, nine per atom.
+    std::vector<double> nw; ///< N folded over its last index, nine per atom.
+    std::vector<std::array<double, 6>> t2; ///< T2, per atom, weighted by vtau.
+    std::vector<double> p2; ///< P2, nine per atom, weighted by vtau.
+
+    ThirdResponseSums(std::size_t atomCount, bool withSigma, bool withTau) :
+        t1(withSigma ? atomCount : 0U, std::array<double, 6>{}),
+        mw(withSigma ? atomCount : 0U, std::array<double, 6>{}),
+        mw2(withSigma ? 9 * atomCount : 0U, 0.0), nw(withSigma ? 9 * atomCount : 0U, 0.0),
+        t2(withTau ? atomCount : 0U, std::array<double, 6>{}),
+        p2(withTau ? 9 * atomCount : 0U, 0.0) {}
+};
+
+// The blocked AO Hessian, the second-order sibling of the density channel's
+// blocked gradient:
+//     BH_B[a][b][mu] = sum_{nu in B} D_mu nu d_a d_b phi_nu,
+// six packed entries per (atom, AO) per spin. The sigma channel reads it folded
+// with w_s; the tau channel reads it as it stands, because its pair term
+// contracts the first derivative index with the AO Hessian of the moving slot.
+struct PairHessianSums {
+    std::vector<double> blocked;
+    std::size_t aoCount = 0;
+
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    PairHessianSums(std::size_t atomCount, std::size_t aos) :
+        blocked(atomCount * 6 * aos, 0.0), aoCount(aos) {}
+
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    [[nodiscard]] double& Blocked(std::size_t atom, std::size_t entry, std::size_t ao) noexcept {
+        return blocked[(atom * 6 + entry) * aoCount + ao];
+    }
+
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    [[nodiscard]] double Blocked(std::size_t atom,
+                                 std::size_t entry,
+                                 std::size_t ao) const noexcept {
+        return blocked[(atom * 6 + entry) * aoCount + ao];
+    }
+};
+
+void ClearThirdResponseSums(ThirdResponseSums& sums, std::span<const std::size_t> atoms) noexcept {
+    for (const std::size_t atom : atoms)
+    {
+        if (!sums.t1.empty())
+        {
+            sums.t1[atom] = std::array<double, 6>{};
+            sums.mw[atom] = std::array<double, 6>{};
+            std::fill(sums.mw2.begin() + static_cast<std::ptrdiff_t>(9 * atom),
+                      sums.mw2.begin() + static_cast<std::ptrdiff_t>(9 * atom + 9),
+                      0.0);
+            std::fill(sums.nw.begin() + static_cast<std::ptrdiff_t>(9 * atom),
+                      sums.nw.begin() + static_cast<std::ptrdiff_t>(9 * atom + 9),
+                      0.0);
+        }
+
+        if (!sums.t2.empty())
+        {
+            sums.t2[atom] = std::array<double, 6>{};
+            std::fill(sums.p2.begin() + static_cast<std::ptrdiff_t>(9 * atom),
+                      sums.p2.begin() + static_cast<std::ptrdiff_t>(9 * atom + 9),
+                      0.0);
+        }
+    }
+}
+
+void ClearPairHessianSums(PairHessianSums& sums,
+                          const AoSlice& aos,
+                          std::span<const std::size_t> atoms) noexcept {
+    if (sums.blocked.empty())
+    {
+        return;
+    }
+
+    for (const std::size_t atom : atoms)
+    {
+        for (std::size_t entry = 0; entry < 6; ++entry)
+        {
+            for (const std::size_t ao : aos.selectedAos)
+            {
+                sums.Blocked(atom, entry, ao) = 0.0;
+            }
+        }
+    }
+}
+
+// Fills one spin's third-tier sums and its blocked Hessian from the point's
+// slice, the contractions its density field was built from and the two
+// field-side weights. Folding at accumulation leaves the triangle loop a few
+// multiply-adds per entry and keeps no raw rank-3 tensor per atom.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+void AccumulateThirdResponseSums(ThirdResponseSums& sums,
+                                 PairHessianSums& pairs,
+                                 const AoSlice& aos,
+                                 const PointContractions& contractions,
+                                 const Eigen::MatrixXd& density,
+                                 std::span<const std::size_t> atomOfAo,
+                                 const std::array<double, 3>& sigmaWeight,
+                                 double tauWeight,
+                                 bool withSigma,
+                                 bool withTau,
+                                 std::size_t& thirdTerms) {
+    for (const std::size_t mu : aos.selectedAos)
+    {
+        const std::size_t atom = atomOfAo[mu];
+        const double value = contractions.value[mu];
+        const std::array<double, 3> contracted = {contractions.gradient[3 * mu + 0],
+                                                  contractions.gradient[3 * mu + 1],
+                                                  contractions.gradient[3 * mu + 2]};
+        const std::array<double, 3> gradientMu = {
+            aos.gradients[3 * mu + 0], aos.gradients[3 * mu + 1], aos.gradients[3 * mu + 2]};
+        const std::array<double, 9> curvature = ExpandHessian(aos.hessians, mu);
+        const std::array<double, 10> third = ExpandThird(aos.thirds, mu);
+
+        // The blocked Hessian for this AO: (D_s hess phi)_mu, both blocked per
+        // atom its second density index sits on and summed for the tau sums.
+        std::array<double, 9> blockedHessian{};
+
+        for (const std::size_t nu : aos.selectedAos)
+        {
+            const double element =
+                density(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(nu));
+
+            for (std::size_t entry = 0; entry < kHessianComponent.size(); ++entry)
+            {
+                const double term = element * aos.hessians[6 * nu + entry];
+                const std::size_t row = kHessianComponent[entry][0];
+                const std::size_t column = kHessianComponent[entry][1];
+                blockedHessian[3 * row + column] += term;
+
+                if (row != column)
+                {
+                    blockedHessian[3 * column + row] += term;
+                }
+
+                pairs.Blocked(atomOfAo[nu], entry, mu) += term;
+            }
+        }
+
+        if (withSigma)
+        {
+            //     T1w[b][c] = sum_a w[a] T1[a][b][c],
+            //     Mw[b][c]  = sum_a w[a] M[b][c][a] = hess phi[b][c] (w . D grad phi),
+            //     Mw2[b][c] = sum_a w[a] M[b][a][c] = (hess phi w)[b] (D grad phi)[c].
+            const double weightedContraction = sigmaWeight[0] * contracted[0] +
+                                               sigmaWeight[1] * contracted[1] +
+                                               sigmaWeight[2] * contracted[2];
+            std::array<double, 3> weightedHessian{};
+
+            for (std::size_t row = 0; row < 3; ++row)
+            {
+                for (std::size_t column = 0; column < 3; ++column)
+                {
+                    weightedHessian[row] += sigmaWeight[column] * curvature[3 * row + column];
+                }
+            }
+
+            for (std::size_t entry = 0; entry < kHessianComponent.size(); ++entry)
+            {
+                const std::size_t row = kHessianComponent[entry][0];
+                const std::size_t column = kHessianComponent[entry][1];
+                double folded = 0.0;
+
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                {
+                    folded += sigmaWeight[axis] * ThirdEntry(third, axis, row, column);
+                }
+
+                sums.t1[atom][entry] += value * folded;
+                sums.mw[atom][entry] += curvature[3 * row + column] * weightedContraction;
+            }
+
+            for (std::size_t row = 0; row < 3; ++row)
+            {
+                for (std::size_t column = 0; column < 3; ++column)
+                {
+                    sums.mw2[9 * atom + 3 * row + column] +=
+                        weightedHessian[row] * contracted[column];
+                }
+            }
+
+            //     Nw[u][v] = sum_a w[a] N[u][v][a] = grad phi[u] (BHw)[v],
+            // where (BHw)[v] is the blocked Hessian folded over its first index.
+            for (std::size_t column = 0; column < 3; ++column)
+            {
+                double blockedWeighted = 0.0;
+
+                for (std::size_t row = 0; row < 3; ++row)
+                {
+                    blockedWeighted += sigmaWeight[row] * blockedHessian[3 * row + column];
+                }
+
+                for (std::size_t row = 0; row < 3; ++row)
+                {
+                    sums.nw[9 * atom + 3 * row + column] += gradientMu[row] * blockedWeighted;
+                }
+            }
+        }
+
+        if (withTau)
+        {
+            //     T2[a][b] = sum_j (D grad phi)[j] d_j d_a d_b phi,
+            //     P2[a][b] = sum_j (D hess phi)[a][j] hess phi[j][b].
+            for (std::size_t entry = 0; entry < kHessianComponent.size(); ++entry)
+            {
+                const std::size_t row = kHessianComponent[entry][0];
+                const std::size_t column = kHessianComponent[entry][1];
+                double folded = 0.0;
+
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                {
+                    folded += contracted[axis] * ThirdEntry(third, axis, row, column);
+                }
+
+                sums.t2[atom][entry] += tauWeight * folded;
+            }
+
+            for (std::size_t row = 0; row < 3; ++row)
+            {
+                for (std::size_t column = 0; column < 3; ++column)
+                {
+                    double folded = 0.0;
+
+                    for (std::size_t axis = 0; axis < 3; ++axis)
+                    {
+                        folded += blockedHessian[3 * row + axis] * curvature[3 * axis + column];
+                    }
+
+                    sums.p2[9 * atom + 3 * row + column] += tauWeight * folded;
+                }
+            }
+        }
+
+        if (withSigma)
+        {
+            thirdTerms += 10;
+        }
+
+        if (withTau)
+        {
+            thirdTerms += 6;
+        }
+    }
+}
+
+// One active component's value at the point, by identifier: the lookup the
+// curvature call's inputs read, so its mask stays exactly the active set rather
+// than widening to every component the kernel could consume.
+double ComponentValue(excgrid::Component id,
+                      const PointField& alpha,
+                      const PointField& beta) noexcept {
+    switch (id)
+    {
+    case excgrid::Component::RhoA:
+        return alpha.rho;
+    case excgrid::Component::RhoB:
+        return beta.rho;
+    case excgrid::Component::SigmaAa:
+        return alpha.gradient[0] * alpha.gradient[0] + alpha.gradient[1] * alpha.gradient[1] +
+               alpha.gradient[2] * alpha.gradient[2];
+    case excgrid::Component::SigmaAb:
+        return alpha.gradient[0] * beta.gradient[0] + alpha.gradient[1] * beta.gradient[1] +
+               alpha.gradient[2] * beta.gradient[2];
+    case excgrid::Component::SigmaBb:
+        return beta.gradient[0] * beta.gradient[0] + beta.gradient[1] * beta.gradient[1] +
+               beta.gradient[2] * beta.gradient[2];
+    case excgrid::Component::TauA:
+        return alpha.tau;
+    case excgrid::Component::TauB:
+        return beta.tau;
+    default:
+        return 0.0;
     }
 }
 
@@ -971,7 +1307,8 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
                 const std::span<const std::size_t> selectedAos(
                     batchAos.data() + batchAoOffsets[index],
                     batchAoOffsets[index + 1] - batchAoOffsets[index]);
-                const AoSlice aos{values, gradients, hessians, selectedAos};
+                const AoSlice aos{
+                    values, gradients, hessians, std::span<const double>(), selectedAos};
 
                 const PointField fieldA =
                     BuildPointField(densityAlpha, aos, contractions, usesGradient, usesTau);
@@ -1163,20 +1500,39 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     // - a real cost rise against the first-order walk, which the
     // second-derivative call column makes visible.
     const excgrid::ComponentMask required = functional.RequiredMask();
+    const bool usesSigma = required.Test(excgrid::Component::SigmaAa) ||
+                           required.Test(excgrid::Component::SigmaAb) ||
+                           required.Test(excgrid::Component::SigmaBb);
     const bool usesTau =
         required.Test(excgrid::Component::TauA) || required.Test(excgrid::Component::TauB);
     const bool usesGradient = functional.UsesGradient();
     const bool electronicChannel = required.bits != 0;
     const bool needsHessians = usesGradient || usesTau || electronicChannel;
     const bool withSecond = usesGradient || electronicChannel;
+    // The sigma invariants and the kinetic-energy densities differentiate the AO
+    // Hessian once more, so their second responses read the third tier. The
+    // density channel does not: for a functional whose mask is a subset of the
+    // two densities the walk fetches exactly the tier it fetched before.
+    const bool needsThirds = usesSigma || usesTau;
 
     const std::size_t aoCount = evaluator.AOCount();
 
     PointContractions contractions;
     contractions.value.resize(aoCount);
     contractions.gradient.resize(3 * aoCount);
+    // The third-tier sums need both spins' contractions alive after the kernel
+    // call, which is when their field-side weights are known; the beta field
+    // would otherwise overwrite the alpha contraction. The second buffer is
+    // allocated only for a functional whose mask asks for the third tier.
+    PointContractions contractionsBeta;
+    contractionsBeta.value.resize(needsThirds ? aoCount : 0);
+    contractionsBeta.gradient.resize(needsThirds ? 3 * aoCount : 0);
     SpinSums alphaSums(atomCount);
     SpinSums betaSums(atomCount);
+    ThirdResponseSums alphaThird(needsThirds ? atomCount : 0U, usesSigma, usesTau);
+    ThirdResponseSums betaThird(needsThirds ? atomCount : 0U, usesSigma, usesTau);
+    PairHessianSums alphaPairs(needsThirds ? atomCount : 0U, needsThirds ? aoCount : 0U);
+    PairHessianSums betaPairs(needsThirds ? atomCount : 0U, needsThirds ? aoCount : 0U);
 
     // One point at a time: the batch split exists so that one fetch serves a
     // batch of points, and here a fetch already serves the only point that
@@ -1184,11 +1540,22 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     std::vector<double> aoValues(aoCount);
     std::vector<double> aoGradients(3 * aoCount);
     std::vector<double> aoHessians(needsHessians ? 6 * aoCount : 0);
+    std::vector<double> aoThirds(needsThirds ? 10 * aoCount : 0);
     std::vector<std::size_t> selectedShells(envelopes.size());
     std::vector<std::size_t> selectedAos(aoCount);
     // T_r, the integrand's total first derivative at fixed density: the point's
     // own motion plus the orbitals'.
     std::vector<double> pointMotion(nuclearCoordinateCount);
+    // The sigma and tau channels' per-coordinate scratch, reused across points:
+    // the spatial half of each field's second response as one vector per
+    // coordinate, the cross half's vector, and the sigma channel's first
+    // responses and their field-weighted counterparts, which its product term
+    // pairs across the two coordinates.
+    std::vector<double> sigmaSpatial(3 * nuclearCoordinateCount);
+    std::vector<double> tauSpatial(3 * nuclearCoordinateCount);
+    std::vector<double> theta(3 * nuclearCoordinateCount);
+    std::vector<double> sigmaFirstResponse(usesSigma ? 6 * nuclearCoordinateCount : 0);
+    std::vector<double> sigmaProductResponse(usesSigma ? 6 * nuclearCoordinateCount : 0);
 
     // The electronic channel's scratch, reused across the grid. The components
     // its contraction runs over, in identifier order; G1 and the kernel's
@@ -1357,7 +1724,17 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
             const std::span<const std::size_t> selectionShells(selectedShells.data(),
                                                                selectedShellCount);
 
-            if (needsHessians)
+            if (needsThirds)
+            {
+                evaluator.EvaluateDerivativesToThirdSelected(
+                    block.points[point],
+                    selectionShells,
+                    std::span<double>(aoValues.data(), aoCount),
+                    std::span<double>(aoGradients.data(), 3 * aoCount),
+                    std::span<double>(aoHessians.data(), 6 * aoCount),
+                    std::span<double>(aoThirds.data(), 10 * aoCount));
+                evaluation.counts.aoThirdSlotsEvaluated += selectedAoCount;
+            } else if (needsHessians)
             {
                 evaluator.EvaluateDerivativesSelected(
                     block.points[point],
@@ -1380,9 +1757,13 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
             const std::span<const double> hessians =
                 needsHessians ? std::span<const double>(aoHessians.data(), 6 * aoCount)
                               : std::span<const double>();
+            const std::span<const double> thirds =
+                needsThirds ? std::span<const double>(aoThirds.data(), 10 * aoCount)
+                            : std::span<const double>();
             const AoSlice aos{std::span<const double>(aoValues.data(), aoCount),
                               std::span<const double>(aoGradients.data(), 3 * aoCount),
                               hessians,
+                              thirds,
                               std::span<const std::size_t>(selectedAos.data(), selectedAoCount)};
 
             // The atoms this point kept. The density channel's second response
@@ -1407,6 +1788,14 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                 const std::span<const std::size_t> atoms(keptAtoms.data(), keptAtomCount);
                 ClearSecondOrderSums(alphaSecond, aos, atoms);
                 ClearSecondOrderSums(betaSecond, aos, atoms);
+
+                if (needsThirds)
+                {
+                    ClearThirdResponseSums(alphaThird, atoms);
+                    ClearThirdResponseSums(betaThird, atoms);
+                    ClearPairHessianSums(alphaPairs, aos, atoms);
+                    ClearPairHessianSums(betaPairs, aos, atoms);
+                }
 
                 for (std::size_t index = 0; index < keptAtomCount; ++index)
                 {
@@ -1433,13 +1822,17 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                 AccumulateSecondOrderSums(alphaSecond, aos, contractions, densityAlpha, *atomOfAo);
             }
 
+            // The beta field keeps its own contraction when the third-tier sums
+            // are accumulated after the kernel, because the alpha sums read the
+            // same scratch later.
+            PointContractions& betaContractions = needsThirds ? contractionsBeta : contractions;
             const PointField fieldB =
-                BuildPointField(densityBeta, aos, contractions, withSecond, usesTau);
+                BuildPointField(densityBeta, aos, betaContractions, withSecond, usesTau);
 
             betaSums.Clear();
             AccumulateSpinSums(betaSums,
                                aos,
-                               contractions,
+                               betaContractions,
                                *atomOfAo,
                                withSecond,
                                usesTau,
@@ -1447,7 +1840,8 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
 
             if (electronicChannel)
             {
-                AccumulateSecondOrderSums(betaSecond, aos, contractions, densityBeta, *atomOfAo);
+                AccumulateSecondOrderSums(
+                    betaSecond, aos, betaContractions, densityBeta, *atomOfAo);
             }
 
             const auto kernel = EvaluateKernel(operation, functional, fieldA, fieldB);
@@ -1459,8 +1853,63 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
 
             evaluation.energy += weight * kernel->exc;
 
-            const std::array<double, 3> energyDensityGradient =
-                GradientOfEnergyDensity(*kernel, fieldA, fieldB, usesGradient, usesTau);
+            // The field-side weights the third-tier sums fold with: the sigma
+            // channel weighs each spin's tensors by
+            //     w_s = 2 vsigma_ss grad rho_s + vsigma_st grad rho_t,
+            // whose doubled diagonal is what makes an exchange-only
+            // functional's sigma channel whole; the tau channel's weight is the
+            // scalar vtau_s.
+            std::array<double, 3> sigmaWeightA{};
+            std::array<double, 3> sigmaWeightB{};
+            double vsigmaAa = 0.0;
+            double vsigmaAb = 0.0;
+            double vsigmaBb = 0.0;
+            const double vtauA = required.Test(excgrid::Component::TauA) ? kernel->vtauA : 0.0;
+            const double vtauB = required.Test(excgrid::Component::TauB) ? kernel->vtauB : 0.0;
+
+            if (usesSigma)
+            {
+                vsigmaAa = required.Test(excgrid::Component::SigmaAa) ? kernel->vsigmaAa : 0.0;
+                vsigmaAb = required.Test(excgrid::Component::SigmaAb) ? kernel->vsigmaAb : 0.0;
+                vsigmaBb = required.Test(excgrid::Component::SigmaBb) ? kernel->vsigmaBb : 0.0;
+
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                {
+                    sigmaWeightA[axis] =
+                        2.0 * vsigmaAa * fieldA.gradient[axis] + vsigmaAb * fieldB.gradient[axis];
+                    sigmaWeightB[axis] =
+                        vsigmaAb * fieldA.gradient[axis] + 2.0 * vsigmaBb * fieldB.gradient[axis];
+                }
+            }
+
+            if (needsThirds)
+            {
+                AccumulateThirdResponseSums(alphaThird,
+                                            alphaPairs,
+                                            aos,
+                                            contractions,
+                                            densityAlpha,
+                                            *atomOfAo,
+                                            sigmaWeightA,
+                                            vtauA,
+                                            usesSigma,
+                                            usesTau,
+                                            evaluation.counts.electronicThirdTerms);
+                AccumulateThirdResponseSums(betaThird,
+                                            betaPairs,
+                                            aos,
+                                            betaContractions,
+                                            densityBeta,
+                                            *atomOfAo,
+                                            sigmaWeightB,
+                                            vtauB,
+                                            usesSigma,
+                                            usesTau,
+                                            evaluation.counts.electronicThirdTerms);
+            }
+
+            const std::array<double, 3> energyDensityGradient = GradientOfEnergyDensity(
+                *kernel, fieldA, fieldB, usesGradient || usesSigma, usesTau);
 
             // T_r: the integrand's total derivative through both the point's own
             // motion and the orbitals'. The gradient walk accumulates the two
@@ -1523,22 +1972,125 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                     required.Test(excgrid::Component::RhoA) ? kernel->vrhoA : 0.0,
                     required.Test(excgrid::Component::RhoB) ? kernel->vrhoB : 0.0};
 
-                // G1, one entry per active component per nuclear coordinate.
+                // G1, one entry per active component per nuclear coordinate. The
+                // rho columns keep the density channel's own expression; the
+                // sigma and tau columns are the same total first responses the
+                // second responses below differentiate.
                 for (std::size_t coordinate = 0; coordinate < nuclearCoordinateCount; ++coordinate)
                 {
                     const std::size_t atom = coordinate / 3;
                     const std::size_t direction = coordinate % 3;
+                    // Y_s(q) = hess rho_s X_q - 2 Q^s_A(q)[d(q), :], the density
+                    // gradient's total first response. Q's first index is the
+                    // displaced direction and its second the field component,
+                    // the order the cross term of the density's own second
+                    // response reads it in; Q is not symmetric across the
+                    // atom restriction, so the other order is a different
+                    // matrix on a cross-atom density.
+                    std::array<double, 3> gradientResponseA{};
+                    std::array<double, 3> gradientResponseB{};
 
-                    for (std::size_t slot = 0; slot < activeCount; ++slot)
+                    if (usesSigma)
                     {
-                        const std::size_t spin = SpinOfDensity(activeComponents[slot]);
-                        const PointField& field = *fields[spin];
-                        double response = -2.0 * (*spinSums[spin]).position[atom][direction];
+                        for (std::size_t axis = 0; axis < 3; ++axis)
+                        {
+                            gradientResponseA[axis] =
+                                -2.0 * alphaSums.curvature[atom][3 * direction + axis];
+                            gradientResponseB[axis] =
+                                -2.0 * betaSums.curvature[atom][3 * direction + axis];
+
+                            for (std::size_t column = 0; column < 3; ++column)
+                            {
+                                const double shift =
+                                    positionRow[column * nuclearCoordinateCount + coordinate];
+                                gradientResponseA[axis] += fieldA.second[3 * axis + column] * shift;
+                                gradientResponseB[axis] += fieldB.second[3 * axis + column] * shift;
+                            }
+                        }
 
                         for (std::size_t axis = 0; axis < 3; ++axis)
                         {
-                            response += positionRow[axis * nuclearCoordinateCount + coordinate] *
-                                        field.gradient[axis];
+                            sigmaFirstResponse[6 * coordinate + axis] = gradientResponseA[axis];
+                            sigmaFirstResponse[6 * coordinate + 3 + axis] = gradientResponseB[axis];
+                            // The sigma product term's right-hand vector:
+                            //     2 vsigma_ss Y_s + vsigma_st Y_t.
+                            sigmaProductResponse[6 * coordinate + axis] =
+                                2.0 * vsigmaAa * gradientResponseA[axis] +
+                                vsigmaAb * gradientResponseB[axis];
+                            sigmaProductResponse[6 * coordinate + 3 + axis] =
+                                2.0 * vsigmaBb * gradientResponseB[axis] +
+                                vsigmaAb * gradientResponseA[axis];
+                        }
+                    }
+
+                    for (std::size_t slot = 0; slot < activeCount; ++slot)
+                    {
+                        const excgrid::Component id = activeComponents[slot];
+                        double response = 0.0;
+
+                        switch (id)
+                        {
+                        case excgrid::Component::RhoA:
+                        case excgrid::Component::RhoB: {
+                            const std::size_t spin = SpinOfDensity(id);
+                            const PointField& field = *fields[spin];
+                            response = -2.0 * (*spinSums[spin]).position[atom][direction];
+
+                            for (std::size_t axis = 0; axis < 3; ++axis)
+                            {
+                                response +=
+                                    positionRow[axis * nuclearCoordinateCount + coordinate] *
+                                    field.gradient[axis];
+                            }
+
+                            break;
+                        }
+
+                        case excgrid::Component::SigmaAa:
+                            response = 2.0 * (gradientResponseA[0] * fieldA.gradient[0] +
+                                              gradientResponseA[1] * fieldA.gradient[1] +
+                                              gradientResponseA[2] * fieldA.gradient[2]);
+                            break;
+                        case excgrid::Component::SigmaAb:
+                            response = gradientResponseA[0] * fieldB.gradient[0] +
+                                       gradientResponseA[1] * fieldB.gradient[1] +
+                                       gradientResponseA[2] * fieldB.gradient[2] +
+                                       fieldA.gradient[0] * gradientResponseB[0] +
+                                       fieldA.gradient[1] * gradientResponseB[1] +
+                                       fieldA.gradient[2] * gradientResponseB[2];
+                            break;
+                        case excgrid::Component::SigmaBb:
+                            response = 2.0 * (gradientResponseB[0] * fieldB.gradient[0] +
+                                              gradientResponseB[1] * fieldB.gradient[1] +
+                                              gradientResponseB[2] * fieldB.gradient[2]);
+                            break;
+                        case excgrid::Component::TauA:
+                            response = -alphaSums.tau[atom][direction];
+
+                            for (std::size_t axis = 0; axis < 3; ++axis)
+                            {
+                                response +=
+                                    positionRow[axis * nuclearCoordinateCount + coordinate] *
+                                    fieldA.tauGradient[axis];
+                            }
+
+                            break;
+                        case excgrid::Component::TauB:
+                            response = -betaSums.tau[atom][direction];
+
+                            for (std::size_t axis = 0; axis < 3; ++axis)
+                            {
+                                response +=
+                                    positionRow[axis * nuclearCoordinateCount + coordinate] *
+                                    fieldB.tauGradient[axis];
+                            }
+
+                            break;
+                        default:
+                            // The header refuses a mask outside the seven
+                            // collinear fields, so this is the exhaustiveness
+                            // guard, not a reachable path.
+                            break;
                         }
 
                         firstResponse[coordinate * activeCount + slot] = response;
@@ -1554,7 +2106,7 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
 
                 for (const excgrid::Component id : activeComponents)
                 {
-                    curvatureInputs.Set(id, fields[SpinOfDensity(id)]->rho);
+                    curvatureInputs.Set(id, ComponentValue(id, fieldA, fieldB));
                 }
 
                 for (std::size_t start = 0; start < nuclearCoordinateCount;
@@ -1649,7 +2201,13 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
 
                 // The curvature's partials, the two spins' weighted by their
                 // density partials: every cross term of the density's second
-                // response reads one atom's block.
+                // response reads one atom's block. An atom the selection kept
+                // no AO of has an empty Q sum, and the triangle below reads
+                // every atom's block, so the whole array is cleared first: a
+                // block left from the previous point is a cross term the
+                // density does not have.
+                std::fill(curvaturePartial.begin(), curvaturePartial.end(), 0.0);
+
                 for (const std::size_t atom : atoms)
                 {
                     for (std::size_t entry = 0; entry < 9; ++entry)
@@ -1723,6 +2281,321 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                     }
                 }
 
+                // The sigma channel. The product rule over sigma_st = grad rho_s
+                // . grad rho_t, contracted with the three pairs' partials and
+                // the two spins, is
+                //     sum_s w_s . (grad rho_s)_qr
+                //   + sum_s Y_s(q) . [2 vsigma_ss Y_s(r) + vsigma_st Y_t(r)],
+                // with w_s = 2 vsigma_ss grad rho_s + vsigma_st grad rho_t and
+                // Y_s(q) = hess rho_s X_q - 2 Q^s_A(q)[d(q), :] the density
+                // gradient's total first response. The first sum's spatial part
+                // is one quadratic form per spin and atom; the cross and orbital
+                // parts collapse to the per-coordinate vector below and to the
+                // atom-blocked scatter, exactly as the density channel does.
+                std::array<double, 9> sigmaBilinear{};
+                std::array<double, 9> tauBilinear{};
+
+                if (usesTau)
+                {
+                    for (const std::size_t atom : atoms)
+                    {
+                        for (std::size_t row = 0; row < 3; ++row)
+                        {
+                            for (std::size_t column = 0; column < 3; ++column)
+                            {
+                                const std::size_t entry = kHessianSlot[row][column];
+                                tauBilinear[3 * row + column] +=
+                                    alphaThird.p2[9 * atom + 3 * row + column] +
+                                    betaThird.p2[9 * atom + 3 * row + column] +
+                                    alphaThird.t2[atom][entry] + betaThird.t2[atom][entry];
+                            }
+                        }
+                    }
+                }
+
+                if (usesSigma)
+                {
+                    for (const std::size_t atom : atoms)
+                    {
+                        std::array<double, 9> bilinear{};
+
+                        for (std::size_t spin = 0; spin < 2; ++spin)
+                        {
+                            const ThirdResponseSums& sums = spin == 0 ? alphaThird : betaThird;
+
+                            for (std::size_t row = 0; row < 3; ++row)
+                            {
+                                for (std::size_t column = 0; column < 3; ++column)
+                                {
+                                    const std::size_t entry = kHessianSlot[row][column];
+                                    bilinear[3 * row + column] +=
+                                        2.0 * (sums.t1[atom][entry] + sums.mw[atom][entry] +
+                                               sums.mw2[9 * atom + 3 * row + column] +
+                                               sums.mw2[9 * atom + 3 * column + row]);
+                                }
+                            }
+                        }
+
+                        for (std::size_t entry = 0; entry < 9; ++entry)
+                        {
+                            sigmaBilinear[entry] += bilinear[entry];
+                        }
+                    }
+                }
+
+                if (usesSigma || usesTau)
+                {
+                    // The cross half, one vector per coordinate:
+                    //     Theta(q)[c] = sum_s w_s[a] d_c O_g,s(q)[a]
+                    //                 + sum_s vtau_s d_c O_tau,s(q).
+                    // An atom the selection kept no AO of has empty per-atom
+                    // sums, so its Theta is zero, and the triangle below reads
+                    // every coordinate's vector: the whole scratch is cleared
+                    // before the kept atoms write it.
+                    std::fill(theta.begin(), theta.end(), 0.0);
+
+                    for (const std::size_t atom : atoms)
+                    {
+                        for (std::size_t direction = 0; direction < 3; ++direction)
+                        {
+                            const std::size_t coordinate = 3 * atom + direction;
+
+                            for (std::size_t component = 0; component < 3; ++component)
+                            {
+                                double cross = 0.0;
+
+                                if (usesSigma)
+                                {
+                                    for (std::size_t spin = 0; spin < 2; ++spin)
+                                    {
+                                        const ThirdResponseSums& sums =
+                                            spin == 0 ? alphaThird : betaThird;
+                                        const std::size_t entry =
+                                            kHessianSlot[component][direction];
+                                        cross -=
+                                            2.0 * (sums.mw[atom][entry] +
+                                                   sums.nw[9 * atom + 3 * direction + component] +
+                                                   sums.mw2[9 * atom + 3 * direction + component] +
+                                                   sums.t1[atom][entry]);
+                                    }
+                                }
+
+                                if (usesTau)
+                                {
+                                    for (std::size_t spin = 0; spin < 2; ++spin)
+                                    {
+                                        const ThirdResponseSums& sums =
+                                            spin == 0 ? alphaThird : betaThird;
+                                        cross -= sums.p2[9 * atom + 3 * component + direction] +
+                                                 sums.t2[atom][kHessianSlot[component][direction]];
+                                    }
+                                }
+
+                                theta[3 * coordinate + component] = cross;
+                            }
+                        }
+                    }
+                }
+
+                if (usesSigma)
+                {
+                    for (std::size_t coordinate = 0; coordinate < nuclearCoordinateCount;
+                         ++coordinate)
+                    {
+                        for (std::size_t row = 0; row < 3; ++row)
+                        {
+                            double value = 0.0;
+
+                            for (std::size_t column = 0; column < 3; ++column)
+                            {
+                                value += sigmaBilinear[3 * row + column] *
+                                         positionRow[column * nuclearCoordinateCount + coordinate];
+                            }
+
+                            sigmaSpatial[3 * coordinate + row] = value;
+                        }
+                    }
+
+                    // The orbital half, the pair block:
+                    //   2 sum_{mu in A(q)} grad phi_mu[d(q)]
+                    //         (BHw)_{A(r)}[d(r)][mu],
+                    // with (BHw)_B[b][mu] = sum_a w[a] BH_B[a][b][mu]. Its two
+                    // atom halves are the same ordered sum under q <-> r, so
+                    // iterating ordered coordinates and scattering into the
+                    // sorted entry counts both; the diagonal coordinate has no
+                    // distinct reversed assignment and carries factor four.
+                    for (const std::size_t mu : aos.selectedAos)
+                    {
+                        const std::size_t atomMu = (*atomOfAo)[mu];
+
+                        for (const std::size_t atomB : atoms)
+                        {
+                            std::array<std::array<double, 3>, 2> foldedAtoms{};
+
+                            for (std::size_t spin = 0; spin < 2; ++spin)
+                            {
+                                const PairHessianSums& pairs = spin == 0 ? alphaPairs : betaPairs;
+                                const std::array<double, 3>& fieldWeight =
+                                    spin == 0 ? sigmaWeightA : sigmaWeightB;
+
+                                for (std::size_t column = 0; column < 3; ++column)
+                                {
+                                    double folded = 0.0;
+
+                                    for (std::size_t row = 0; row < 3; ++row)
+                                    {
+                                        folded +=
+                                            fieldWeight[row] *
+                                            pairs.Blocked(atomB, kHessianSlot[row][column], mu);
+                                    }
+
+                                    foldedAtoms[spin][column] = folded;
+                                }
+                            }
+
+                            for (std::size_t directionB = 0; directionB < 3; ++directionB)
+                            {
+                                for (std::size_t directionA = 0; directionA < 3; ++directionA)
+                                {
+                                    double pair = 0.0;
+
+                                    for (std::size_t spin = 0; spin < 2; ++spin)
+                                    {
+                                        pair += aos.gradients[3 * mu + directionA] *
+                                                foldedAtoms[spin][directionB];
+                                    }
+
+                                    const std::size_t rowIndex = 3 * atomMu + directionA;
+                                    const std::size_t columnIndex = 3 * atomB + directionB;
+                                    const std::size_t upperRow = std::min(rowIndex, columnIndex);
+                                    const std::size_t upperColumn = std::max(rowIndex, columnIndex);
+                                    const double factor = rowIndex == columnIndex ? 4.0 : 2.0;
+
+                                    evaluation.hessian(static_cast<Eigen::Index>(upperRow),
+                                                       static_cast<Eigen::Index>(upperColumn)) +=
+                                        weight * factor * pair;
+                                }
+                            }
+                        }
+                    }
+
+                    // The orbital half's diagonal atom block:
+                    //   2 [Mw_A[d(q)][d(r)] + T1w_A[d(q)][d(r)]].
+                    for (const std::size_t atom : atoms)
+                    {
+                        for (std::size_t row = 0; row < 3; ++row)
+                        {
+                            for (std::size_t column = row; column < 3; ++column)
+                            {
+                                double diagonal = 0.0;
+
+                                for (std::size_t spin = 0; spin < 2; ++spin)
+                                {
+                                    const ThirdResponseSums& sums =
+                                        spin == 0 ? alphaThird : betaThird;
+                                    const std::size_t entry = kHessianSlot[row][column];
+                                    diagonal += sums.mw[atom][entry] + sums.t1[atom][entry];
+                                }
+
+                                evaluation.hessian(static_cast<Eigen::Index>(3 * atom + row),
+                                                   static_cast<Eigen::Index>(3 * atom + column)) +=
+                                    weight * 2.0 * diagonal;
+                            }
+                        }
+                    }
+                }
+
+                // The tau channel. Its first response is X_q . grad tau_s -
+                // S^s_A(q)[d(q)], so its second response is
+                //     X_q^T (P2_all + T2_all) X_r
+                //     - X_r . (P2 + T2)_{A(q)}[., d(q)]
+                //     - X_q . (P2 + T2)_{A(r)}[., d(r)]
+                //     + sum_{mu in A(q)} sum_j BH_{A(r)}[j][d(r)][mu]
+                //                           hess phi_mu[j][d(q)]
+                //     + T2_{A(q)}[d(q)][d(r)] on the diagonal atom block.
+                // The orbital second response carries plus signs: the first
+                // response's minus is the orbital slot's, and a second
+                // derivative of a rigid translation adds another minus.
+                if (usesTau)
+                {
+                    for (std::size_t coordinate = 0; coordinate < nuclearCoordinateCount;
+                         ++coordinate)
+                    {
+                        for (std::size_t row = 0; row < 3; ++row)
+                        {
+                            double value = 0.0;
+
+                            for (std::size_t column = 0; column < 3; ++column)
+                            {
+                                value += tauBilinear[3 * row + column] *
+                                         positionRow[column * nuclearCoordinateCount + coordinate];
+                            }
+
+                            tauSpatial[3 * coordinate + row] = value;
+                        }
+                    }
+
+                    for (const std::size_t mu : aos.selectedAos)
+                    {
+                        const std::size_t atomMu = (*atomOfAo)[mu];
+                        const std::array<double, 9> hessianMu = ExpandHessian(aos.hessians, mu);
+
+                        for (const std::size_t atomB : atoms)
+                        {
+                            for (std::size_t directionB = 0; directionB < 3; ++directionB)
+                            {
+                                for (std::size_t directionA = 0; directionA < 3; ++directionA)
+                                {
+                                    const std::size_t rowIndex = 3 * atomMu + directionA;
+                                    const std::size_t columnIndex = 3 * atomB + directionB;
+
+                                    if (rowIndex > columnIndex)
+                                    {
+                                        continue;
+                                    }
+
+                                    double pair = 0.0;
+
+                                    for (std::size_t spin = 0; spin < 2; ++spin)
+                                    {
+                                        const PairHessianSums& pairs =
+                                            spin == 0 ? alphaPairs : betaPairs;
+                                        double dot = 0.0;
+
+                                        for (std::size_t axis = 0; axis < 3; ++axis)
+                                        {
+                                            dot += pairs.Blocked(
+                                                       atomB, kHessianSlot[axis][directionB], mu) *
+                                                   hessianMu[3 * axis + directionA];
+                                        }
+
+                                        pair += (spin == 0 ? vtauA : vtauB) * dot;
+                                    }
+
+                                    evaluation.hessian(static_cast<Eigen::Index>(rowIndex),
+                                                       static_cast<Eigen::Index>(columnIndex)) +=
+                                        weight * pair;
+                                }
+                            }
+                        }
+                    }
+
+                    for (const std::size_t atom : atoms)
+                    {
+                        for (std::size_t row = 0; row < 3; ++row)
+                        {
+                            for (std::size_t column = row; column < 3; ++column)
+                            {
+                                const std::size_t entry = kHessianSlot[row][column];
+                                evaluation.hessian(static_cast<Eigen::Index>(3 * atom + row),
+                                                   static_cast<Eigen::Index>(3 * atom + column)) +=
+                                    weight *
+                                    (alphaThird.t2[atom][entry] + betaThird.t2[atom][entry]);
+                            }
+                        }
+                    }
+                }
+
                 // What is left of the density's second response, one triangle
                 // entry at a time:
                 //     X_q^T (sum_s F_s hess rho_s) X_r - 2 X_q . Q_B[b, :]
@@ -1757,6 +2630,45 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                                      curvaturePartial[atomB * 9 + 3 * directionB + axis];
                             value -= 2.0 * xColumn[axis * nuclearCoordinateCount] *
                                      curvaturePartial[atomA * 9 + 3 * directionA + axis];
+                        }
+
+                        if (usesSigma)
+                        {
+                            for (std::size_t axis = 0; axis < 3; ++axis)
+                            {
+                                value += sigmaSpatial[3 * rowIndex + axis] *
+                                         xColumn[axis * nuclearCoordinateCount];
+                            }
+
+                            for (std::size_t spin = 0; spin < 2; ++spin)
+                            {
+                                for (std::size_t axis = 0; axis < 3; ++axis)
+                                {
+                                    value +=
+                                        sigmaFirstResponse[6 * rowIndex + 3 * spin + axis] *
+                                        sigmaProductResponse[6 * columnIndex + 3 * spin + axis];
+                                }
+                            }
+                        }
+
+                        if (usesTau)
+                        {
+                            for (std::size_t axis = 0; axis < 3; ++axis)
+                            {
+                                value += tauSpatial[3 * rowIndex + axis] *
+                                         xColumn[axis * nuclearCoordinateCount];
+                            }
+                        }
+
+                        if (usesSigma || usesTau)
+                        {
+                            for (std::size_t axis = 0; axis < 3; ++axis)
+                            {
+                                value += theta[3 * rowIndex + axis] *
+                                             xColumn[axis * nuclearCoordinateCount] +
+                                         xRow[axis * nuclearCoordinateCount] *
+                                             theta[3 * columnIndex + axis];
+                            }
                         }
 
                         for (std::size_t slot = 0; slot < activeCount; ++slot)
@@ -1831,6 +2743,7 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     }
 
     evaluation.counts.aoSlotsDense = evaluation.counts.points * aoCount;
+    evaluation.counts.aoThirdSlotsDense = needsThirds ? evaluation.counts.points * aoCount : 0;
     evaluation.counts.contractionPairsDense = 2 * evaluation.counts.points * aoCount * aoCount;
     evaluation.counts.aoDerivativeTermsDense = 2 * evaluation.counts.points * aoCount;
     evaluation.counts.electronicCurvatureTermsDense =

@@ -61,7 +61,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
             PROPERTIES ENVIRONMENT "MKL_THREADING_LAYER=SEQUENTIAL"
             TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     else()
-        gtest_discover_tests(qcx-storage-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+        gtest_discover_tests(qcx-storage-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     endif()
 endif()
 

@@ -7,11 +7,12 @@
 //   - a provider carrying a prescribed position curvature pins the term that
 //     the default grid's rigidly translating points leave at zero.
 //
-// The full-density finite-difference gate is the Hessian arc's acceptance. For a
-// functional that reads only the spin densities the density's second response is
-// expressible with the tiers the evaluator already has, so that Hessian is
-// complete; a functional reading sigma or tau is refused by name, because its
-// second response would need a third-derivative AO tier.
+// The full-density finite-difference gate is the Hessian arc's acceptance. The
+// density's second response is expressible with the tiers the evaluator already
+// has; a functional reading sigma or tau differentiates the AO Hessian once
+// more, which the third-derivative tier supplies. The gates below run on the
+// block-diagonal density and on a general cross-atom one, because the sigma
+// channel's cross-atom terms are invisible to the former.
 
 #include "h2o_sto3g.hpp"
 #include "qcx/grid/geometry_translation.hpp"
@@ -205,6 +206,38 @@ public:
     using LinearRhoFunctional::LinearRhoFunctional;
 };
 
+// A functional whose required mask names a component outside the seven
+// collinear fields. The walk has no fixed-density second response for it and
+// must refuse it by name rather than answer with the fields it does carry.
+class LaplacianFunctional final : public excgrid::XcFunctional {
+public:
+    [[nodiscard]] bool UsesGradient() const override {
+        return false;
+    }
+
+    [[nodiscard]] double ExchangeFraction() const override {
+        return 0.0;
+    }
+
+    [[nodiscard]] excgrid::ComponentMask RequiredMask() const override {
+        excgrid::ComponentMask mask;
+        mask.Set(excgrid::Component::RhoA);
+        mask.Set(excgrid::Component::RhoB);
+        mask.Set(excgrid::Component::LaplA);
+        return mask;
+    }
+
+    [[nodiscard]] excgrid::ComponentMask SecondDerivativeMask() const noexcept override {
+        return excgrid::ComponentMask::Collinear();
+    }
+
+    [[nodiscard]] excgrid::KernelStatus EvaluatePoint(const excgrid::PointInputs&,
+                                                      excgrid::PointResult& result) const override {
+        result.exc = kEnergyDensityValue;
+        return excgrid::KernelStatus::kOk;
+    }
+};
+
 // A provider that delegates to the real one and then overwrites the position
 // curvature. The real grid rides each point on its owning atom, so its position
 // curvature is identically zero and the carry-through has no other way to be
@@ -377,6 +410,45 @@ std::optional<HessianFixture> MakeHessianFixture(
                           std::move(density)};
 }
 
+// A positive-definite density with non-zero off-diagonal atom blocks. The
+// diagonal makes it positive definite, so the shipped functionals can read rho;
+// the cosine keeps every block non-zero. The block-diagonal fixture above cannot
+// reach that case, and the sigma channel's per-atom sums, its blocked Hessian and
+// its first responses only carry their cross-atom terms here.
+Eigen::MatrixXd GeneralCrossAtomDensity(std::size_t aoCount) {
+    Eigen::MatrixXd density(static_cast<Eigen::Index>(aoCount), static_cast<Eigen::Index>(aoCount));
+
+    for (std::size_t row = 0; row < aoCount; ++row)
+    {
+        for (std::size_t column = 0; column < aoCount; ++column)
+        {
+            const double i = static_cast<double>(row + 1);
+            const double j = static_cast<double>(column + 1);
+            const double diagonal = row == column ? 0.5 : 0.0;
+            density(static_cast<Eigen::Index>(row), static_cast<Eigen::Index>(column)) =
+                0.05 * std::cos(0.7 * i * j) + diagonal;
+        }
+    }
+
+    return density;
+}
+
+// The same engine, provider and grid as MakeHessianFixture, with the density
+// replaced by the cross-atom one; both spins carry it, the one-density
+// convention the displaced-gradient helpers already use.
+std::optional<HessianFixture> MakeGeneralDensityFixture(std::string_view functionalName) {
+    auto fixture = MakeHessianFixture(functionalName);
+
+    if (!fixture.has_value())
+    {
+        return std::nullopt;
+    }
+
+    fixture->density = GeneralCrossAtomDensity(static_cast<std::size_t>(fixture->engine.AOCount()));
+
+    return fixture;
+}
+
 // The analytic gradient one displaced geometry owes, at the fixed density.
 std::optional<Eigen::VectorXd> DisplacedGradient(const HessianFixture& fixture,
                                                  const excgrid::XcFunctional& functional,
@@ -500,6 +572,184 @@ std::array<double, 3> DensityGradient(const AoEvaluator& evaluator,
     }
 
     return result;
+}
+
+// Every Hessian entry against the Richardson central difference of the
+// displaced-geometry gradient. The statistics are recorded by the caller, so
+// the residual is visible next to the gate it was measured against.
+struct GradientDifferenceStatistics {
+    double maxDeviation = 0.0; ///< |H_qr - FD_qr|, the largest over the matrix.
+    double maxNumerical = 0.0; ///< The largest |FD| entry, which scales the bar.
+};
+
+std::optional<GradientDifferenceStatistics> CompareWithDisplacedGradients(
+    const HessianFixture& fixture,
+    const excgrid::XcFunctional& functional,
+    const XcGridMotionHessian& hessian,
+    const XcIntegrationThresholds& thresholds) {
+    const std::size_t coordinateCount = 3 * fixture.molecule.AtomCount();
+    GradientDifferenceStatistics statistics;
+
+    for (std::size_t atom = 0; atom < fixture.molecule.AtomCount(); ++atom)
+    {
+        for (std::size_t axis = 0; axis < 3; ++axis)
+        {
+            const std::size_t coordinate = 3 * atom + axis;
+            const auto numerical = NumericalGradient(fixture, functional, atom, axis, thresholds);
+
+            if (!numerical.has_value())
+            {
+                return std::nullopt;
+            }
+
+            statistics.maxNumerical =
+                std::max(statistics.maxNumerical, numerical->cwiseAbs().maxCoeff());
+
+            for (std::size_t row = 0; row < coordinateCount; ++row)
+            {
+                const Eigen::Index entry = static_cast<Eigen::Index>(row);
+                const double value = hessian.hessian(entry, static_cast<Eigen::Index>(coordinate));
+                statistics.maxDeviation =
+                    std::max(statistics.maxDeviation, std::abs((*numerical)[entry] - value));
+            }
+        }
+    }
+
+    return statistics;
+}
+
+// The second-order row differentiates the first-order result beside it: the
+// gradient this walk accumulated is EvaluateXcGradient's, and the triangle it
+// mirrored is exactly symmetric.
+void ExpectWalkConsistency(const HessianFixture& fixture,
+                           const excgrid::XcFunctional& functional,
+                           const XcGridMotionHessian& hessian,
+                           const XcIntegrationThresholds& thresholds,
+                           double relativeBar) {
+    const auto analytic = EvaluateXcGradient(fixture.engine.Grid().Blocks(),
+                                             *fixture.provider,
+                                             fixture.engine.Evaluator(),
+                                             functional,
+                                             fixture.engine.ShellEnvelopes(),
+                                             thresholds,
+                                             XcBatchSettings{},
+                                             fixture.density,
+                                             fixture.density);
+    ASSERT_TRUE(analytic.has_value()) << analytic.error().message;
+
+    const double gradientDeviation = (hessian.gradient - analytic->gradient).cwiseAbs().maxCoeff();
+    ::testing::Test::RecordProperty("gradient agreement (max deviation, Hartree/Bohr)",
+                                    Scientific(gradientDeviation));
+    EXPECT_LT(gradientDeviation, relativeBar * (1.0 + analytic->gradient.cwiseAbs().maxCoeff()));
+
+    const Eigen::MatrixXd asymmetry = hessian.hessian - hessian.hessian.transpose();
+    EXPECT_LE(asymmetry.cwiseAbs().maxCoeff(), 0.0);
+}
+
+// One displaced geometry's XC energy at the fixed density, with two nuclear
+// coordinates displaced. The engine is rebuilt, as the energy path is, and the
+// fixed density matrices are the same at every geometry: that is the
+// fixed-density convention the Hessian walk claims.
+std::optional<double> CrossEnergy(const HessianFixture& fixture,
+                                  std::size_t atomA,
+                                  std::size_t axisA,
+                                  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+                                  double deltaA,
+                                  std::size_t atomB,
+                                  std::size_t axisB,
+                                  double deltaB) {
+    auto first = DisplacedMolecule(fixture.molecule, atomA, axisA, deltaA);
+
+    if (!first.has_value())
+    {
+        return std::nullopt;
+    }
+
+    auto second = DisplacedMolecule(*first, atomB, axisB, deltaB);
+
+    if (!second.has_value())
+    {
+        return std::nullopt;
+    }
+
+    auto engine =
+        XcGridEngine::Create(*second, fixture.basis, fixture.functionalName, fixture.settings);
+
+    if (!engine.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const auto evaluated =
+        engine->EvaluateScreened(fixture.density, fixture.density, kScreeningTolerance);
+
+    if (!evaluated.has_value())
+    {
+        return std::nullopt;
+    }
+
+    return evaluated->energy;
+}
+
+// The four-point cross difference at one step:
+//     [E(+,+) - E(+,-) - E(-,+) + E(-,-)] / (4 h^2).
+std::optional<double> EnergyCrossDifference(const HessianFixture& fixture,
+                                            std::size_t atomA,
+                                            std::size_t axisA,
+                                            std::size_t atomB,
+                                            std::size_t axisB,
+                                            double step) {
+    const auto plusPlus = CrossEnergy(fixture, atomA, axisA, step, atomB, axisB, step);
+    const auto plusMinus = CrossEnergy(fixture, atomA, axisA, step, atomB, axisB, -step);
+    const auto minusPlus = CrossEnergy(fixture, atomA, axisA, -step, atomB, axisB, step);
+    const auto minusMinus = CrossEnergy(fixture, atomA, axisA, -step, atomB, axisB, -step);
+
+    if (!plusPlus.has_value() || !plusMinus.has_value() || !minusPlus.has_value() ||
+        !minusMinus.has_value())
+    {
+        return std::nullopt;
+    }
+
+    return (*plusPlus - *plusMinus - *minusPlus + *minusMinus) / (4.0 * step * step);
+}
+
+// The energy-path gate: every upper-triangle Hessian entry against the
+// Richardson-extrapolated cross difference of the engine's own energy, at the
+// same fixed density matrices.
+struct EnergyDifferenceStatistics {
+    double maxDeviation = 0.0;
+    double maxReference = 0.0;
+};
+
+std::optional<EnergyDifferenceStatistics> CompareWithEnergyCrossDifference(
+    const HessianFixture& fixture, const XcGridMotionHessian& hessian, double step) {
+    const std::size_t coordinateCount = 3 * fixture.molecule.AtomCount();
+    EnergyDifferenceStatistics statistics;
+
+    for (std::size_t rowIndex = 0; rowIndex < coordinateCount; ++rowIndex)
+    {
+        for (std::size_t columnIndex = rowIndex; columnIndex < coordinateCount; ++columnIndex)
+        {
+            const auto coarse = EnergyCrossDifference(
+                fixture, rowIndex / 3, rowIndex % 3, columnIndex / 3, columnIndex % 3, step);
+            const auto fine = EnergyCrossDifference(
+                fixture, rowIndex / 3, rowIndex % 3, columnIndex / 3, columnIndex % 3, 0.5 * step);
+
+            if (!coarse.has_value() || !fine.has_value())
+            {
+                return std::nullopt;
+            }
+
+            const double difference = (4.0 * *fine - *coarse) / 3.0;
+            const double value = hessian.hessian(static_cast<Eigen::Index>(rowIndex),
+                                                 static_cast<Eigen::Index>(columnIndex));
+            statistics.maxDeviation =
+                std::max(statistics.maxDeviation, std::abs(difference - value));
+            statistics.maxReference = std::max(statistics.maxReference, std::abs(value));
+        }
+    }
+
+    return statistics;
 }
 
 TEST(XcGradientHessianTest, TheGridMotionHessianMatchesTheGradientDifference) {
@@ -1178,10 +1428,106 @@ TEST(XcGradientHessianTest, AFirstOrderProviderIsRefused) {
     EXPECT_EQ(hessian.error().code, qcx::ErrorCode::kInvalidArgument);
 }
 
-// A GGA reads the sigma invariants, whose second response differentiates the AO
-// Hessian once more. The walk refuses by name instead of answering with the
-// density channel alone, which would be a plausible wrong Hessian.
-TEST(XcGradientHessianTest, AGgaFunctionalIsRefusedByComponentName) {
+// One GGA acceptance, shared by the block-diagonal fixture and the general
+// cross-atom one: the walk's Hessian against the Richardson central difference
+// of the displaced analytic gradient, the walk's own consistency, and the
+// third-tier and contraction counts. `activeComponents` is how many components
+// the functional reads and `thirdTermsPerSlot` its T1/T2 entries per spin and
+// kept slot.
+void ExpectGgaHessianMatchesTheGradientDifference(const HessianFixture& fixture,
+                                                  std::string_view label,
+                                                  // NOLINTNEXTLINE
+                                                  std::size_t activeComponents,
+                                                  std::size_t thirdTermsPerSlot) {
+    const excgrid::XcFunctional& functional = fixture.engine.Functional();
+    const XcIntegrationThresholds thresholds =
+        XcIntegrationThresholds::FromEnergyPath(fixture.settings, kScreeningTolerance);
+    const std::size_t coordinateCount = 3 * fixture.molecule.AtomCount();
+
+    const auto hessian = EvaluateXcGridMotionHessian(
+        fixture.engine, fixture.density, fixture.density, *fixture.provider, thresholds);
+    ASSERT_TRUE(hessian.has_value()) << hessian.error().message;
+
+    ExpectWalkConsistency(fixture, functional, *hessian, thresholds, 1e-10);
+
+    // The channel has to be visible: a walk that skipped it would leave only the
+    // weight terms, and the difference below would then see the missing ones.
+    EXPECT_GT(hessian->hessian.cwiseAbs().maxCoeff(), 1e-8);
+
+    // The third tier ran for every kept slot, and both spins' tensors were
+    // accumulated.
+    EXPECT_EQ(hessian->counts.aoThirdSlotsEvaluated, hessian->counts.aoSlotsEvaluated);
+    EXPECT_EQ(hessian->counts.aoThirdSlotsDense, hessian->counts.aoSlotsDense);
+    EXPECT_EQ(hessian->counts.electronicThirdTerms,
+              thirdTermsPerSlot * hessian->counts.aoSlotsEvaluated);
+
+    // The contraction's capacity is shared out between the active components.
+    const std::size_t sides = excgrid::kSecondDerivativeCapacity / activeComponents;
+    EXPECT_EQ(hessian->counts.kernelSecondDerivativeCalls,
+              ((coordinateCount + sides - 1) / sides) * hessian->counts.points);
+
+    const auto statistics =
+        CompareWithDisplacedGradients(fixture, functional, *hessian, thresholds);
+    ASSERT_TRUE(statistics.has_value());
+    const double scale =
+        1.0 + std::max(hessian->hessian.cwiseAbs().maxCoeff(), statistics->maxNumerical);
+    const double bar = kFiniteDifferenceTolerance * scale;
+
+    ::testing::Test::RecordProperty(std::string(label) +
+                                        " Hessian agreement (max deviation, Hartree/Bohr^2)",
+                                    Scientific(statistics->maxDeviation));
+    ::testing::Test::RecordProperty(std::string(label) + " Hessian agreement bar (Hartree/Bohr^2)",
+                                    Scientific(bar));
+    EXPECT_LT(statistics->maxDeviation, bar)
+        << label << ": the fixed-density Hessian and the displaced gradients disagree";
+}
+
+// A GGA reads the sigma invariants. Their second response differentiates the AO
+// Hessian once more, which the third-derivative tier supplies; the acceptance is
+// the same displaced-gradient difference the density channel passes.
+TEST(XcGradientHessianTest, AGgaFunctionalMatchesTheGradientDifference) {
+    const auto fixture = MakeHessianFixture("pbe");
+    ASSERT_TRUE(fixture.has_value());
+
+    ExpectGgaHessianMatchesTheGradientDifference(*fixture, "pbe", 5, 20);
+}
+
+// The same acceptance for a functional that reads all seven collinear fields,
+// the two kinetic-energy densities included.
+TEST(XcGradientHessianTest, ATauFunctionalMatchesTheGradientDifference) {
+    const auto fixture = MakeHessianFixture("tau_x");
+    ASSERT_TRUE(fixture.has_value());
+
+    ExpectGgaHessianMatchesTheGradientDifference(*fixture, "tau_x", 7, 32);
+}
+
+// The same acceptance on a density the block-diagonal fixture cannot reach. The
+// sigma channel's first and second responses only carry their cross-atom terms
+// here, so a contracted-gradient matrix read in the wrong index order moves
+// these gates by about 1e-3 while the block-diagonal ones stay exact.
+TEST(XcGradientHessianTest, AGgaFunctionalMatchesTheGradientDifferenceOnACrossAtomDensity) {
+    const auto fixture = MakeGeneralDensityFixture("pbe");
+    ASSERT_TRUE(fixture.has_value());
+
+    ExpectGgaHessianMatchesTheGradientDifference(*fixture, "pbe cross-atom density", 5, 20);
+}
+
+TEST(XcGradientHessianTest, ATauFunctionalMatchesTheGradientDifferenceOnACrossAtomDensity) {
+    const auto fixture = MakeGeneralDensityFixture("tau_x");
+    ASSERT_TRUE(fixture.has_value());
+
+    ExpectGgaHessianMatchesTheGradientDifference(*fixture, "tau_x cross-atom density", 7, 32);
+}
+
+// The energy cross difference's step and bar. The four-point difference's
+// cancellation floor is eps |E| / h^2, so the bar is the residual measured at
+// this revision rather than a tolerance chosen for comfort: 4.66e-8 for pbe and
+// 2.55e-8 for tau_x on the fixture below, both recorded on their case as a
+// property, with 2e-7 giving the larger of them a factor of four in hand.
+constexpr double kEnergyDifferenceStep = 3e-3;
+constexpr double kEnergyDifferenceTolerance = 2e-7;
+
+TEST(XcGradientHessianTest, AGgaFunctionalMatchesTheEnergyCrossDifference) {
     const auto fixture = MakeHessianFixture("pbe");
     ASSERT_TRUE(fixture.has_value());
 
@@ -1189,17 +1535,96 @@ TEST(XcGradientHessianTest, AGgaFunctionalIsRefusedByComponentName) {
         XcIntegrationThresholds::FromEnergyPath(fixture->settings, kScreeningTolerance);
     const auto hessian = EvaluateXcGridMotionHessian(
         fixture->engine, fixture->density, fixture->density, *fixture->provider, thresholds);
+    ASSERT_TRUE(hessian.has_value()) << hessian.error().message;
+
+    const auto statistics =
+        CompareWithEnergyCrossDifference(*fixture, *hessian, kEnergyDifferenceStep);
+    ASSERT_TRUE(statistics.has_value());
+    ::testing::Test::RecordProperty(
+        "pbe energy cross-difference agreement (max deviation, Hartree/Bohr^2)",
+        Scientific(statistics->maxDeviation));
+    EXPECT_GT(statistics->maxReference, 1e-8);
+    EXPECT_LT(statistics->maxDeviation, kEnergyDifferenceTolerance)
+        << "the Hessian and the second difference of the engine's own energy disagree";
+}
+
+TEST(XcGradientHessianTest, ATauFunctionalMatchesTheEnergyCrossDifference) {
+    const auto fixture = MakeHessianFixture("tau_x");
+    ASSERT_TRUE(fixture.has_value());
+
+    const XcIntegrationThresholds thresholds =
+        XcIntegrationThresholds::FromEnergyPath(fixture->settings, kScreeningTolerance);
+    const auto hessian = EvaluateXcGridMotionHessian(
+        fixture->engine, fixture->density, fixture->density, *fixture->provider, thresholds);
+    ASSERT_TRUE(hessian.has_value()) << hessian.error().message;
+
+    const auto statistics =
+        CompareWithEnergyCrossDifference(*fixture, *hessian, kEnergyDifferenceStep);
+    ASSERT_TRUE(statistics.has_value());
+    ::testing::Test::RecordProperty(
+        "tau_x energy cross-difference agreement (max deviation, Hartree/Bohr^2)",
+        Scientific(statistics->maxDeviation));
+    EXPECT_GT(statistics->maxReference, 1e-8);
+    EXPECT_LT(statistics->maxDeviation, kEnergyDifferenceTolerance)
+        << "the Hessian and the second difference of the engine's own energy disagree";
+}
+
+// The density channel pays nothing for the third tier: an LDA functional fetches
+// exactly the AO Hessian it fetched before, and the columns that count the new
+// work stay zero. The structural columns beside them are the density channel's
+// own, unchanged by the extension.
+TEST(XcGradientHessianTest, TheDensityChannelFetchesNoThirdTier) {
+    const auto fixture = MakeHessianFixture("slater");
+    ASSERT_TRUE(fixture.has_value());
+
+    const XcIntegrationThresholds thresholds =
+        XcIntegrationThresholds::FromEnergyPath(fixture->settings, kScreeningTolerance);
+    const std::size_t coordinateCount = 3 * fixture->molecule.AtomCount();
+    const std::size_t aoCount = fixture->engine.Evaluator().AOCount();
+
+    const auto hessian = EvaluateXcGridMotionHessian(
+        fixture->engine, fixture->density, fixture->density, *fixture->provider, thresholds);
+    ASSERT_TRUE(hessian.has_value()) << hessian.error().message;
+
+    EXPECT_EQ(hessian->counts.aoThirdSlotsEvaluated, 0U);
+    EXPECT_EQ(hessian->counts.aoThirdSlotsDense, 0U);
+    EXPECT_EQ(hessian->counts.electronicThirdTerms, 0U);
+
+    // Two active components, so eight right-hand sides per call.
+    const std::size_t sides = excgrid::kSecondDerivativeCapacity / 2;
+    EXPECT_EQ(hessian->counts.kernelSecondDerivativeCalls,
+              ((coordinateCount + sides - 1) / sides) * hessian->counts.points);
+
+    // The tolerance keeps every shell, so the screened columns meet their dense
+    // counterparts and every AO slot was evaluated once per point.
+    EXPECT_EQ(hessian->counts.aoSlotsEvaluated, hessian->counts.points * aoCount);
+    EXPECT_EQ(hessian->counts.electronicCurvatureTerms,
+              hessian->counts.electronicCurvatureTermsDense);
+    EXPECT_GT(hessian->counts.electronicCurvatureTerms, 0U);
+}
+
+// A component outside the seven collinear fields has no fixed-density second
+// response; the walk refuses it by name rather than answering part of one.
+TEST(XcGradientHessianTest, AFunctionalOutsideTheSevenIsRefusedByComponentName) {
+    const auto fixture = MakeHessianFixture("slater");
+    ASSERT_TRUE(fixture.has_value());
+
+    const LaplacianFunctional functional;
+    const XcIntegrationThresholds thresholds =
+        XcIntegrationThresholds::FromEnergyPath(fixture->settings, kScreeningTolerance);
+
+    const auto hessian = EvaluateXcGridMotionHessian(fixture->engine.Grid().Blocks(),
+                                                     *fixture->provider,
+                                                     fixture->engine.Evaluator(),
+                                                     functional,
+                                                     fixture->engine.ShellEnvelopes(),
+                                                     thresholds,
+                                                     fixture->density,
+                                                     fixture->density);
 
     ASSERT_FALSE(hessian.has_value());
     EXPECT_EQ(hessian.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(hessian.error().message.find("sigmaAa"), std::string::npos)
-        << hessian.error().message;
-    EXPECT_NE(hessian.error().message.find("sigmaAb"), std::string::npos)
-        << hessian.error().message;
-    EXPECT_NE(hessian.error().message.find("sigmaBb"), std::string::npos)
-        << hessian.error().message;
-    EXPECT_NE(hessian.error().message.find("third-derivative"), std::string::npos)
-        << "the refusal must say what would be needed, not only that it declined";
+    EXPECT_NE(hessian.error().message.find("laplA"), std::string::npos) << hessian.error().message;
 }
 
 // The tier is how a functional says it can be differentiated twice. A

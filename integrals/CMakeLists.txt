@@ -449,11 +449,11 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         # RI metric runs). The default (POST_TEST) discovery mode is kept:
         # the PRE_TEST mode re-runs each test inside the discovery context,
         # which hung the RI tests (2026-08-18).
-        gtest_discover_tests(qcx-integrals-tests
+        gtest_discover_tests(qcx-integrals-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS}
             PROPERTIES ENVIRONMENT "MKL_THREADING_LAYER=SEQUENTIAL"
             TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     else()
-        gtest_discover_tests(qcx-integrals-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+        gtest_discover_tests(qcx-integrals-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     endif()
 
     # THE LARGE CATEGORY (owner ruling 2026-09-18; the root CMakeLists carries
@@ -584,7 +584,7 @@ if (QCX_ENABLE_CUDA)
             <qcx/integrals/boys.hpp>)
 
         include(GoogleTest)
-        gtest_discover_tests(qcx-integrals-cuda-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+        gtest_discover_tests(qcx-integrals-cuda-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     endif()
 
     # ----------------------------------------------------------------------

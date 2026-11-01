@@ -129,7 +129,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     qcx_apply_asan_runtime(qcx-backend-tests)
 
     include(GoogleTest)
-    gtest_discover_tests(qcx-backend-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-backend-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 
     # DefaultOmpTeamSize's env-honoring first call must be the first thing in
     # its process (the function-local cache warms on first call), so the
@@ -143,7 +143,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
 
     qcx_apply_asan_runtime(qcx-backend-team-size-tests)
 
-    gtest_discover_tests(qcx-backend-team-size-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-backend-team-size-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 
     if (QCX_ENABLE_CUDA)
         # Host-side C++23 test (kernels live in qcx-backend-cuda's .cu); needs
@@ -159,6 +159,6 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
             <gtest/gtest.h>
             <cuda_runtime.h>)
         qcx_apply_asan_runtime(qcx-backend-cuda-tests)
-        gtest_discover_tests(qcx-backend-cuda-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+        gtest_discover_tests(qcx-backend-cuda-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     endif()
 endif()

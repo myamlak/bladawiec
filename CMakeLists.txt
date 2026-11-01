@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.27)
-project(qcx VERSION 0.6.0 LANGUAGES CXX)
+project(qcx VERSION 0.7.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -213,12 +213,12 @@ function(qcx_add_large_tests module)
     include(GoogleTest)
     qcx_blas_is_mkl(_qcxLargeMkl)
     if (_qcxLargeMkl)
-        gtest_discover_tests(qcx-${module}-large-tests
+        gtest_discover_tests(qcx-${module}-large-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS}
             PROPERTIES LABELS large
                        ENVIRONMENT "MKL_THREADING_LAYER=SEQUENTIAL"
                        TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     else()
-        gtest_discover_tests(qcx-${module}-large-tests
+        gtest_discover_tests(qcx-${module}-large-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS}
             PROPERTIES LABELS large TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     endif()
 endfunction()
@@ -440,6 +440,14 @@ enable_testing()
 # performance gate: it must stay above every test the suite is expected to keep.
 set(QCX_TEST_TIMEOUT_SECONDS 2400 CACHE STRING
     "Per-test ctest timeout in seconds (a runaway guard, not a performance gate)")
+
+# The gtest discovery timeout. GoogleTest's module defaults DISCOVERY_TIMEOUT
+# to 5 seconds per target, and the Debug integrals binary on a loaded Windows
+# runner exceeded it on 2026-11-01: the build stopped in the discovery step,
+# before any test ran. Discovery only lists the test names, so the value is
+# generous rather than a performance statement.
+set(QCX_TEST_DISCOVERY_TIMEOUT_SECONDS 60 CACHE STRING
+    "Per-target gtest discovery timeout in seconds")
 
 # The large category is excluded from the routine selection and run on its own;
 # its cases are the ones whose cost is why the category exists, and the

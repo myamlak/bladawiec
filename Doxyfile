@@ -5,7 +5,7 @@
 # Output lands in build/doxygen/html (open index.html).
 
 PROJECT_NAME           = qcx
-PROJECT_NUMBER         = 0.1.0
+PROJECT_NUMBER         = 0.7.0
 PROJECT_BRIEF          = "Quantum-chemistry framework"
 OUTPUT_DIRECTORY       = build/doxygen
 OUTPUT_LANGUAGE        = English

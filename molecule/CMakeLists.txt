@@ -49,7 +49,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     qcx_apply_asan_runtime(qcx-molecule-tests)
 
     include(GoogleTest)
-    gtest_discover_tests(qcx-molecule-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-molecule-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 
     # The generated header must stay byte-identical to its committed source of
     # truth (tools/periodic/elements_data.json) - regeneration is offline.

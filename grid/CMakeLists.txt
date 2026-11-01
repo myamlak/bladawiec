@@ -45,6 +45,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/xc_assembly_test.cpp
         tests/xc_gradient_test.cpp
         tests/xc_gradient_hessian_test.cpp
+        tests/xc_hessian_exactness_test.cpp
         tests/xc_kernel_action_test.cpp
         tests/xc_kernel_gradient_test.cpp
         tests/tau_reference_test.cpp
@@ -62,7 +63,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         <qcx/grid/angular_grid.hpp>)
 
     include(GoogleTest)
-    gtest_discover_tests(qcx-grid-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-grid-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 
     # THE LARGE CATEGORY (the root CMakeLists carries the mechanism). These
     # two leave the routine selection and run with
