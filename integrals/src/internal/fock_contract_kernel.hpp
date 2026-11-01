@@ -47,6 +47,20 @@ struct FockContractContext {
     // the serial paths) - null = no counting. Only populated when the
     // filter is active.
     std::size_t* elementDrops = nullptr;
+    // The orbit multiplicity of the block's cell - the strong form's
+    // accumulation weight (FockBuildOptions::symmetryStrongForm): the class
+    // pass contracts each orbit's representative ONCE and the post-fold
+    // group projection distributes it to every image with equal weight, so
+    // the representative's contraction must carry the orbit's member count
+    // for the projection to recover one contribution per member. The weight
+    // multiplies the ACCUMULATED J and K contributions AFTER the per-element
+    // filter and BEFORE the Fock writes: pre-scaling the block would move
+    // the filter's decisions (its test is |g| < tau/max|D|) and is
+    // deliberately not done. The default 1.0 is the weak/plain path's
+    // weight and keeps the arithmetic bit-identical (multiplication by 1.0
+    // is exact). Trailing so every existing aggregate initialization keeps
+    // compiling.
+    double blockWeight = 1.0;
 };
 
 // The per-target threshold of the per-element re-filter. The
@@ -196,13 +210,17 @@ void AccumulateBlockKernel(const double* block,
                         }
                     }
 
+                    // The orbit weight (strong form) multiplies the
+                    // accumulated contribution, never the block: the filter
+                    // above must decide on the raw integral.
+                    const double contribution = context.blockWeight * (2.0 * j);
                     context.fock(static_cast<Eigen::Index>(oA + fa),
-                                 static_cast<Eigen::Index>(oB + fb)) += 2.0 * j;
+                                 static_cast<Eigen::Index>(oB + fb)) += contribution;
 
                     if (a != b)
                     {
                         context.fock(static_cast<Eigen::Index>(oB + fb),
-                                     static_cast<Eigen::Index>(oA + fa)) += 2.0 * j;
+                                     static_cast<Eigen::Index>(oA + fa)) += contribution;
                     }
                 }
             }
@@ -248,13 +266,14 @@ void AccumulateBlockKernel(const double* block,
                             }
                         }
 
+                        const double contribution = context.blockWeight * (2.0 * j);
                         context.fock(static_cast<Eigen::Index>(oC + fc),
-                                     static_cast<Eigen::Index>(oD + fd)) += 2.0 * j;
+                                     static_cast<Eigen::Index>(oD + fd)) += contribution;
 
                         if (c != dIndex)
                         {
                             context.fock(static_cast<Eigen::Index>(oD + fd),
-                                         static_cast<Eigen::Index>(oC + fc)) += 2.0 * j;
+                                         static_cast<Eigen::Index>(oC + fc)) += contribution;
                         }
                     }
                 }
@@ -333,7 +352,9 @@ void AccumulateBlockKernel(const double* block,
                         }
                     }
 
-                    const double kScaled = k / kMultiplicity;
+                    // The orbit weight (strong form) multiplies the
+                    // accumulated exchange contribution, never the block.
+                    const double kScaled = context.blockWeight * (k / kMultiplicity);
                     context.fock(static_cast<Eigen::Index>(oA + fa),
                                  static_cast<Eigen::Index>(oC + fc)) -= kScaled;
                     context.fock(static_cast<Eigen::Index>(oC + fc),
@@ -371,7 +392,9 @@ void AccumulateBlockKernel(const double* block,
                         }
                     }
 
-                    const double kScaled = k / kMultiplicity;
+                    // The orbit weight (strong form) multiplies the
+                    // accumulated exchange contribution, never the block.
+                    const double kScaled = context.blockWeight * (k / kMultiplicity);
                     context.fock(static_cast<Eigen::Index>(oA + fa),
                                  static_cast<Eigen::Index>(oD + fd)) -= kScaled;
                     context.fock(static_cast<Eigen::Index>(oD + fd),
@@ -409,7 +432,9 @@ void AccumulateBlockKernel(const double* block,
                         }
                     }
 
-                    const double kScaled = k / kMultiplicity;
+                    // The orbit weight (strong form) multiplies the
+                    // accumulated exchange contribution, never the block.
+                    const double kScaled = context.blockWeight * (k / kMultiplicity);
                     context.fock(static_cast<Eigen::Index>(oB + fb),
                                  static_cast<Eigen::Index>(oC + fc)) -= kScaled;
                     context.fock(static_cast<Eigen::Index>(oC + fc),
@@ -447,7 +472,9 @@ void AccumulateBlockKernel(const double* block,
                         }
                     }
 
-                    const double kScaled = k / kMultiplicity;
+                    // The orbit weight (strong form) multiplies the
+                    // accumulated exchange contribution, never the block.
+                    const double kScaled = context.blockWeight * (k / kMultiplicity);
                     context.fock(static_cast<Eigen::Index>(oB + fb),
                                  static_cast<Eigen::Index>(oD + fd)) -= kScaled;
                     context.fock(static_cast<Eigen::Index>(oD + fd),

@@ -178,6 +178,10 @@ struct ClassPassPartial {
     // Chunk-local per-element filter drop count (see
     // RunPassPartial - exact combine).
     std::size_t elementDrops = 0;
+    // Chunk-local contract-block count (the class-path
+    // classBlockContractCalls partial - exact combine): one per weak member
+    // contraction, one per orbit task in the strong form.
+    std::size_t blockContractCalls = 0;
 };
 
 // The class-contraction routing invariant violation: the rep block of
@@ -480,6 +484,94 @@ void SortClassRepTasks(const PairClassTable& classTable,
     });
 }
 
+// The strong form's projection: S = (1/|G|) sum_g A(g) S_skel A(g)^T, with
+// A(g) the reduction's signed permutation. This is the lean builder's
+// projection body verbatim (ProjectOrbitSkeleton, lean_fock_build.cpp)
+// reading the reduction's own permutation/sign rows instead of the orbit
+// action's flat tables: the scatter below applies A(g)^T S A(g), and the
+// full group is closed under inversion, so the sum is the same one - each
+// skeleton entry lands on its images with the sign pattern.
+// \param skeleton The accumulated two-electron skeleton (no core
+// Hamiltonian).
+// \param reduction The class path's reduction (the group the skeleton is
+// projected over).
+// \returns The projected two-electron Fock.
+Eigen::MatrixXd ProjectOrbitSkeleton(const Eigen::MatrixXd& skeleton,
+                                     const SymmetryReduction& reduction) {
+    const Eigen::Index n = skeleton.rows();
+    const std::size_t order = reduction.groupOrder;
+    Eigen::MatrixXd projected = Eigen::MatrixXd::Zero(n, n);
+
+    for (std::size_t g = 0; g < order; ++g)
+    {
+        for (Eigen::Index i = 0; i < n; ++i)
+        {
+            const auto indexI = static_cast<std::size_t>(i);
+            const auto imageI = static_cast<Eigen::Index>(reduction.permutation[g][indexI]);
+            const double signI = static_cast<double>(reduction.sign[g][indexI]);
+
+            for (Eigen::Index j = 0; j < n; ++j)
+            {
+                const auto indexJ = static_cast<std::size_t>(j);
+                const auto imageJ = static_cast<Eigen::Index>(reduction.permutation[g][indexJ]);
+                const double signJ = static_cast<double>(reduction.sign[g][indexJ]);
+
+                projected(imageI, imageJ) += signI * signJ * skeleton(i, j);
+            }
+        }
+    }
+
+    projected /= static_cast<double>(order);
+    return projected;
+}
+
+// The strong form's density precondition: A(g) rho A(g)^T = rho for every
+// element. A density that fails it carries a component the projection would
+// average away, so the call refuses rather than answering a Fock the caller
+// did not ask for. The lean builder's check verbatim
+// (DensitySymmetryViolation, lean_fock_build.cpp), reading the reduction's
+// own permutation/sign rows.
+// \param density The spatial closed-shell density the call was given.
+// \param reduction The class path's reduction.
+// \returns The refusal text, or nothing when the density is totally
+// symmetric.
+std::optional<std::string> DensitySymmetryViolation(const Eigen::MatrixXd& density,
+                                                    const SymmetryReduction& reduction) {
+    const Eigen::Index n = density.rows();
+    const std::size_t order = reduction.groupOrder;
+    const double scale = n == 0 ? 1.0 : std::max(1.0, density.cwiseAbs().maxCoeff());
+    const double tolerance = 1e-9 * scale;
+
+    for (std::size_t g = 1; g < order; ++g)
+    {
+        for (Eigen::Index i = 0; i < n; ++i)
+        {
+            const auto indexI = static_cast<std::size_t>(i);
+            const auto imageI = static_cast<Eigen::Index>(reduction.permutation[g][indexI]);
+            const double signI = static_cast<double>(reduction.sign[g][indexI]);
+
+            for (Eigen::Index j = 0; j < n; ++j)
+            {
+                const auto indexJ = static_cast<std::size_t>(j);
+                const auto imageJ = static_cast<Eigen::Index>(reduction.permutation[g][indexJ]);
+                const double signJ = static_cast<double>(reduction.sign[g][indexJ]);
+                const double transformed = signI * signJ * density(imageI, imageJ);
+
+                if (std::abs(transformed - density(i, j)) > tolerance)
+                {
+                    return "the density is not totally symmetric under the reduction "
+                           "(A(g) rho A(g)^T differs at element " +
+                           std::to_string(i) + "," + std::to_string(j) +
+                           "); symmetryStrongForm projects only a totally symmetric density "
+                           "(the SCF energy path's invariant density)";
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
 // Expands one member quartet's ERI block from the orbit representative's
 // computed block: memberBlock[memberPos] = pattern[srcPos] * repBlock[srcPos]
 // with memberPos = pi_g(srcPos) the position permutation induced by the
@@ -767,12 +859,16 @@ struct FockContractor {
     void AccumulateBlock(const double* block,
                          const ShellQuartet& quartet,
                          std::size_t pairBra,
-                         std::size_t pairKet) const {
+                         // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+                         std::size_t pairKet,
+                         double blockWeight = 1.0) const {
         // The per-element filter rides on the pair-max vector
         // (null = filter off, the flag contract) and the per-preset density
         // threshold; the drop counter target is this contractor's - the
         // serial paths point at the BuildFock local, the per-chunk
-        // contractors at their partial's local.
+        // contractors at their partial's local. The block weight is the
+        // strong form's orbit multiplicity (1.0 everywhere else); the
+        // kernel applies it after the filter, before the Fock writes.
         const internal::FockContractContext context{_pairList,
                                                     _density,
                                                     _fock,
@@ -780,7 +876,8 @@ struct FockContractor {
                                                     _options.buildCoulombOnly,
                                                     DensityThreshold(_options.accuracy),
                                                     _pairMaxDensity,
-                                                    _elementDrops};
+                                                    _elementDrops,
+                                                    blockWeight};
         static const bool kAvx2 = internal::FockAvx2Available();
 
         if (kAvx2 && !_options.forceScalarContract)
@@ -1636,7 +1733,9 @@ struct FockContractor {
                                    const SymmetryReduction& reduction,
                                    const std::vector<double>& fp32DensityWeights,
                                    std::vector<double>& blockScratch,
-                                   double& certifiedBoundSum) const {
+                                   double& certifiedBoundSum,
+                                   bool strongForm,
+                                   std::size_t& classBlockContractCalls) const {
         if (classTasks64.empty() && classTasks32.empty())
         {
             return qcx::Result<void>{};
@@ -1752,7 +1851,9 @@ struct FockContractor {
                 auto contractRep = [&](const FockContractor& contractor,
                                        std::size_t t,
                                        std::vector<double>& scratchSlot,
-                                       double& boundSum) -> ClassTaskOutcome {
+                                       // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+                                       double& boundSum,
+                                       std::size_t& contractCalls) -> ClassTaskOutcome {
                     const ShellQuartet& repQuartet = half->computed[t];
                     // The positional task identity: the assembled rep at
                     // index t of the batch whose first class-task position
@@ -1784,6 +1885,77 @@ struct FockContractor {
                     if (fp32 && task.screenedMemberPositions.size() != task.screenedMembers.size())
                     {
                         return ClassTaskOutcome::kCertifiedMiss;
+                    }
+
+                    // The STRONG form (FockBuildOptions::symmetryStrongForm):
+                    // contract the orbit's representative ONCE, its block
+                    // weight carrying the orbit's multiplicity - the post-fold
+                    // projection distributes it to every member with equal
+                    // weight, so the weighted representative recovers one
+                    // contribution per member. The closure check ran before
+                    // this pass: screenedMembers IS the full orbit, and
+                    // screenedMembers[0] is the orbit representative (the
+                    // orbit member list starts with it, identity generator).
+                    if (strongForm)
+                    {
+                        const ClassOrbitMember& member = task.screenedMembers[0];
+                        const ShellPairIndex& memberBra = _pairList.pairs[member.braPair];
+                        const ShellPairIndex& memberKet = _pairList.pairs[member.ketPair];
+                        const ShellQuartet memberQuartet{
+                            memberBra.i, memberBra.j, memberKet.i, memberKet.j};
+
+                        // The certified sum keeps the weak build's per-member
+                        // accumulation - the same weight(member) *
+                        // bound(orbit rep) terms in the same member order -
+                        // while the block contracts once, so
+                        // certifiedBoundSumOut carries the same sum on both
+                        // forms.
+                        if (fp32)
+                        {
+                            for (std::size_t memberIndex = 0;
+                                 memberIndex < task.screenedMembers.size();
+                                 ++memberIndex)
+                            {
+                                if (task.screenedMemberPositions[memberIndex] >=
+                                    fp32DensityWeights.size())
+                                {
+                                    return ClassTaskOutcome::kCertifiedMiss;
+                                }
+
+                                boundSum +=
+                                    fp32DensityWeights[task.screenedMemberPositions[memberIndex]] *
+                                    half->bounds[t];
+                            }
+
+                            ExpandMemberBlock(reduction,
+                                              _pairList,
+                                              member,
+                                              orbitRepQuartet,
+                                              repQuartet,
+                                              half->valuesF32.data() + half->quartetOffsets[t],
+                                              scratchSlot);
+                        } else
+                        {
+                            ExpandMemberBlock(reduction,
+                                              _pairList,
+                                              member,
+                                              orbitRepQuartet,
+                                              repQuartet,
+                                              half->values.data() + half->quartetOffsets[t],
+                                              scratchSlot);
+                        }
+
+                        // The multiplicity rides the kernel weight (applied
+                        // AFTER the per-element filter and BEFORE the Fock
+                        // writes - never a pre-scaled block, whose filter
+                        // decisions would move).
+                        contractor.AccumulateBlock(scratchSlot.data(),
+                                                   memberQuartet,
+                                                   member.braPair,
+                                                   member.ketPair,
+                                                   static_cast<double>(orbit.members.size()));
+                        ++contractCalls;
+                        return ClassTaskOutcome::kContracted;
                     }
 
                     for (std::size_t memberIndex = 0; memberIndex < task.screenedMembers.size();
@@ -1818,6 +1990,7 @@ struct FockContractor {
                                               scratchSlot);
                             contractor.AccumulateBlock(
                                 scratchSlot.data(), memberQuartet, member.braPair, member.ketPair);
+                            ++contractCalls;
                             boundSum +=
                                 fp32DensityWeights[task.screenedMemberPositions[memberIndex]] *
                                 half->bounds[t];
@@ -1832,6 +2005,7 @@ struct FockContractor {
                                               scratchSlot);
                             contractor.AccumulateBlock(
                                 scratchSlot.data(), memberQuartet, member.braPair, member.ketPair);
+                            ++contractCalls;
                         }
                     }
 
@@ -1846,8 +2020,8 @@ struct FockContractor {
                         // order, accumulated into the shared Fock directly.
                         for (std::size_t t = 0; t < numReps; ++t)
                         {
-                            const ClassTaskOutcome outcome =
-                                contractRep(*this, t, scratch, certifiedBoundSum);
+                            const ClassTaskOutcome outcome = contractRep(
+                                *this, t, scratch, certifiedBoundSum, classBlockContractCalls);
 
                             if (outcome == ClassTaskOutcome::kRepMiss)
                             {
@@ -1873,8 +2047,8 @@ struct FockContractor {
                         {
                             for (std::size_t t = 0; t < numReps; ++t)
                             {
-                                const ClassTaskOutcome outcome =
-                                    contractRep(*this, t, scratch, certifiedBoundSum);
+                                const ClassTaskOutcome outcome = contractRep(
+                                    *this, t, scratch, certifiedBoundSum, classBlockContractCalls);
 
                                 if (outcome == ClassTaskOutcome::kRepMiss)
                                 {
@@ -1939,8 +2113,12 @@ struct FockContractor {
                                  t < chunkStarts[chunkIndex + 1];
                                  ++t)
                             {
-                                const ClassTaskOutcome outcome = contractRep(
-                                    chunkContractor, t, localBlockScratch, local.certifiedBoundSum);
+                                const ClassTaskOutcome outcome =
+                                    contractRep(chunkContractor,
+                                                t,
+                                                localBlockScratch,
+                                                local.certifiedBoundSum,
+                                                local.blockContractCalls);
 
                                 if (outcome == ClassTaskOutcome::kRepMiss)
                                 {
@@ -1963,7 +2141,8 @@ struct FockContractor {
                                                     a.certifiedBoundSum + b.certifiedBoundSum,
                                                     a.miss || b.miss,
                                                     a.certifiedMiss || b.certifiedMiss,
-                                                    a.elementDrops + b.elementDrops};
+                                                    a.elementDrops + b.elementDrops,
+                                                    a.blockContractCalls + b.blockContractCalls};
                         },
                         static_cast<int>(regionThreads));
 
@@ -1992,6 +2171,7 @@ struct FockContractor {
                     {
                         _fock += delta.fock;
                         certifiedBoundSum += delta.certifiedBoundSum;
+                        classBlockContractCalls += delta.blockContractCalls;
 
                         // The parallel class path's drop count
                         // combines exactly; the serial path accumulated
@@ -2011,6 +2191,7 @@ struct FockContractor {
                         {
                             _fock += delta.fock;
                             certifiedBoundSum += delta.certifiedBoundSum;
+                            classBlockContractCalls += delta.blockContractCalls;
 
                             if (_elementDrops != nullptr)
                             {
@@ -2268,6 +2449,18 @@ qcx::Result<DirectJkFockBuilder> DirectJkFockBuilder::Create(
     {
         return std::unexpected(
             qcx::Error{qcx::ErrorCode::kInvalidArgument, "maxBatchBytes must be positive"});
+    }
+
+    // The strong form is DEFINED by the group it projects over, so asking
+    // for it without a reduction is a caller error, refused rather than
+    // silently ignored - the lean builder's symmetryStrongForm refusal
+    // verbatim.
+    if (options.symmetryStrongForm && options.symmetryReduction == nullptr)
+    {
+        return std::unexpected(qcx::Error{
+            qcx::ErrorCode::kInvalidArgument,
+            "symmetryStrongForm requires a symmetry reduction (the reduction defines the group "
+            "the skeleton is projected over)"});
     }
 
     auto pairList = BuildShellPairs(molecule, basisSet);
@@ -3341,6 +3534,50 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
     // documented precondition of BuildFock, checked here in Debug builds.
     assert(d.isApprox(d.transpose()));
 
+    // The strong form's ENGAGEMENT (FockBuildOptions::symmetryStrongForm).
+    // Eligibility is MEASURED, never assumed: a class table is present (the
+    // class path engaged - a non-null non-trivial reduction the budget gate
+    // did not disengage) and the class decomposition is not pair-trivial
+    // (fewer classes than canonical pairs). The LightPath demotes
+    // unconditionally in v1: its per-chunk screened sets have no whole-call
+    // orbit ownership, so the closure test below cannot run - the weak
+    // build is what runs, recorded in strongFormFallbacks.
+    const bool strongRequested = state._options.symmetryStrongForm &&
+                                 state._classTable != nullptr && state._reduction.has_value() &&
+                                 state._classTable->classes.size() != state._pairList.pairs.size();
+    bool strongEngaged = strongRequested && !lightMode;
+    // The strong form's record and span: the density check and the post-fold
+    // projection fill strongFormWallTime; the LightPath and closure
+    // demotions fill strongFormFallbacks and strongFormClosureMisses.
+    std::size_t strongFormFallbacks = strongRequested && lightMode ? 1 : 0;
+    std::size_t strongFormClosureMisses = 0;
+    std::chrono::nanoseconds strongFormWallTime{};
+    // The class path's contract-block census (FockBuildStats::
+    // classBlockContractCalls): accumulated per pass by RunClassPass - one
+    // per weak member contraction, one per orbit task in the strong form.
+    std::size_t classBlockContractCalls = 0;
+
+    if (strongEngaged)
+    {
+        // The projection is exact only for a density the group leaves
+        // invariant (A(g) rho A(g)^T = rho): checked before a term is
+        // computed, refused by name rather than averaged into a wrong Fock.
+        const auto strongStarted =
+            wantStats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        const std::optional<std::string> violation = DensitySymmetryViolation(d, *state._reduction);
+
+        if (wantStats)
+        {
+            strongFormWallTime += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - strongStarted);
+        }
+
+        if (violation.has_value())
+        {
+            return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument, *violation});
+        }
+    }
+
     // The precision ladder (precision_policy.hpp): the
     // per-call dispatch dimension, engaged by the ladder inputs'
     // schedule. The ladder runs the plain FastPath only - the LightPath
@@ -3550,6 +3787,13 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
         // per call.
         statsOut->significantPairCount = 0;
         statsOut->primitiveProductSum = 0;
+        // The class-path censuses accumulate per pass too (the LightPath
+        // sums over its chunks); the strong form's demotion record and its
+        // span are written once below and are not zeroed here - the
+        // LightPath demotion is already decided at this point.
+        classBlockContractCalls = 0;
+        statsOut->classBlockContractCalls = 0;
+        statsOut->classOrbitTaskCount = 0;
 
         if (statsOut->quartetKeysOut != nullptr)
         {
@@ -3641,7 +3885,14 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
                                                      partition.mixedBoundSum);
     }
 
-    Eigen::MatrixXd fock = state._coreHamiltonian;
+    // The strong form accumulates the two-electron SKELETON alone: the core
+    // Hamiltonian is added AFTER the projection, so the averaging touches
+    // only the part the group acts on as a sum of quartet terms (the lean
+    // shape, lean_fock_build.cpp's post-fold step). Every other path starts
+    // from H and contracts on top of it.
+    Eigen::MatrixXd fock = strongEngaged ? Eigen::MatrixXd::Zero(state._coreHamiltonian.rows(),
+                                                                 state._coreHamiltonian.cols())
+                                         : state._coreHamiltonian;
 
     // The contraction context: the shared state pieces, the density, and
     // the Fock matrix under accumulation - the contract helpers above. The
@@ -3761,13 +4012,23 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
                 return qcx::Result<void>{};
             }
 
+            // The orbit-task census (FockBuildStats::classOrbitTaskCount):
+            // one task per orbit with a screened member, per lane, summed
+            // over the call's passes. Purely observational.
+            if (wantStats)
+            {
+                statsOut->classOrbitTaskCount += classTasks64.size() + classTasks32.size();
+            }
+
             auto pass = passContractor.RunClassPass(classTasks64,
                                                     classTasks32,
                                                     *state._classTable,
                                                     *state._reduction,
                                                     f32Weights,
                                                     scratch,
-                                                    certifiedBoundSum);
+                                                    certifiedBoundSum,
+                                                    strongEngaged,
+                                                    classBlockContractCalls);
 
             if (!pass.has_value())
             {
@@ -4059,6 +4320,42 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
                 SortClassRepTasks(*state._classTable, state._pairList, classTasks32);
             }
 
+            // The strong form's CLOSURE check, before a term is contracted:
+            // the class path's screened set is not structurally orbit-closed
+            // (its density-weighted gate decides member by member), and the
+            // projection distributes the representative to EVERY member of
+            // its orbit - so a task whose screened member set is not the
+            // full orbit (either precision lane) would over-count. The
+            // strong form is then not exact on this call: restore the core
+            // Hamiltonian by assignment (the Fock is still the untouched
+            // zero skeleton - no contraction has run) and demote the whole
+            // call to the weak build, exactly as the option's absence would
+            // contract it.
+            if (strongEngaged)
+            {
+                const auto scanLane = [&](const std::vector<ClassRepTask>& tasks) {
+                    for (const ClassRepTask& task : tasks)
+                    {
+                        const ClassOrbit& orbit = state._classTable->classPairs[task.classPairIndex]
+                                                      .orbits[task.orbitIndex];
+
+                        if (task.screenedMembers.size() != orbit.members.size())
+                        {
+                            ++strongFormClosureMisses;
+                        }
+                    }
+                };
+                scanLane(classTasks64);
+                scanLane(classTasks32);
+
+                if (strongFormClosureMisses != 0)
+                {
+                    fock = state._coreHamiltonian;
+                    strongEngaged = false;
+                    strongFormFallbacks = 1;
+                }
+            }
+
             auto pass = runAssembly(fp64Quartets,
                                     fp32Quartets,
                                     fp32DensityWeights,
@@ -4071,6 +4368,25 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
             {
                 return std::unexpected(pass.error());
             }
+        }
+    }
+
+    // The strong form's one post-fold step (the lean shape): the skeleton
+    // becomes the full two-electron Fock by the group projection, and the
+    // core Hamiltonian is added last - it did not enter the skeleton. The
+    // closure check above may have demoted the call before any contraction,
+    // in which case the weak build's H + contraction is what runs.
+    if (strongEngaged)
+    {
+        const auto strongStarted =
+            wantStats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        fock = ProjectOrbitSkeleton(fock, *state._reduction);
+        fock += state._coreHamiltonian;
+
+        if (wantStats)
+        {
+            strongFormWallTime += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - strongStarted);
         }
     }
 
@@ -4112,6 +4428,13 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
         // serial and parallel paths both land here). Zero by construction
         // when the per-element screening flag is off (the flag contract).
         statsOut->elementDrops = elementDrops;
+        // The class path's censuses and the strong form's record/span (the
+        // demotion flags were settled above - the LightPath at entry, the
+        // closure check before its pass).
+        statsOut->classBlockContractCalls = classBlockContractCalls;
+        statsOut->strongFormFallbacks = strongFormFallbacks;
+        statsOut->strongFormClosureMisses = strongFormClosureMisses;
+        statsOut->strongFormWallTime = strongFormWallTime;
     }
 
     return std::move(*tensor);
