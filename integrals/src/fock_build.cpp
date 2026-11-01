@@ -859,8 +859,8 @@ struct FockContractor {
     void AccumulateBlock(const double* block,
                          const ShellQuartet& quartet,
                          std::size_t pairBra,
-                         std::size_t pairKet,
                          // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+                         std::size_t pairKet,
                          double blockWeight = 1.0) const {
         // The per-element filter rides on the pair-max vector
         // (null = filter off, the flag contract) and the per-preset density
