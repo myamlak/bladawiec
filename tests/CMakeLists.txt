@@ -136,7 +136,7 @@ if (QCX_ENABLE_CUDA AND TARGET qcx-integrals-cuda-md)
         <qcx/integrals/eri_cuda.hpp>)
 
     include(GoogleTest)
-    gtest_discover_tests(qcx-cuda-md-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-cuda-md-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 endif()
 endif()
 

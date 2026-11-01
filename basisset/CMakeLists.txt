@@ -56,7 +56,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         <qcx/basisset/basis_set.hpp>)
 
     include(GoogleTest)
-    gtest_discover_tests(qcx-basisset-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-basisset-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 
     # The vendored corpus must stay byte-identical to its committed manifest
     # (data/basis/manifest.json); regeneration is a network operation.

@@ -38,5 +38,5 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         <qcx/dispersion/dispersion.hpp>)
 
     include(GoogleTest)
-    gtest_discover_tests(qcx-dispersion-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-dispersion-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 endif()

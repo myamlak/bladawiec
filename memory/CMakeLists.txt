@@ -33,7 +33,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     qcx_apply_asan_runtime(qcx-memory-tests)
 
     include(GoogleTest)
-    gtest_discover_tests(qcx-memory-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-memory-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 
     if (QCX_ENABLE_CUDA)
         # Host-side C++23 tests (kernels live in backend's .cu); need the
@@ -48,6 +48,6 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
             <gtest/gtest.h>
             <cuda_runtime.h>)
         qcx_apply_asan_runtime(qcx-memory-cuda-tests)
-        gtest_discover_tests(qcx-memory-cuda-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+        gtest_discover_tests(qcx-memory-cuda-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     endif()
 endif()

@@ -25,5 +25,5 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     qcx_apply_asan_runtime(qcx-core-tests)
 
     include(GoogleTest)
-    gtest_discover_tests(qcx-core-tests PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    gtest_discover_tests(qcx-core-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 endif()
