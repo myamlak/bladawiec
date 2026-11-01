@@ -602,3 +602,20 @@ if (QCX_ENABLE_CUDA)
     target_precompile_headers(qcx-bench-memory-probe-device PRIVATE
         <cuda_runtime.h>)
 endif()
+
+# The XC Hessian third-tier benchmark: the AO evaluator's three selected
+# fetch entry points on H2O in STO-3G, def2-SVP and def2-TZVP, the
+# fixed-density Hessian walk for slater, pbe and tau_x on the same grid, and
+# the walk's per-point second-derivative kernel call pattern. Plain main(),
+# not a google-benchmark run; local-only like the rest. The link chain
+# (grid -> basisset -> molecule -> core) does not reach the BLAS seam, so no
+# runtime deployment applies.
+add_executable(qcx-bench-xc-hessian-tier xc_hessian_tier_benchmark.cpp)
+target_compile_features(qcx-bench-xc-hessian-tier PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-xc-hessian-tier PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-xc-hessian-tier PRIVATE
+    qcx-grid qcx-basisset qcx-molecule)
+target_precompile_headers(qcx-bench-xc-hessian-tier PRIVATE
+    <qcx/grid/xc_grid_engine.hpp>)

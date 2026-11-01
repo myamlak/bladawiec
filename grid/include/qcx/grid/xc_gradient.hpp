@@ -32,6 +32,11 @@ struct XcGradientCounts {
     std::size_t aoFetches = 0; ///< AO evaluations issued: one per live point.
     std::size_t aoSlotsEvaluated = 0; ///< AO slots evaluated, selected shells only.
     std::size_t aoSlotsDense = 0; ///< points x AOCount(), the cost with no screening.
+    // The third-derivative tier's fetch, in the same columns as the cheaper
+    // tiers above. Both stay zero for a functional whose fields are answered by
+    // the AO Hessian alone, which is the density and sigma channels' whole cost.
+    std::size_t aoThirdSlotsEvaluated = 0; ///< AO slots whose third tier was evaluated.
+    std::size_t aoThirdSlotsDense = 0; ///< points x AOCount(), when the tier is fetched.
     std::size_t contractionPairs = 0; ///< Terms the density contraction read.
     std::size_t contractionPairsDense = 0; ///< points x 2 x AOCount()^2, with no screening.
     // The AO-derivative terms the gradient accumulated: one per kept AO slot per
@@ -58,6 +63,11 @@ struct XcGradientCounts {
     std::size_t electronicCurvatureTerms = 0; ///< Atom-pair second-response entries filled.
     std::size_t electronicCurvatureTermsDense = 0; ///< points x atomCount^2 x 9, no screening.
     std::size_t kernelSecondDerivativeCalls = 0; ///< Second-derivative contractions issued.
+    // The third-tier tensors the sigma and tau channels accumulate: ten packed
+    // entries of T1 per kept AO per spin for sigma, six of T2 for tau. The
+    // column is the visible price of the third derivative inside the channel,
+    // against the AO slot columns above, which count the fetch itself.
+    std::size_t electronicThirdTerms = 0; ///< Third-derivative tensor entries accumulated.
 };
 
 /// One grid integration's exchange-correlation gradient, at fixed density.
@@ -193,15 +203,16 @@ qcx::Result<XcGradientEvaluation> EvaluateXcGradient(
 /// separately - and `d2e/dR_q dR_r` its total second. This object is the
 /// derivative of what that walk accumulates.
 ///
-/// That derivative is complete for a functional that reads only the two spin
-/// densities. The rho fields' second total response is expressible with the
-/// value, gradient and Hessian tiers the evaluator already supplies, so for such
-/// a functional this object is the whole fixed-density Hessian. A functional
-/// that reads a sigma invariant or a kinetic-energy density is refused by name
-/// instead: that field's second response differentiates the AO Hessian once
-/// more and needs a third-derivative tier the evaluator does not supply yet, so
-/// answering it with the density channel alone would be a plausible wrong
-/// number.
+/// That derivative is complete for a functional whose required mask is a subset
+/// of the seven collinear fields: the two spin densities, the three sigma
+/// invariants and the two kinetic-energy densities. The densities' second total
+/// response is expressible with the value, gradient and Hessian tiers the
+/// evaluator already supplies; the sigma invariants and the kinetic-energy
+/// densities differentiate the AO Hessian once more, and the evaluator's
+/// third-derivative tier supplies exactly the two contractions they need. A
+/// functional is refused by name when it reads a component outside those seven,
+/// when it declares no second-derivative tier, or when its tier does not span
+/// the components it reads.
 ///
 /// The grid's own contribution at that order is accumulated in full: the
 /// quadrature weight's curvature, the two cross terms the weight's first
@@ -263,11 +274,11 @@ struct XcGridMotionHessian {
 /// \returns The Hessian, the gradient this walk accumulated, the energy, the
 /// thresholds and the counted cost, or an Error: kInvalidArgument for a shape
 /// mismatch or a provider that does not supply second order; kUnimplemented, by
-/// name, for a functional that reads a sigma invariant or a kinetic-energy
-/// density, whose second response needs the third-derivative AO tier, or that
-/// declares no second-derivative tier, or one that does not span the components
-/// it reads; and the provider's own refusal, by name, when it declines a block
-/// rather than answering it with zeros.
+/// name, for a functional that reads a component outside the two densities, the
+/// three sigma invariants and the two kinetic-energy densities, or that declares
+/// no second-derivative tier, or one that does not span the components it reads;
+/// and the provider's own refusal, by name, when it declines a block rather than
+/// answering it with zeros.
 /// \ingroup qcx-grid
 qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
     std::span<const excgrid::Block> blocks,
