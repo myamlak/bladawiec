@@ -2086,6 +2086,11 @@ qcx::Result<XcGridMotionHessian> EvaluateXcGridMotionHessian(
                             }
 
                             break;
+                        default:
+                            // The header refuses a mask outside the seven
+                            // collinear fields, so this is the exhaustiveness
+                            // guard, not a reachable path.
+                            break;
                         }
 
                         firstResponse[coordinate * activeCount + slot] = response;

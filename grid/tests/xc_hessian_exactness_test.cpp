@@ -273,7 +273,7 @@ struct PolynomialSpec {
 
 class PolynomialFunctional final : public excgrid::XcFunctional {
 public:
-    explicit PolynomialFunctional(PolynomialSpec spec) : _spec(std::move(spec)) {}
+    explicit PolynomialFunctional(PolynomialSpec spec) : _spec(spec) {}
 
     [[nodiscard]] bool UsesGradient() const override {
         return _spec.required.Test(excgrid::Component::SigmaAa) ||

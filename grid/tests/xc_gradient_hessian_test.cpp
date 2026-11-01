@@ -446,7 +446,7 @@ std::optional<HessianFixture> MakeGeneralDensityFixture(std::string_view functio
 
     fixture->density = GeneralCrossAtomDensity(static_cast<std::size_t>(fixture->engine.AOCount()));
 
-    return std::move(*fixture);
+    return fixture;
 }
 
 // The analytic gradient one displaced geometry owes, at the fixed density.
@@ -650,6 +650,7 @@ void ExpectWalkConsistency(const HessianFixture& fixture,
 // coordinates displaced. The engine is rebuilt, as the energy path is, and the
 // fixed density matrices are the same at every geometry: that is the
 // fixed-density convention the Hessian walk claims.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::optional<double> CrossEnergy(const HessianFixture& fixture,
                                   std::size_t atomA,
                                   std::size_t axisA,
@@ -1433,6 +1434,7 @@ TEST(XcGradientHessianTest, AFirstOrderProviderIsRefused) {
 // third-tier and contraction counts. `activeComponents` is how many components
 // the functional reads and `thirdTermsPerSlot` its T1/T2 entries per spin and
 // kept slot.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void ExpectGgaHessianMatchesTheGradientDifference(const HessianFixture& fixture,
                                                   std::string_view label,
                                                   std::size_t activeComponents,
