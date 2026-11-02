@@ -379,8 +379,9 @@ written in.
 Two analyses are limited by the element table this version carries: `hirshfeld` needs the atomic
 fragments of the SAD guess, which stops at Z = 10, and `nalewajski` needs isolated-atom fragment
 SCFs, which stop at Z = 19. Beyond those, the analysis refuses by name. `fukui` is refused on a
-`rks`, `uks` or `roks` run, because its charged species are run on the unrestricted Hartree-Fock
-path, which would mix two physics under one label.
+`rks`, `uks` or `roks` run: the charged species follow the run's own method, so the indices would be
+Kohn-Sham ones, but that path has no reference test yet and the funded property closure adds it.
+`rohf` runs it (the species are restricted open-shell, like the parent).
 
 ### `[memory_instrument]`
 

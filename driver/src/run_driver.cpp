@@ -1929,20 +1929,23 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     }
 
     // The condensed-Fukui response runs the N +- 1 species through the
-    // DIRECT-UHF runner (BuildFukuiBlock). A Kohn-Sham run asking for it
-    // would therefore compute every Fukui index from Hartree-Fock species
-    // densities while the parent density is a Kohn-Sham one - one analysis
-    // mixing two physics under one label, which is the silent-substitution
-    // defect this whole slice exists to prevent. Refused by name until the
-    // charged species can be run on the run's own seam.
+    // per-spin runner (BuildFukuiBlock), and since the restricted open-shell
+    // change that runner follows the PARENT'S method word: the species of a
+    // rohf parent are ROHF, and those of a Kohn-Sham parent would be built on
+    // the Kohn-Sham seam with the run's own functional. The old mixing reason
+    // ("Hartree-Fock species under a Kohn-Sham parent") no longer describes
+    // the mechanism. What remains is a coverage gap, not a physics claim: the
+    // Kohn-Sham Fukui path has no reference of its own in v1, and the funded
+    // property closure is what adds it. Refused by name in that state rather
+    // than shipped untested, and the refusal says so.
     if (isKs && input.properties.fukui)
     {
         return std::unexpected(
             Err(qcx::ErrorCode::kUnimplemented,
-                "properties.fukui is not wired for a Kohn-Sham run in v1: the N +- 1 species "
-                "are run by the direct-UHF runner, so their densities would be Hartree-Fock "
-                "ones while the parent's is a Kohn-Sham one - the indices would mix two "
-                "physics under one label"));
+                "properties.fukui is not wired for a Kohn-Sham run in v1: the charged "
+                "species now follow the run's own method, so the indices would be "
+                "Kohn-Sham ones, but that path has no reference test yet - the property "
+                "closure funds it; run fukui on an rhf, uhf or rohf parent"));
     }
 
     // The per-family MECHANISM keys, refused by name on a family that has no
@@ -2062,9 +2065,9 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     {
         return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
                                    "the SAD guess needs the per-element atomic fragment "
-                                   "inputs only the UHF path builds in v1; RHF supports "
-                                   "guess core, gwh and restart (gwh is also the RHF loop's "
-                                   "default start)"));
+                                   "inputs the per-spin legs build (uhf, uks, rohf, roks); "
+                                   "the closed-shell legs support guess core, gwh and "
+                                   "restart (gwh is also the RHF loop's default start)"));
     }
 
     // The restart read (guess restart) and write (checkpoint_file)

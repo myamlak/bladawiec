@@ -17,6 +17,7 @@
 #include <Eigen/Dense>
 #include <cmath>
 #include <gtest/gtest.h>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -369,6 +370,56 @@ TEST(RohfLoopTest, RejectsAnElectronCountAndMultiplicityThatDoNotFillTheBlocks) 
     const auto bad = qcx::scf::RunRohfScf(*molecule, overlap, core, badOptions, builder);
     ASSERT_FALSE(bad.has_value());
     EXPECT_EQ(bad.error().code, qcx::ErrorCode::kInvalidArgument);
+
+    // The level-shift pair is the closed-relative two-shift form, so the open
+    // shift can never exceed the virtual one (that would shift the closed
+    // block downwards - the "open above a virtual" failure the method names).
+    qcx::scf::RohfOptions openAboveVirtual;
+    openAboveVirtual.useLevelShift = true;
+    openAboveVirtual.levelShiftOpen = 0.8;
+    openAboveVirtual.levelShiftVirtual = 0.3;
+    const auto badShift = qcx::scf::RunRohfScf(*molecule, overlap, core, openAboveVirtual, builder);
+    ASSERT_FALSE(badShift.has_value());
+    EXPECT_EQ(badShift.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(badShift.error().message.find("levelShiftVirtual"), std::string::npos);
+}
+
+TEST(RohfLoopTest, TheLevelShiftedRunConvergesToTheUnshiftedFixedPoint) {
+    auto molecule = MakeH2WithMultiplicity(3);
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+
+    const Eigen::MatrixXd overlap = Eigen::MatrixXd::Identity(2, 2);
+    const Eigen::MatrixXd core = Eigen::MatrixXd::Zero(2, 2);
+    Eigen::MatrixXd fock(2, 2);
+    fock << -1.0, 0.3, 0.3, 0.5;
+    const Eigen::MatrixXd constantFock = fock;
+    const qcx::scf::UhfFockBuilderFn builder =
+        [constantFock](
+            const Eigen::MatrixXd&,
+            const Eigen::MatrixXd&) -> qcx::Result<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>> {
+        return std::pair<Eigen::MatrixXd, Eigen::MatrixXd>{constantFock, constantFock};
+    };
+
+    const auto plain =
+        qcx::scf::RunRohfScf(*molecule, overlap, core, qcx::scf::RohfOptions{}, builder);
+    ASSERT_TRUE(plain.has_value()) << plain.error().message;
+
+    qcx::scf::RohfOptions shifted;
+    shifted.useLevelShift = true;
+    shifted.levelShiftOpen = 0.25;
+    shifted.levelShiftVirtual = 0.75;
+    const auto run = qcx::scf::RunRohfScf(*molecule, overlap, core, shifted, builder);
+    ASSERT_TRUE(run.has_value()) << run.error().message;
+    ASSERT_TRUE(run->converged);
+
+    // The shift is a diagonalization aid, not a change of equations: the
+    // converged state is the same unshifted fixed point, and the reported
+    // spectrum is the UNshifted effective Fock's in both cases.
+    EXPECT_NEAR(run->totalEnergy, plain->totalEnergy, 1e-13);
+    EXPECT_NEAR(run->spinSquared, plain->spinSquared, 1e-13);
+    EXPECT_LT(MaxAbs(run->densityAlpha - plain->densityAlpha), 1e-13);
+    EXPECT_LT(MaxAbs(run->densityBeta - plain->densityBeta), 1e-13);
+    EXPECT_LT(MaxAbs(run->orbitalEnergiesAlpha - plain->orbitalEnergiesAlpha), 1e-13);
 }
 
 TEST(RohfLoopTest, AConstantFockPairRunsTheFixedOccupationRule) {

@@ -239,6 +239,22 @@ qcx::Result<RohfResult> RunRohfLoop(const qcx::molecule::Molecule& molecule,
                                           "the level-shift values must be non-negative"});
     }
 
+    // The closed-relative pair is (open = shift_2 - shift_1, virtual =
+    // shift_2), so the open shift is the smaller of the two by construction.
+    // An open above the virtual one is a negative shift_1 - a shift of the
+    // alpha occupied set downwards - which is not the recipe the option
+    // documents and is exactly the "open level above a virtual" failure the
+    // method names. Refused rather than reinterpreted.
+    if (options.levelShiftVirtual < options.levelShiftOpen)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       "levelShiftVirtual must be at least levelShiftOpen: the pair is the "
+                       "closed-relative two-shift form, where the open shift is "
+                       "shift_2 - shift_1 and the virtual shift is shift_2, so an open shift "
+                       "above the virtual one would shift the closed block downwards"});
+    }
+
     internal::ScfTraceWriter trace(options.traceFile);
 
     const std::size_t n = static_cast<std::size_t>(overlap.rows());

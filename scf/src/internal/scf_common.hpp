@@ -578,15 +578,6 @@ inline qcx::Result<DiisErrorFactors> ProjectDiisErrorFactors(const Eigen::Matrix
     return DiisErrorFactors{b, a - b * m, m - m.transpose()};
 }
 
-// The UHF convergence gate (the uhf.cpp call site; shared here so the
-// tests can exercise the predicate directly): the two-way Roothaan-Hall
-// pair - energy change plus RMS density change (the /n divisor, the BUG-1
-// lesson; never the /n^2 form) - plus, behind UhfOptions::useRobustGate,
-// the max-density-change leg at the full densityTolerance and the per-spin
-// DIIS-error leg below kDiisErrorGateTolerance, with the RMS leg tightened
-// by kDiisDensityGateFactor. The boundary convention is strict <
-// throughout, matching the two-way gate.
-
 // The gate over ONE error channel: the two-way Roothaan-Hall pair, and
 // behind useRobustGate the max-density leg plus that channel's DIIS-error
 // leg. The restricted loops have one commutator to watch (the RHF Fock's;

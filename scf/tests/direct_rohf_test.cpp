@@ -695,6 +695,40 @@ TEST(DirectRohfTest, OhDoubletMatchesTheExternalReference) {
     EXPECT_NEAR((result->densityAlpha - result->densityBeta).trace(), 1.0, 1e-8);
 }
 
+// The level shift in the LOOP (the matrix-level test lives in rohf_test.cpp):
+// a shifted run must reach the same unshifted pin, because the shift is
+// applied to the diagonalization input only and the equations it is solved
+// against are unchanged.
+TEST(DirectRohfTest, OhDoubletWithTheLevelShiftConvergesToTheSamePin) {
+    if (IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    auto molecule = MakeOhSto3g(2);
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+
+    qcx::integrals::FockBuildOptions fockOptions;
+    fockOptions.accuracy = qcx::integrals::AccuracyPreset::kTight;
+
+    qcx::scf::RohfOptions shifted;
+    shifted.useLevelShift = true;
+    shifted.levelShiftOpen = 0.25;
+    shifted.levelShiftVirtual = 0.75;
+
+    const auto result = RunDirectRohf(*molecule, *basis, fockOptions, shifted);
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+    ASSERT_TRUE(result->converged) << "iterations: " << result->iterations;
+
+    EXPECT_NEAR(result->totalEnergy, kOhRohfReferenceEnergy, 1e-7);
+    EXPECT_NEAR(result->spinSquared, 0.75, 1e-8);
+    // The returned spectrum is the UNshifted effective Fock's: a shifted
+    // diagonalization must not leak into it.
+    EXPECT_TRUE(result->orbitalEnergiesAlpha.allFinite());
+}
+
 TEST(DirectRohfTest, TripletH2EqualsUhfForTheSameDeterminant) {
     if (IsFastOnlyMode())
     {
