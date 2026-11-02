@@ -305,9 +305,8 @@ TEST(RohfStepTest, TheWeightedErrorFactorsReproduceTheCommutatorExactly) {
     const Eigen::MatrixXd scaled = q.leftCols(numOccupied) * weights.asDiagonal();
 
     const Eigen::MatrixXd a = fock * scaled;
-    const Eigen::MatrixXd b = scaled;
 
-    const auto factors = qcx::scf::internal::ProjectDiisErrorFactors(a, b, weights);
+    const auto factors = qcx::scf::internal::ProjectDiisErrorFactors(a, scaled, weights);
     ASSERT_TRUE(factors.has_value()) << factors.error().message;
 
     // The commutator e = A B^T - B A^T, which is the DIIS error of the loop
@@ -315,23 +314,23 @@ TEST(RohfStepTest, TheWeightedErrorFactorsReproduceTheCommutatorExactly) {
     // B^T B = diag(2 I_c, I_o) projection is exact, and the identity
     // e = B s B^T + R B^T - B R^T is an algebraic regroup of the same
     // products.
-    const Eigen::MatrixXd commutator = a * b.transpose() - b * a.transpose();
+    const Eigen::MatrixXd commutator = a * scaled.transpose() - scaled * a.transpose();
     EXPECT_LT(MaxAbs(factors->Expand() - commutator), 1e-14);
 
     // And the split is the weighted one: the uniform RHF form (M = B^T A / 2)
     // would leave a different R, so pin the projected piece's orthogonality.
-    EXPECT_LT(MaxAbs(b.transpose() * factors->r), 1e-12);
+    EXPECT_LT(MaxAbs(scaled.transpose() * factors->r), 1e-12);
 
     // A weight vector that does not match the columns, and a non-positive
     // weight, are values rather than silent mis-splits.
     const Eigen::VectorXd tooShort = Eigen::VectorXd::Ones(numOccupied - 1);
-    const auto shapeError = qcx::scf::internal::ProjectDiisErrorFactors(a, b, tooShort);
+    const auto shapeError = qcx::scf::internal::ProjectDiisErrorFactors(a, scaled, tooShort);
     ASSERT_FALSE(shapeError.has_value());
     EXPECT_EQ(shapeError.error().code, qcx::ErrorCode::kInvalidArgument);
 
     Eigen::VectorXd negative = weights;
     negative(0) = -1.0;
-    const auto weightError = qcx::scf::internal::ProjectDiisErrorFactors(a, b, negative);
+    const auto weightError = qcx::scf::internal::ProjectDiisErrorFactors(a, scaled, negative);
     ASSERT_FALSE(weightError.has_value());
     EXPECT_EQ(weightError.error().code, qcx::ErrorCode::kInvalidArgument);
 }

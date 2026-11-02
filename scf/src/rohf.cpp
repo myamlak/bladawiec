@@ -424,7 +424,7 @@ qcx::Result<RohfResult> RunRohfLoop(const qcx::molecule::Molecule& molecule,
                                               "the effective Fock could not be diagonalized"});
         }
 
-        const Eigen::MatrixXd returnedSolverCoefficients = solver.eigenvectors();
+        const Eigen::MatrixXd& returnedSolverCoefficients = solver.eigenvectors();
         const Eigen::MatrixXd returnedCoefficients = x * returnedSolverCoefficients;
 
         const auto newDensityAlpha = BuildSpinDensity(returnedCoefficients, occupationsAlpha);
