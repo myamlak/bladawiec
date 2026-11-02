@@ -449,6 +449,8 @@ TEST(TotalGradientTest, AD3RequestAddsTheTermAndTheEnergyTheRecordReports) {
     const nlohmann::json& block = document.at("total_gradient");
     EXPECT_TRUE(block.at("terms").contains("dispersion"));
     EXPECT_TRUE(block.at("energies").contains("dispersion_hartree"));
+    // `d3` has one zero-damping derivative, so its record names no tier.
+    EXPECT_FALSE(block.contains("dispersion_tier"));
     EXPECT_DOUBLE_EQ(block.at("energies").at("dispersion_hartree").get<double>(),
                      *total.energies.dispersion);
 }
@@ -540,6 +542,13 @@ TEST(TotalGradientTest, AD4GradientIsAssembledWhileTheEnergyAloneStillRuns) {
     }
 
     EXPECT_GT(magnitude, 0.0);
+
+    // The record names the derivative the term was taken at: a `d4` gradient
+    // is the frozen-charge tier, whose C6 and C8 are held at the energy's
+    // geometry's values (a charge-relaxed request is refused by name).
+    const nlohmann::json document = nlohmann::json::parse(gradient->json);
+    EXPECT_EQ(document.at("total_gradient").at("dispersion_tier").get<std::string>(),
+              "frozen_charge");
 
     const auto energyPath = TempInputPath("d4-energy");
     auto energy = RunFile(energyPath, HydrogenToml(kRhfBody, "[dispersion]\nform = \"d4\"\n"));

@@ -6718,6 +6718,15 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     {
         block.terms.dispersion = ToStdVector(total->terms.dispersion);
         block.energies.dispersion = total->energies.dispersion;
+
+        // The tier the properties entry took: a `d4` correction's C6 and C8
+        // are held at the energy's geometry's values (the module's only
+        // implemented tier), and the record names it. `d3` has one
+        // zero-damping derivative and names no tier.
+        if (input.dispersion->form == qcx::dispersion::DispersionForm::kD4)
+        {
+            block.dispersionTier = "frozen_charge";
+        }
     }
 
     block.energies.electronic = total->energies.electronic;

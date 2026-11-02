@@ -265,7 +265,7 @@ type is a parse error). The population/moment block has no switch
 | `[properties] qtaim` | bool; the Bader QTAIM bond critical points: the (3,-1) critical points of rho with their bond paths, ellipticity and laplacian; failed searches are reported in the output, never a run failure |
 | `[properties] molden` | string; the path of the Molden-format F-file written from the SCF result: the [Molden Format] [Atoms] (AU) [5D] [7F] [GTO] [MO] sections, RHF one spin block, UHF alpha then beta; an empty string counts as absent, and a file that cannot be written fails the run |
 | `[properties] xc_gradient` | bool; the fixed-density exchange-correlation contribution to the nuclear gradient, differentiated at the converged density on the grid the run integrated. A Kohn-Sham key: refused on `rhf`/`uhf`/`rohf` with the `functional` key and the `[grid]` block (see §2.3); on `roks` it consumes the converged per-spin density pair, the same call `uks` makes |
-| `[properties] total_gradient` | bool; schema 45. The total analytic nuclear gradient at the converged closed-shell reference: the electronic terms (one-electron, Coulomb, exchange, exchange-correlation on the density-functional lanes, orbital response), the nuclear repulsion and any `[dispersion]` correction, kept apart in the `total_gradient` record block (§3.4). Admitted on the two closed-shell lanes, `rhf` and `rks`; refused by name on the unrestricted lanes `uhf` and `uks` and on the restricted open-shell pair `rohf` and `roks` (their reference has an open shell, and the open-shell response is not implemented); refused when the SCF did not converge, when the reference is not stationary, and when a `[dispersion]` block of form `d4` names a charged molecule or an element its table does not cover. A `d4` gradient takes the dispersion module's frozen-charge tier: its C6 and C8 coefficients are held at the geometry's values and only the interatomic distances differentiate |
+| `[properties] total_gradient` | bool; schema 45. The total analytic nuclear gradient at the converged closed-shell reference: the electronic terms (one-electron, Coulomb, exchange, exchange-correlation on the density-functional lanes, orbital response), the nuclear repulsion and any `[dispersion]` correction, kept apart in the `total_gradient` record block (§3.4). Admitted on the two closed-shell lanes, `rhf` and `rks`; refused by name on the unrestricted lanes `uhf` and `uks` and on the restricted open-shell pair `rohf` and `roks` (their reference has an open shell, and the open-shell response is not implemented); refused when the SCF did not converge, when the reference is not stationary, and when a `[dispersion]` block of form `d4` names a charged molecule or an element its table does not cover. A `d4` gradient takes the dispersion module's frozen-charge tier: its C6 and C8 coefficients are held at the geometry's values and only the interatomic distances differentiate, and the record names that tier as `total_gradient.dispersion_tier = "frozen_charge"` (§3.4) |
 | `[properties] nocv_fragments` | array of non-empty arrays of non-negative atom indices (0-based, file row order); ETS-NOCV, closed-shell only (see §5) |
 
 `total_gradient` is the one key in this block that differentiates the run's
@@ -283,7 +283,10 @@ form `d4` naming a charged molecule or an element its table does not cover.
 A `d4` gradient is the dispersion module's frozen-charge derivative: its C6
 and C8 coefficients are held at the geometry's values and only the
 interatomic distances differentiate, so the term is the derivative of the
-energy with those coefficients fixed. A `d4` run may still request the energy
+energy with those coefficients fixed. The record names that tier as
+`total_gradient.dispersion_tier = "frozen_charge"`, so a consumer reads the
+derivative from the document rather than inferring it from the form alone. A
+`d4` run may still request the energy
 alone (§2.4). The stationarity gate compares the
 reference against the exact Roothaan Fock the assembly rebuilds: an SCF
 converged against that same exact Fock lands far inside the gate, while a
@@ -476,7 +479,7 @@ bumped whenever a consumer must notice a change (§7).
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | The schema version; currently 47 (`RunResult::kSchemaVersion`) |
+| `schema_version` | int | The schema version; currently 48 (`RunResult::kSchemaVersion`) |
 | `molecule_units` | string | Schema 28. The unit the run's geometry was **read under** — the RESOLVED `[molecule] units` value, `"angstrom"` or `"bohr"`, never a request left for a consumer to apply. **Always present**, and `"angstrom"` is the value an absent key resolves to (the parser's default is a judgement, and the disclosure rule makes a judgement stateable). It exists so a record is self-describing on the one convention that has produced a wasted hunt twice in this project (2026-08-26, pyscf's Ångström default; 2026-09-15, Bohr numbers in an Ångström input file): a reader holding the JSON alone can now tell at what scale the geometry was read without consulting the input file. It describes the INPUT, not the numbers — the internal geometry is Bohr under either value |
 | `converged` | bool | True when a convergence criterion fired |
 | `iterations` | int | Iterations spent; the budget when not converged |
@@ -561,7 +564,7 @@ which are always present and use null.
 | `qtaim` | `bond_critical_points` (each: `atom_a`, `atom_b`, `position_bohr`, `density`, `laplacian`, `ellipticity`, `eigenvalues` ascending, `bond_path` — the two gradient rays BCP -> nucleus), `other_critical_points` (`position_bohr`, `rank`, `signature_sum`), `unconverged_seeds` (3 each) | electrons/bohr³; electrons/bohr⁵ |
 | `molden` | `file` — the path of the written Molden-format F-file | path |
 | `xc_gradient` | `gradient` — dE_xc/dR at the converged density, 3 per atom in the molecule's canonical atom order; `energy_hartree` — the exchange-correlation energy the walk integrated. **Fixed density**: this is the exchange-correlation contribution to the nuclear gradient and never a total gradient | hartree/bohr; hartree |
-| `total_gradient` | Schema 45 (schema 46 adds `terms.xc`). The total analytic nuclear gradient at a converged closed-shell reference (`rhf` and `rks`): `gradient` (the terms summed, in the documented order), `terms`, `energies`, `sizes`, `counts`, `response`, `stationarity_residual`, `energy_residual_hartree`, `right_hand_side_terms` — the key table below | hartree/bohr for every gradient vector; hartree for the energies and residuals |
+| `total_gradient` | Schema 45 (schema 46 adds `terms.xc`; schema 48 adds `dispersion_tier`). The total analytic nuclear gradient at a converged closed-shell reference (`rhf` and `rks`): `gradient` (the terms summed, in the documented order), `terms`, `energies`, `sizes`, `counts`, `response`, `stationarity_residual`, `energy_residual_hartree`, `right_hand_side_terms` — the key table below | hartree/bohr for every gradient vector; hartree for the energies and residuals |
 | `dispersion` | `form` (`"d3"` \| `"d4"`), `parameter_source` (`"method"` \| `"preset"` \| `"explicit"`), `parameter_set` (the preset name for `"preset"`, the method family for `"method"`; **absent** for `"explicit"`), `parameters` (the form's own key names: `s6, s8, rs6, alpha6, rs8, alpha8` for d3; `s6, s8, a1, a2` for d4), `energy_hartree` (the correction's own contribution to `total_energy_hartree`) | hartree; parameters are the form's published values |
 
 `dispersion` is present exactly when the input wrote a `[dispersion]` block,
@@ -590,6 +593,7 @@ block.
 | `terms.response` | array of 3N | `Tr(F D(1))` per displacement, the orbital response |
 | `terms.xc` | array of 3N | Schema 46. `dE_xc/dR` at the fixed reference density, the exchange-correlation skeleton term. **Present** exactly when the reference integrates a density functional (`rks`); **absent** on `rhf`, where no such term exists — a term nobody computed is absent, never a zero vector |
 | `terms.dispersion` | array of 3N | `dE_disp/dR`. **Present** exactly when the input wrote `[dispersion]`; **absent** otherwise — a term nobody requested is absent, never a zero vector |
+| `dispersion_tier` | string | Schema 48. The derivative tier the dispersion term was taken at: `"frozen_charge"` for a `d4` correction (its C6 and C8 coefficients are held at the energy's geometry's values). **Present** exactly when `terms.dispersion` is present and the form is `d4`; **absent** for `d3`, whose single zero-damping derivative has no variants, and when no correction was requested |
 | `energies.electronic_hartree` | number | The reference SCF's electronic energy |
 | `energies.reconstructed_electronic_hartree` | number | The derivative walks' own reconstruction of that energy; `energy_residual_hartree` is the difference |
 | `energies.nuclear_repulsion_hartree` | number | The nuclear repulsion at the reference geometry |
@@ -1428,7 +1432,7 @@ What to notice in this output:
 - No opt-in analysis key (`charges`, `esp`, `eddb`, `fukui`, `nalewajski`,
   `nocv`, `density_at_nuclei`, `qtaim`) appears anywhere — none was
   requested (§3.4).
-- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 47.
+- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 48.
 
 ### Other pin fixtures
 
@@ -2138,6 +2142,16 @@ an alias by construction cannot.
   every present block (the `certified_bound` rule) as the builder-creation
   policy rather than a per-quartet tally. Keys added, so the number moves with
   them.
+- 47 → 48 (the dispersion term's derivative tier reaches the record):
+  `total_gradient` gains the optional `dispersion_tier` member. A `d4`
+  correction's C6 and C8 coefficients are functions of the geometry through
+  the coordination numbers and the EEQ partial charges, so its coordinate
+  derivative has two readings; the assembly ships the frozen-charge one and
+  the record now names it, `"frozen_charge"`. A key added, so the number
+  moves with it. The member is present exactly when `terms.dispersion` is
+  present and the form is `d4`; it is absent for `d3` (one zero-damping
+  derivative) and when no correction was requested, so a document outside a
+  `d4` gradient is byte-identical under the change.
 
 ## 8. The builder-selection axes (schema 35)
 
