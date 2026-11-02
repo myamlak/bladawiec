@@ -8,9 +8,13 @@
 #include "qcx/integrals/aux_basis.hpp"
 #include "qcx/molecule/elements.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <optional>
+#include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace qcx::io {
 namespace {
@@ -20,18 +24,62 @@ namespace {
 const std::filesystem::path kDataRoot(QcxBasisDataDir);
 
 // Resolves one basis name exactly as the driver does (ParseNwchemDirectory
-// on the bundled data root). Returns the issue message when the name does
-// not resolve; std::nullopt when it does.
-std::optional<std::string> UnresolvedBasisIssue(std::string_view name) {
-    const auto basis =
-        qcx::basisset::ParseNwchemDirectory((kDataRoot / std::string(name)).string());
+// on the bundled data root).
+qcx::Result<qcx::basisset::BasisSet> LoadBasis(std::string_view name) {
+    return qcx::basisset::ParseNwchemDirectory((kDataRoot / std::string(name)).string());
+}
 
-    if (basis.has_value())
+// The unresolved-name message: the name, and the parse's own reason.
+std::string UnresolvedBasisMessage(std::string_view name, const qcx::Error& error) {
+    return "cannot load basis \"" + std::string(name) + "\": " + error.message;
+}
+
+// The effective-core-potential refusal for the ORBITAL basis. The BSE corpus
+// carries, per element, whether the basis replaces the core electrons
+// (BasisSet::Ecps(), filled by the NWChem parser from `SYMBOL nelec N`), so
+// this rule walks that metadata and never matches the basis's own name. Only
+// the elements the run contains count: one directory mixes all-electron and
+// ECP-carrying entries (def2-SVP is all-electron through Kr and replaces the
+// core above), and an element without an ECP entry is an all-electron request
+// that is unaffected. The message names the basis, each offending element and
+// the core count: with no ECP term in the one-electron Hamiltonian the run
+// keeps those core electrons, so its energy and electron count would describe
+// a system the basis does not.
+std::optional<std::string> EcpBasisIssue(std::string_view name,
+                                         const qcx::basisset::BasisSet& basis,
+                                         std::span<const int> atomicNumbers) {
+    std::string elements;
+
+    for (const qcx::basisset::EcpDefinition& ecp : basis.Ecps())
+    {
+        if (std::find(atomicNumbers.begin(), atomicNumbers.end(), ecp.atomicNumber) ==
+            atomicNumbers.end())
+        {
+            continue;
+        }
+
+        const qcx::molecule::ElementData* element = qcx::molecule::FindElement(ecp.atomicNumber);
+        const std::string symbol = element != nullptr ? std::string(element->symbol)
+                                                      : "Z=" + std::to_string(ecp.atomicNumber);
+
+        if (!elements.empty())
+        {
+            elements += ", ";
+        }
+
+        elements += symbol + " (core " + std::to_string(ecp.coreElectronCount) + ")";
+    }
+
+    if (elements.empty())
     {
         return std::nullopt;
     }
 
-    return "cannot load basis \"" + std::string(name) + "\": " + basis.error().message;
+    return "basis \"" + std::string(name) + "\" carries an effective-core potential for " +
+           elements +
+           "; effective-core potentials are not implemented, so the core electrons are not "
+           "removed and the energy and electron count would be wrong (use an all-electron "
+           "basis)";
 }
 
 // The closed-shell multiplicity rule of one method word, carried by a method
@@ -94,6 +142,15 @@ std::optional<ClosedShellRule> ClosedShellRuleFor(MethodType method) {
 
     case MethodType::kRks:
         return ClosedShellRule{"rks", "uks"};
+
+    // The restricted open-shell lanes are open-shell NATIVE: their fixed
+    // closed/open split is what carries the unpaired electrons, so a
+    // multiplicity above one is exactly the request they are for and there is
+    // no spin rule this layer could state. They name the answer explicitly
+    // rather than inheriting it from a no-restriction default.
+    case MethodType::kRohf:
+    case MethodType::kRoks:
+        return std::nullopt;
     }
 
     // Reached only by a value no enumerator names (a programmatic caller's
@@ -124,6 +181,12 @@ std::string_view MethodWord(MethodType method) {
 
     case MethodType::kUks:
         return "uks";
+
+    case MethodType::kRohf:
+        return "rohf";
+
+    case MethodType::kRoks:
+        return "roks";
     }
 
     return "unknown";
@@ -166,10 +229,12 @@ std::optional<XcKeyPolicy> XcKeyPolicyFor(MethodType method) {
     // ignored (the no-silent-substitution posture).
     case MethodType::kRhf:
     case MethodType::kUhf:
+    case MethodType::kRohf:
         return XcKeyPolicy{false, false, false, false};
 
     case MethodType::kRks:
     case MethodType::kUks:
+    case MethodType::kRoks:
         return XcKeyPolicy{true, true, true, true};
     }
 
@@ -273,6 +338,7 @@ ValidationReport ValidateInput(const RunInput& input) {
 
     int sumZ = 0;
     bool allSymbolsKnown = true;
+    std::vector<int> atomicNumbers;
 
     for (std::size_t i = 0; i < input.molecule.atoms.size(); ++i)
     {
@@ -288,6 +354,7 @@ ValidationReport ValidateInput(const RunInput& input) {
         }
 
         sumZ += element->atomicNumber;
+        atomicNumbers.push_back(element->atomicNumber);
     }
 
     // The electron-count checks are only meaningful when every symbol
@@ -349,7 +416,7 @@ ValidationReport ValidateInput(const RunInput& input) {
     {
         report.issues.push_back(
             "method.functional: " + std::string(MethodWord(input.method.method)) +
-            " does not take a functional (the Kohn-Sham methods rks and uks do; "
+            " does not take a functional (the Kohn-Sham methods rks, uks and roks do; "
             "remove the key or change method.type)");
     }
 
@@ -359,7 +426,7 @@ ValidationReport ValidateInput(const RunInput& input) {
         report.issues.push_back(
             "method.screening_tolerance: " + std::string(MethodWord(input.method.method)) +
             " does not take a screening tolerance (nothing is evaluated on a grid; the "
-            "Kohn-Sham methods rks and uks do)");
+            "Kohn-Sham methods rks, uks and roks do)");
     }
 
     // The `[grid]` block belongs to the same family: the XC integration
@@ -374,7 +441,7 @@ ValidationReport ValidateInput(const RunInput& input) {
         report.issues.push_back(
             "[grid]: " + std::string(MethodWord(input.method.method)) +
             " does not take an XC integration grid (no density functional is integrated, so "
-            "nothing is evaluated on a grid; the Kohn-Sham methods rks and uks do)");
+            "nothing is evaluated on a grid; the Kohn-Sham methods rks, uks and roks do)");
     }
 
     // `[properties] xc_gradient` is the same family's fourth key: the quantity
@@ -388,7 +455,7 @@ ValidationReport ValidateInput(const RunInput& input) {
         report.issues.push_back(
             "properties.xc_gradient: " + std::string(MethodWord(input.method.method)) +
             " does not take an exchange-correlation gradient (no density functional is "
-            "differentiated; the Kohn-Sham methods rks and uks do)");
+            "differentiated; the Kohn-Sham methods rks, uks and roks do)");
     }
 
     // `[properties] total_gradient` is the closed-shell analytic gradient's
@@ -411,6 +478,26 @@ ValidationReport ValidateInput(const RunInput& input) {
             " does not take the total analytic gradient (the assembly differentiates a "
             "converged closed-shell reference; the rhf and rks methods are the only lanes "
             "that run one)");
+    }
+
+    // `[symmetry] full_group` is refused on the restricted open-shell lanes,
+    // by name. The labeling stage symmetrizes the occupied space it is handed,
+    // and the closed/open split the Roothaan effective Fock is assembled from
+    // is exactly what that symmetrization does not preserve: a stage free to
+    // rotate within the occupied space can mix a closed orbital into the open
+    // set, and the fixed occupation the method states would then describe a
+    // different determinant. The stage is a-posteriori on every other lane,
+    // which is why it is on by default there; on these two the key must be
+    // written false, so the refusal names the key and the value (no silent
+    // demotion of a written request).
+    if ((input.method.method == MethodType::kRohf || input.method.method == MethodType::kRoks) &&
+        input.symmetry.fullGroup)
+    {
+        report.issues.push_back(
+            "[symmetry]: full_group is not available on method " +
+            std::string(MethodWord(input.method.method)) +
+            " (the labeling stage symmetrizes the occupied space without preserving the "
+            "closed/open split the method is built from); write full_group = false");
     }
 
     // The `[dispersion]` block's cross-key rules. The module resolves a
@@ -484,9 +571,19 @@ ValidationReport ValidateInput(const RunInput& input) {
         }
     }
 
-    if (auto issue = UnresolvedBasisIssue(input.basis.orbital); issue.has_value())
+    const auto orbitalBasis = LoadBasis(input.basis.orbital);
+
+    if (!orbitalBasis.has_value())
     {
-        report.issues.push_back("basis.orbital: " + *issue);
+        report.issues.push_back("basis.orbital: " +
+                                UnresolvedBasisMessage(input.basis.orbital, orbitalBasis.error()));
+    } else if (auto ecp = EcpBasisIssue(input.basis.orbital, *orbitalBasis, atomicNumbers);
+               ecp.has_value())
+    {
+        // Refused, never ignored: an ECP basis would run all-electron with a
+        // valence-only orbital set, so every energy and the electron count
+        // would be those of a different system.
+        report.issues.push_back("basis.orbital: " + *ecp);
     }
 
     // The aux basis is validated when the run puts one in effect, and v1 has
@@ -572,9 +669,12 @@ ValidationReport ValidateInput(const RunInput& input) {
 
         if (auxName.has_value())
         {
-            if (auto issue = UnresolvedBasisIssue(*auxName); issue.has_value())
+            const auto auxBasis = LoadBasis(*auxName);
+
+            if (!auxBasis.has_value())
             {
-                report.issues.push_back("basis.aux: " + *issue);
+                report.issues.push_back("basis.aux: " +
+                                        UnresolvedBasisMessage(*auxName, auxBasis.error()));
             }
 
             if (isJkRequest && !qcx::integrals::IsJkOptimizedAux(*auxName))

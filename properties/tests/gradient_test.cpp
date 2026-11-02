@@ -4,7 +4,7 @@
 // against displaced-geometry energies, the invariants a gradient must satisfy,
 // the restricted Kohn-Sham route (the Fock reconstruction, the grid skeleton
 // term and the exchange scaling, each against an independent assembly), and
-// the dispersion term with its D4 refusal.
+// the dispersion term with its D4 frozen-charge tier.
 //
 // The fixture is water/STO-3G at a DISTORTED, C1 geometry - every atom moved
 // off the symmetric reference, so no component of any term vanishes by
@@ -994,9 +994,11 @@ TEST(TotalGradientTest, TheD3DispersionTermIsAddedAndAgreesWithFiniteDifferences
     }
 }
 
-// D4 has no coordinate-gradient tier; the refusal names the form and the
-// missing tier rather than returning a zero derivative.
-TEST(TotalGradientTest, AD4GradientRequestIsRefusedByName) {
+// The D4 arm's frozen-charge gradient is assembled into the total: the term is
+// the module's own vector, the energy is the module's own number, and the
+// term sums to zero over the atoms because every pair contributes equal and
+// opposite vectors.
+TEST(TotalGradientTest, TheD4FrozenChargeGradientIsAssembled) {
     const auto basis = MakeH2oSto3gBasis();
     ASSERT_TRUE(basis.has_value()) << basis.error().message;
     const auto molecule = MakeMolecule(Geometry{});
@@ -1013,12 +1015,22 @@ TEST(TotalGradientTest, AD4GradientRequestIsRefusedByName) {
     options.dispersion = request;
 
     const auto gradient = ComputeTotalGradient(*molecule, *basis, *reference, options);
-    ASSERT_FALSE(gradient.has_value());
-    EXPECT_EQ(gradient.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(gradient.error().message.find("\"d4\""), std::string::npos)
-        << gradient.error().message;
-    EXPECT_NE(gradient.error().message.find("gradient tier"), std::string::npos)
-        << gradient.error().message;
+    ASSERT_TRUE(gradient.has_value()) << gradient.error().message;
+    ASSERT_EQ(gradient->terms.dispersion.size(), static_cast<Eigen::Index>(3 * kNumAtoms));
+
+    const auto module = qcx::dispersion::EvaluateDispersionGradient(*molecule, request);
+    ASSERT_TRUE(module.has_value()) << module.error().message;
+    EXPECT_NEAR(gradient->energies.dispersion, module->energy, 1e-14);
+
+    Eigen::Vector3d total = Eigen::Vector3d::Zero();
+
+    for (Eigen::Index entry = 0; entry < gradient->terms.dispersion.size(); ++entry)
+    {
+        EXPECT_EQ(gradient->terms.dispersion(entry), module->gradient(entry));
+        total(entry % 3) += gradient->terms.dispersion(entry);
+    }
+
+    EXPECT_LT(total.cwiseAbs().maxCoeff(), 1e-10) << total.transpose();
 }
 
 // --- the Kohn-Sham route -----------------------------------------------------

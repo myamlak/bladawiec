@@ -712,8 +712,10 @@ qcx::Result<TotalGradient> ComputeTotalGradient(const qcx::molecule::Molecule& m
                     std::to_string(options.energyTolerance) + " (energy)"));
     }
 
-    // The dispersion correction first: it is cheap, and a D4 request refuses
-    // here by name before any heavy build runs.
+    // The dispersion correction first: it is cheap, and a D4 request the
+    // module cannot take (a charged molecule, an uncovered element) refuses
+    // here by name before any heavy build runs. A D4 request otherwise takes
+    // the frozen-charge gradient tier.
     std::optional<dispersion::DispersionGradient> dispersion;
 
     if (options.dispersion.has_value())

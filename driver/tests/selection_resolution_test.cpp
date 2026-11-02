@@ -784,18 +784,22 @@ TEST(SelectionResolutionTest, EnforcedBoundDemotesANonHybridKohnShamLadderPick) 
     EXPECT_NE(resolved->reasoning.find("DEMOTED"), std::string::npos);
 }
 
-TEST(SelectionResolutionTest, EnforcedBoundDoesNotRewriteAnUnrestrictedRun) {
+TEST(SelectionResolutionTest, EnforcedBoundDoesNotRewriteAPerSpinRun) {
     // The per-spin legs carry no enforcement option on any builder, so no
     // builder rewrite could honour the key - the resolution leaves them
     // exactly as resolved and the driver refuses by name. The empty warning
-    // is the pin: the demotion does not fire on either leg.
-    for (const MethodType method : {MethodType::kUhf, MethodType::kUks})
+    // is the pin: the demotion does not fire on any of the four legs. The
+    // restricted open-shell pair belongs here with the unrestricted pair:
+    // its closed/open blocks ARE a per-spin density pair, so the same
+    // wiring fact holds and the same refusal names the key.
+    for (const MethodType method :
+         {MethodType::kUhf, MethodType::kUks, MethodType::kRohf, MethodType::kRoks})
     {
         RunInput input = AutoInput(method);
         input.method.builder = BuilderKind::kRiJLink;
         input.method.enforceCertifiedBound = true;
         SelectionResolutionInput sized = RiJRunnable(562, input);
-        sized.unrestricted = true;
+        sized.perSpin = true;
 
         const auto resolved = ResolveBuilderSelection(sized);
         ASSERT_TRUE(resolved.has_value()) << resolved.error().message;

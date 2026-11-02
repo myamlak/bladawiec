@@ -404,7 +404,7 @@ std::string SerializeRunResultJson(const RunResult& result) {
                 {"quartets", total.counts.twoElectron.quartets},
                 {"screened_quartets", total.counts.twoElectron.screenedQuartets}};
 
-            document["total_gradient"] = nlohmann::json{
+            nlohmann::json block{
                 {"gradient", total.gradient},
                 {"terms", terms},
                 {"energies", energies},
@@ -423,6 +423,17 @@ std::string SerializeRunResultJson(const RunResult& result) {
                 {"stationarity_residual", total.stationarityResidual},
                 {"energy_residual_hartree", total.energyResidualHartree},
                 {"right_hand_side_terms", total.rightHandSideTerms}};
+
+            // The derivative tier the dispersion term was taken at (schema
+            // 48). Present exactly when a `d4` correction's term was
+            // assembled, so a consumer reads the derivative's own name rather
+            // than inferring it from the form alone.
+            if (total.dispersionTier.has_value())
+            {
+                block["dispersion_tier"] = *total.dispersionTier;
+            }
+
+            document["total_gradient"] = std::move(block);
         }
     } else
     {

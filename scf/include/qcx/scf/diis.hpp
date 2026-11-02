@@ -85,9 +85,16 @@ struct DiisState {
 /// the form.
 /// \ingroup qcx-scf
 struct DiisErrorFactors {
-    Eigen::MatrixXd b; ///< X^T S C_s (n x n_occ); B^T B = 2 I.
+    /// X^T S C_s (n x n_occ). The columns are orthogonal but not equally
+    /// scaled: B^T B = diag(w^2), with 2 on the closed block and 1 on the
+    /// open one for the restricted open-shell factor, and 2 I in the
+    /// uniform closed-shell case.
+    Eigen::MatrixXd b;
     Eigen::MatrixXd r; ///< A - B M (n x n_occ): the part of A outside range(B).
-    Eigen::MatrixXd s; ///< M - M^T (n_occ x n_occ), M = (1/2) B^T A.
+    /// M - M^T (n_occ x n_occ), with M = (B^T B)^-1 B^T A - the scaled
+    /// projection the weights imply, which is (1/2) B^T A only when the
+    /// uniform factor makes B^T B = 2 I.
+    Eigen::MatrixXd s;
 
     /// The full n x n error the factors represent, e = B s B^T + R B^T -
     /// B R^T. Materializing it costs O(n^2 n_occ) - the norm and the reported

@@ -53,6 +53,7 @@
 #include "qcx/properties/qtaim.hpp"
 #include "qcx/scf/gradient_reference.hpp"
 #include "qcx/scf/rhf.hpp"
+#include "qcx/scf/rohf.hpp"
 #include "qcx/scf/symmetry_reduction.hpp"
 #include "qcx/scf/uhf.hpp"
 // storage is an OPTIONAL module (QCX_ENABLE_IO; the root CMakeLists gates the
@@ -1195,13 +1196,14 @@ qcx::backend::GpuComputeProfile ComputeTargetProfileOf(
 // below. The driver's dispatch reads THIS - never the raw enumerator - so
 // which physics a method word runs is decided in one place.
 //
-// The four values are two facts crossed: which SCF LOOP runs (the restricted
-// or the per-spin one - the paths that also decide the property runs, the
-// guess tier, the checkpoint rules) and which FOCK the loop is handed (the
-// Hartree-Fock builder or the Kohn-Sham composition). The loop question is
-// what the wiring branches read, so the cross is spelled out here rather than
-// hidden behind a separate flag: a word that reached a loop without its
-// matching seam would be the silent-substitution defect in its other half.
+// The six values are two facts crossed: which SCF LOOP runs (the closed-shell
+// one, the per-spin one, or the restricted open-shell one - the paths that
+// also decide the property runs, the guess tier, the checkpoint rules) and
+// which FOCK the loop is handed (the Hartree-Fock builder or the Kohn-Sham
+// composition). The loop question is what the wiring branches read, so the
+// cross is spelled out here rather than hidden behind a separate flag: a word
+// that reached a loop without its matching seam would be the
+// silent-substitution defect in its other half.
 // Not a bulk-storage type; shrinking the base type is a deferred micro-optimization.
 // NOLINTNEXTLINE(performance-enum-size)
 enum class ScfPath {
@@ -1209,25 +1211,48 @@ enum class ScfPath {
     kUnrestricted, // Per-spin Hartree-Fock: RunUhfScf.
     kRestrictedKs, // Closed-shell Kohn-Sham (RKS): RunRhfScf, KS seam.
     kUnrestrictedKs, // Per-spin Kohn-Sham (UKS): RunUhfScf, KS seam.
+    kRohf, // Restricted open-shell Hartree-Fock: RunRohfScf, per-spin seam.
+    kRohfKs, // Restricted open-shell Kohn-Sham (ROKS): RunRohfScf, MakeUksSeam.
 };
 
-// Whether a run path is the per-spin one. Both unrestricted worlds share it:
-// the loop, the property runs and the guess tier read this, and the answer is
-// the same whether the Fock came from the HF builder or the KS composition.
+// Whether a run path builds its Focks PER SPIN. Four paths do: the two
+// unrestricted worlds and the two restricted open-shell ones. The loop is not
+// the same on all four (the restricted open-shell pair runs RunRohfScf, which
+// knows the closed/open block structure), but every question this predicate
+// answers is a question about the SEAM - which builders must expose a per-spin
+// adapter, which guess and checkpoint rules apply, which builder families the
+// per-spin whitelist admits - and that answer is the same on all four. The
+// loop itself is selected by IsRestrictedOpenShellPath, never by this test.
 /// \param path A resolved run path.
-/// \returns True for kUnrestricted and kUnrestrictedKs.
-constexpr bool IsUnrestrictedPath(ScfPath path) noexcept {
-    return path == ScfPath::kUnrestricted || path == ScfPath::kUnrestrictedKs;
+/// \returns True for kUnrestricted, kUnrestrictedKs, kRohf and kRohfKs.
+constexpr bool IsPerSpinPath(ScfPath path) noexcept {
+    return path == ScfPath::kUnrestricted || path == ScfPath::kUnrestrictedKs ||
+           path == ScfPath::kRohf || path == ScfPath::kRohfKs;
+}
+
+// Whether a run path is the restricted open-shell one, which selects the loop
+// apart from the seam: RunRohfScf carries the fixed closed/open occupation and
+// the Roothaan effective Fock, and the two per-spin paths of the unrestricted
+// world must never reach it (their occupations are found by aufbau in each
+// spin channel).
+/// \param path A resolved run path.
+/// \returns True for kRohf and kRohfKs.
+constexpr bool IsRestrictedOpenShellPath(ScfPath path) noexcept {
+    return path == ScfPath::kRohf || path == ScfPath::kRohfKs;
 }
 
 // Whether a run path composes the Kohn-Sham seam. This is the ONE test the
 // wiring branches read to decide which seam to build - the same discipline
 // ResolveScfPath itself follows for the loop, so the two halves of the cross
-// cannot disagree about which method word they are serving.
+// cannot disagree about which method word they are serving. A ROKS run is a
+// Kohn-Sham run whose seam is MakeUksSeam: the restricted open-shell state is
+// a per-spin pair, and the per-spin Kohn-Sham composition is exactly the
+// restricted open-shell one (the closed and open densities are its D_sigma).
 /// \param path A resolved run path.
-/// \returns True for the two Kohn-Sham paths.
+/// \returns True for the three Kohn-Sham paths.
 constexpr bool IsKohnShamPath(ScfPath path) noexcept {
-    return path == ScfPath::kRestrictedKs || path == ScfPath::kUnrestrictedKs;
+    return path == ScfPath::kRestrictedKs || path == ScfPath::kUnrestrictedKs ||
+           path == ScfPath::kRohfKs;
 }
 
 // The exhaustiveness guard around ResolveScfPath's switch. The diagnostics
@@ -1304,6 +1329,20 @@ qcx::Result<ScfPath> ResolveScfPath(qcx::io::MethodType method) {
 
     case qcx::io::MethodType::kUks:
         return ScfPath::kUnrestrictedKs;
+
+    // The restricted open-shell pair. Both run the SAME loop - RunRohfScf,
+    // whose fixed closed/open occupation and Roothaan effective Fock are what
+    // a restricted open-shell determinant needs - and differ only in the seam
+    // handed to it: the per-spin Hartree-Fock builder pair for ROHF, the
+    // per-spin Kohn-Sham composition (MakeUksSeam) for ROKS. The seam is
+    // selected by IsKohnShamPath, so the loop and the Fock cannot disagree
+    // about which path is running - the same discipline the RKS/UKS arms
+    // above follow.
+    case qcx::io::MethodType::kRohf:
+        return ScfPath::kRohf;
+
+    case qcx::io::MethodType::kRoks:
+        return ScfPath::kRohfKs;
     }
 
     // Reached only by a value the enum does not name: refused by value, so
@@ -1312,9 +1351,9 @@ qcx::Result<ScfPath> ResolveScfPath(qcx::io::MethodType method) {
                                "method.type carries the value " +
                                    std::to_string(static_cast<int>(method)) +
                                    ", which no run path is wired for: this build runs "
-                                   "\"rhf\", \"uhf\", \"rks\" and \"uks\", so the request is "
-                                   "refused rather than run as Hartree-Fock under a label "
-                                   "nothing downstream checks"));
+                                   "\"rhf\", \"uhf\", \"rks\", \"uks\", \"rohf\" and \"roks\", "
+                                   "so the request is refused rather than run as Hartree-Fock "
+                                   "under a label nothing downstream checks"));
 }
 
 // The [method] word that names the run path the classifier resolved (the method record,
@@ -1323,9 +1362,9 @@ qcx::Result<ScfPath> ResolveScfPath(qcx::io::MethodType method) {
 //
 // It reads the classifier's OWN output, never the input enumerator re-read, so
 // the word in the artifact and the loop that produced the numbers cannot
-// disagree (the same discipline IsUnrestrictedPath and IsKohnShamPath follow).
-// The vocabulary is io's, the inverse of ParseMethod, so the record's four
-// words are the input's four words: an author writes "rks" and reads "rks"
+// disagree (the same discipline IsPerSpinPath and IsKohnShamPath follow).
+// The vocabulary is io's, the inverse of ParseMethod, so the record's six
+// words are the input's six words: an author writes "rks" and reads "rks"
 // back.
 //
 // The switch sits inside the exhaustiveness region above for the reason that
@@ -1347,6 +1386,10 @@ qcx::io::MethodType ScfPathMethodWord(ScfPath path) noexcept {
         return qcx::io::MethodType::kRks;
     case ScfPath::kUnrestrictedKs:
         return qcx::io::MethodType::kUks;
+    case ScfPath::kRohf:
+        return qcx::io::MethodType::kRohf;
+    case ScfPath::kRohfKs:
+        return qcx::io::MethodType::kRoks;
     }
 
     // Unreachable while the region above is in force; the tail exists because
@@ -1505,19 +1548,20 @@ std::string RiJLinkKsDiskRungRefusalText() {
 // characters, which leaves room for its indentation and its quotes.
 // \param storePath The path the input named, verbatim.
 // \param resolvedKind The builder family the unrestricted run resolved to.
-// \param isKs True on the per-spin Kohn-Sham path (UKS), false on UHF.
+// \param method The per-spin method word the input wrote (uhf, uks, rohf or
+// roks), named as written so the refusal is actionable on all four.
 // \returns The refusal text.
 std::string UnrestrictedEriStoreRefusalText(const std::string& storePath,
                                             qcx::io::BuilderKind resolvedKind,
-                                            bool isKs) {
+                                            qcx::io::MethodType method) {
     // The sentence a reader searches for, in ONE home, so the assertion the
     // test makes and the source a reader greps cannot drift apart.
     const std::string seam =
         "the disk-tier ERI store is wired on the direct family's per-spin halves";
 
     return "method.eri_cache_store = \"" + storePath + "\" resolves to fock_builder = \"" +
-           std::string(qcx::io::ToString(resolvedKind)) + "\" on " +
-           (isKs ? std::string{"a UKS run"} : std::string{"a UHF run"}) + ", and " + seam +
+           std::string(qcx::io::ToString(resolvedKind)) + "\" on a " +
+           std::string(qcx::io::ToString(method)) + " run, and " + seam +
            ", which this builder is not";
 }
 
@@ -1676,9 +1720,10 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     }
 
     // The per-spin question, asked of the RESOLVED path rather than of a
-    // method word: both unrestricted worlds (UHF and UKS) answer true, and
-    // every rule below reads the same answer the dispatch will act on.
-    const bool isUnrestricted = IsUnrestrictedPath(*scfPath);
+    // method word: all four per-spin worlds (UHF and UKS, and the restricted
+    // open-shell pair ROHF and ROKS) answer true, and every rule below reads
+    // the same answer the dispatch will act on.
+    const bool isPerSpin = IsPerSpinPath(*scfPath);
 
     // A family word AND the lean flag together state two requests at once:
     // the parse site writes exactly one of the two (the lean word sets
@@ -1710,7 +1755,7 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
 
     // The Kohn-Sham rules come FIRST, and the order is load-bearing rather
     // than cosmetic: a UKS run is BOTH unrestricted and Kohn-Sham
-    // (IsUnrestrictedPath names kUnrestrictedKs), so whichever whitelist is
+    // (IsPerSpinPath names kUnrestrictedKs), so whichever whitelist is
     // read first decides which reason a UKS request gets. The Kohn-Sham one
     // is the accurate one there - a UKS run asking for the disk rung is
     // refused because the disk builder exposes no half, not because of the
@@ -1796,7 +1841,7 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     {
         return std::unexpected(
             Err(qcx::ErrorCode::kUnimplemented,
-                "a Kohn-Sham run (method.type = \"rks\"/\"uks\") is wired with "
+                "a Kohn-Sham run (method.type = \"rks\", \"uks\" or \"roks\") is wired with "
                 "fock_builder = \"direct\", \"qfmm\", \"ri_j_link\" and \"ri_jk\" in v1 (those "
                 "are the families whose builders expose the J[D] the Kohn-Sham energy seam "
                 "contracts separately); "
@@ -1854,17 +1899,18 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     // the device families are what it now states. A UKS ri_jk request is
     // therefore admitted by both whitelists and runs the composition on this
     // leg's own runner.
-    if (isUnrestricted && input.method.builder.has_value() &&
+    if (isPerSpin && input.method.builder.has_value() &&
         *input.method.builder != qcx::io::BuilderKind::kDirect &&
         *input.method.builder != qcx::io::BuilderKind::kQfmm &&
         *input.method.builder != qcx::io::BuilderKind::kRiJLink &&
         *input.method.builder != qcx::io::BuilderKind::kRiJk)
     {
         return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
-                                   "UHF is wired with fock_builder = \"direct\", \"qfmm\", "
-                                   "\"ri_j_link\" and \"ri_jk\" in v1 (gpu and gpu_split have no "
-                                   "per-spin adapter; the ri_j_link disk rungs are refused "
-                                   "separately, by name)"));
+                                   "a " + std::string(qcx::io::ToString(input.method.method)) +
+                                       " run is wired with fock_builder = \"direct\", \"qfmm\", "
+                                       "\"ri_j_link\" and \"ri_jk\" in v1 (gpu and gpu_split have "
+                                       "no per-spin adapter; the ri_j_link disk rungs are refused "
+                                       "separately, by name)"));
     }
 
     // The ri_j_link family's disk rungs on the unrestricted leg: the
@@ -1874,7 +1920,7 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     // either key is named (LadderRunnabilityFor, the same fact as a demotion
     // reason). Said here for the explicit spelling, because the ladder only
     // governs the absent one.
-    if (isUnrestricted && input.method.builder.has_value() &&
+    if (isPerSpin && input.method.builder.has_value() &&
         *input.method.builder == qcx::io::BuilderKind::kRiJLink &&
         (input.method.riTensorMode == qcx::io::RiTensorMode::kDisk ||
          input.diagnostics.forceDiskRi))
@@ -1883,20 +1929,23 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
     }
 
     // The condensed-Fukui response runs the N +- 1 species through the
-    // DIRECT-UHF runner (BuildFukuiBlock). A Kohn-Sham run asking for it
-    // would therefore compute every Fukui index from Hartree-Fock species
-    // densities while the parent density is a Kohn-Sham one - one analysis
-    // mixing two physics under one label, which is the silent-substitution
-    // defect this whole slice exists to prevent. Refused by name until the
-    // charged species can be run on the run's own seam.
+    // per-spin runner (BuildFukuiBlock), and since the restricted open-shell
+    // change that runner follows the PARENT'S method word: the species of a
+    // rohf parent are ROHF, and those of a Kohn-Sham parent would be built on
+    // the Kohn-Sham seam with the run's own functional. The old mixing reason
+    // ("Hartree-Fock species under a Kohn-Sham parent") no longer describes
+    // the mechanism. What remains is a coverage gap, not a physics claim: the
+    // Kohn-Sham Fukui path has no reference of its own in v1, and the funded
+    // property closure is what adds it. Refused by name in that state rather
+    // than shipped untested, and the refusal says so.
     if (isKs && input.properties.fukui)
     {
         return std::unexpected(
             Err(qcx::ErrorCode::kUnimplemented,
-                "properties.fukui is not wired for a Kohn-Sham run in v1: the N +- 1 species "
-                "are run by the direct-UHF runner, so their densities would be Hartree-Fock "
-                "ones while the parent's is a Kohn-Sham one - the indices would mix two "
-                "physics under one label"));
+                "properties.fukui is not wired for a Kohn-Sham run in v1: the charged "
+                "species now follow the run's own method, so the indices would be "
+                "Kohn-Sham ones, but that path has no reference test yet - the property "
+                "closure funds it; run fukui on an rhf, uhf or rohf parent"));
     }
 
     // The per-family MECHANISM keys, refused by name on a family that has no
@@ -2012,45 +2061,51 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
         return std::unexpected(guess.error());
     }
 
-    if (!isUnrestricted && input.guess == qcx::io::GuessKind::kSad)
+    if (!isPerSpin && input.guess == qcx::io::GuessKind::kSad)
     {
         return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
                                    "the SAD guess needs the per-element atomic fragment "
-                                   "inputs only the UHF path builds in v1; RHF supports "
-                                   "guess core, gwh and restart (gwh is also the RHF loop's "
-                                   "default start)"));
+                                   "inputs the per-spin legs build (uhf, uks, rohf, roks); "
+                                   "the closed-shell legs support guess core, gwh and "
+                                   "restart (gwh is also the RHF loop's default start)"));
     }
 
     // The restart read (guess restart) and write (checkpoint_file)
     // paths are RHF-only in v1: the RHF solver is the one whose options
-    // carry the ScfRestartState seed, and nothing on the UHF side could
-    // consume a checkpoint the driver would otherwise write. Rejected up
-    // front so no file is produced that no run can read back.
-    if (isUnrestricted && input.guess == qcx::io::GuessKind::kRestart)
+    // carry the ScfRestartState seed, and nothing on the per-spin legs
+    // (UHF, UKS, ROHF, ROKS) could consume a checkpoint the driver would
+    // otherwise write. Rejected up front so no file is produced that no run
+    // can read back. The message names the METHOD the author wrote, not one
+    // member of the leg: the refusal fires on all four per-spin words.
+    if (isPerSpin && input.guess == qcx::io::GuessKind::kRestart)
     {
         return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
                                    "guess restart seeds the RHF solver in v1 (the only "
-                                   "solver with a restart-state option); UHF "
-                                   "supports guess core, gwh and sad"));
+                                   "solver with a restart-state option); " +
+                                       std::string(qcx::io::ToString(input.method.method)) +
+                                       " supports guess core, gwh and sad"));
     }
 
-    if (isUnrestricted && !input.scf.checkpointFile.empty())
+    if (isPerSpin && !input.scf.checkpointFile.empty())
     {
         return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
                                    "scf.checkpoint_file saves the RHF last-iterate state in "
-                                   "v1 (the restart read path is RHF-only); UHF "
-                                   "runs cannot write a checkpoint nothing could consume"));
+                                   "v1 (the restart read path is RHF-only); a " +
+                                       std::string(qcx::io::ToString(input.method.method)) +
+                                       " run cannot write a checkpoint nothing could consume"));
     }
 
     // The ETS-NOCV decomposition's per-spin resolution assumes the
-    // closed-shell D_sigma = D/2 (nocv.hpp); a UHF molecular density would
+    // closed-shell D_sigma = D/2 (nocv.hpp); a per-spin molecular density would
     // silently feed it the wrong spin channels, so the combination is
     // rejected up front like the others.
-    if (isUnrestricted && !input.properties.nocvFragments.empty())
+    if (isPerSpin && !input.properties.nocvFragments.empty())
     {
-        return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
-                                   "the ETS-NOCV analysis is closed-shell in v1; "
-                                   "nocv_fragments cannot be requested on a UHF run"));
+        return std::unexpected(
+            Err(qcx::ErrorCode::kUnimplemented,
+                "the ETS-NOCV analysis is closed-shell in v1; nocv_fragments cannot be "
+                "requested on a " +
+                    std::string(qcx::io::ToString(input.method.method)) + " run"));
     }
 
     // ETS-NOCV is Hartree-Fock in v1 (no functional enters the fragment SCFs or
@@ -4360,6 +4415,95 @@ struct WiredUhfBuilders {
     std::optional<qcx::integrals::RiFullFockModeInfo> riJkModeInfo;
 };
 
+// The per-spin LOOP SELECTION: the ONE place where a per-spin run's SCF loop
+// is chosen. Both the unrestricted loop and the restricted open-shell one
+// consume the same seam object (a pair-in, pair-out Fock builder, plus the
+// Kohn-Sham energy companions when the composition is engaged), so a reader
+// cannot tell which loop runs from anything but this decision - and that is
+// the point: of the four per-spin method words, only the kRohf/kRohfKs pair
+// selects the restricted open-shell one, and the seam is selected upstream by
+// IsKohnShamPath, never here.
+//
+// The two option structs are not the same type, and the translation below is
+// the whole of their shared surface. The axes the restricted open-shell
+// struct does not have (per-spin DIIS histories, the two-phase handoff, the
+// joint system, the maximum-overlap selection, the full-group labeling
+// switch) are absent there by construction; its level shift is a different
+// recipe (the closed-relative open/virtual pair, not per-spin values), so it
+// is not translated from the per-spin fields, whose meaning does not survive
+// the crossing. No driver key sets any of them today; the comment exists so a
+// future key cannot arrive with a half-wired meaning.
+/// \param method The [method] word the run asked for, resolved here through
+/// the driver's one classifier.
+/// \param molecule Validated molecule.
+/// \param basis The orbital basis (the unrestricted loop's labeling stage and
+/// its guess machinery read it; the restricted open-shell loop has no use for
+/// it, and the labeling stage is refused on those lanes before this point).
+/// \param overlap Overlap matrix S.
+/// \param core The one-electron core Hamiltonian H.
+/// \param options The per-spin options the caller filled - the same fields on
+/// both loops, the guess densities included.
+/// \param wired The resolved seam and its companions.
+/// \returns The loop's result, or the classifier's refusal, or the loop's.
+qcx::Result<qcx::scf::UhfResult> RunPerSpinScf(qcx::io::MethodType method,
+                                               const qcx::molecule::Molecule& molecule,
+                                               const qcx::basisset::BasisSet& basis,
+                                               const Eigen::MatrixXd& overlap,
+                                               const Eigen::MatrixXd& core,
+                                               const qcx::scf::UhfOptions& options,
+                                               const WiredUhfBuilders& wired) {
+    const auto path = ResolveScfPath(method);
+
+    if (!path.has_value())
+    {
+        return std::unexpected(path.error());
+    }
+
+    // The seam the wiring resolved: a Kohn-Sham run hands the loop three
+    // callbacks (the Coulomb one receives the SPIN-SUMMED total, the
+    // contribution the per-spin pair), because the Hartree-Fock trace
+    // identity does not survive a Fock whose exchange is scaled by the
+    // functional's exact-exchange fraction. The presence of the companions IS
+    // the distinction; nothing else could disagree with the seam that
+    // actually runs. On a restricted open-shell determinant the same three
+    // callbacks are the ROHF and ROKS seams unchanged: D_c = 2 D_beta and
+    // D_o = D_alpha - D_beta is the dictionary the builder already sees.
+    const bool isKsSeam = wired.coulomb.has_value() && wired.contribution.has_value();
+
+    if (!IsRestrictedOpenShellPath(*path))
+    {
+        return isKsSeam ? qcx::scf::RunUhfScf(molecule,
+                                              overlap,
+                                              core,
+                                              options,
+                                              wired.fn,
+                                              *wired.coulomb,
+                                              *wired.contribution,
+                                              &basis)
+                        : qcx::scf::RunUhfScf(molecule, overlap, core, options, wired.fn, &basis);
+    }
+
+    qcx::scf::RohfOptions rohfOptions;
+    rohfOptions.maxIterations = options.maxIterations;
+    rohfOptions.energyTolerance = options.energyTolerance;
+    rohfOptions.densityTolerance = options.densityTolerance;
+    rohfOptions.useDiis = options.useDiis;
+    rohfOptions.useRobustGate = options.useRobustGate;
+    rohfOptions.initialDensityAlpha = options.initialDensityAlpha;
+    rohfOptions.initialDensityBeta = options.initialDensityBeta;
+    rohfOptions.initialScfState = options.initialScfState;
+    rohfOptions.traceFile = options.traceFile;
+
+    return isKsSeam ? qcx::scf::RunRohfScf(molecule,
+                                           overlap,
+                                           core,
+                                           rohfOptions,
+                                           wired.fn,
+                                           *wired.coulomb,
+                                           *wired.contribution)
+                    : qcx::scf::RunRohfScf(molecule, overlap, core, rohfOptions, wired.fn);
+}
+
 // The shared tail of the UHF builder selections (the direct family's
 // machinery member and its lean member): the SCF options, the guess tier,
 // the loop, the empty-trace warning and the UhfRun assembly. Everything
@@ -4451,23 +4595,10 @@ qcx::Result<UhfRun> RunUhfScfWithBuilder(
     }
 
     const auto scfStarted = std::chrono::steady_clock::now();
-    // The seam the wiring resolved - the RHF site's branch, per spin: a
-    // Kohn-Sham run hands the loop three callbacks (the Coulomb one receives
-    // the SPIN-SUMMED total, the contribution the per-spin pair), because the
-    // Hartree-Fock trace identity does not survive a Fock whose exchange is
-    // scaled by the functional's exact-exchange fraction. The presence of the
-    // companions IS the distinction; nothing else could disagree with the
-    // seam that actually runs.
-    const bool isKsSeam = wired.coulomb.has_value() && wired.contribution.has_value();
-    auto scf = isKsSeam ? qcx::scf::RunUhfScf(molecule,
-                                              overlap,
-                                              core,
-                                              options,
-                                              wired.fn,
-                                              *wired.coulomb,
-                                              *wired.contribution,
-                                              &basis)
-                        : qcx::scf::RunUhfScf(molecule, overlap, core, options, wired.fn, &basis);
+    // The loop the resolved method word selects: the unrestricted one for
+    // uhf/uks, the restricted open-shell one for rohf/roks (RunPerSpinScf is
+    // that one decision point).
+    auto scf = RunPerSpinScf(input.method.method, molecule, basis, overlap, core, options, wired);
     const auto scfStopped = std::chrono::steady_clock::now();
 
     if (!scf.has_value())
@@ -5288,7 +5419,13 @@ qcx::Result<UhfRun> RunQfmmUhfScf(
     }
 
     const auto scfStarted = std::chrono::steady_clock::now();
-    auto scf = qcx::scf::RunUhfScf(molecule, overlap, core, options, uhfBuilder, &basis);
+    // The loop selection, the same single decision point the shared tail
+    // reads: this arm carries its own option struct (the composed-QFMM
+    // family's builders, not WiredUhfBuilders), so it hands the same fields
+    // to the same helper rather than a second copy of the branch.
+    WiredUhfBuilders loopSeam{.fn = uhfBuilder};
+    auto scf =
+        RunPerSpinScf(input.method.method, molecule, basis, overlap, core, options, loopSeam);
     const auto scfStopped = std::chrono::steady_clock::now();
 
     if (!scf.has_value())
@@ -6527,11 +6664,11 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
 
     // The dispersion correction the run requested, resolved by the energy
     // path's own seam. An absent block adds no term and leaves the
-    // dispersion term empty - never a zero-filled vector. A D4 request is
-    // refused by the dispersion module's gradient entry (there is no
-    // coordinate-gradient tier for that form), and the named refusal is
-    // propagated: a D4 run may still request the energy alone, as schema 41
-    // allows.
+    // dispersion term empty - never a zero-filled vector. A D4 request takes
+    // the module's frozen-charge gradient tier; a refusal from that entry
+    // (a charge-relaxed tier the module does not implement, a charged
+    // molecule, an uncovered element) is propagated by name, so a D4 run may
+    // still request the energy alone, as schema 41 allows.
     if (input.dispersion.has_value())
     {
         auto resolved = qcx::dispersion::ResolveDispersion(
@@ -6581,6 +6718,15 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     {
         block.terms.dispersion = ToStdVector(total->terms.dispersion);
         block.energies.dispersion = total->energies.dispersion;
+
+        // The tier the properties entry took: a `d4` correction's C6 and C8
+        // are held at the energy's geometry's values (the module's only
+        // implemented tier), and the record names it. `d3` has one
+        // zero-damping derivative and names no tier.
+        if (input.dispersion->form == qcx::dispersion::DispersionForm::kD4)
+        {
+            block.dispersionTier = "frozen_charge";
+        }
     }
 
     block.energies.electronic = total->energies.electronic;
@@ -7772,10 +7918,10 @@ LadderTierRunnability LadderRunnabilityFor(const qcx::io::RunInput& input) {
     // composition landed, so ri_j_link is now runnable on this path and the
     // remaining rules are its too - above all the aux rule at the bottom,
     // which a Kohn-Sham ri_j run needs exactly as its Hartree-Fock twin
-    // does. The `else` matters as well as the fall-through: a UKS run is
-    // BOTH unrestricted and Kohn-Sham (IsUnrestrictedPath names
-    // kUnrestrictedKs), so without it the UKS branch below would apply the
-    // UHF disk rule under the Kohn-Sham one's nose.
+    // does. The `else` matters as well as the fall-through: a UKS or ROKS
+    // run is BOTH per-spin and Kohn-Sham (IsPerSpinPath names
+    // kUnrestrictedKs and kRohfKs), so without it the per-spin branch below
+    // would apply the UHF disk rule under the Kohn-Sham one's nose.
     //
     // The qfmm tier left this branch on 2026-09-16 with its composition, so
     // what remains is the rungs' rule alone - and the branch now states NO
@@ -7791,7 +7937,7 @@ LadderTierRunnability LadderRunnabilityFor(const qcx::io::RunInput& input) {
         {
             availability.riJ = RiJLinkKsDiskRungRefusalText();
         }
-    } else if (IsUnrestrictedPath(*scfPath))
+    } else if (IsPerSpinPath(*scfPath))
     {
         // The unrestricted leg's own remaining cell: the per-spin adapter
         // landed with the RI-J link family (RunRiJLinkUhfScf), so what is
@@ -10043,14 +10189,15 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     const std::size_t nPairs = CountShellPairs(*molecule, *basis);
     const LadderTierRunnability ladderRunnability = LadderRunnabilityFor(input);
     const bool nonHybridKohnSham = IsNonHybridKohnSham(input);
-    // The resolution's one METHOD fact: whether the per-spin legs run. It is
-    // the enforced-bound demotion's applicability (a restricted run is
-    // demoted onto the machinery member, an unrestricted one is left to the
+    // The resolution's one METHOD fact: whether the run builds its Focks per
+    // spin. It is the enforced-bound demotion's applicability (a restricted
+    // run is demoted onto the machinery member, a per-spin one - the
+    // unrestricted pair and the restricted open-shell pair - is left to the
     // refusal below), and ValidateCombination above already classified the
     // word - so this read cannot fail here, and a failure would reach the
     // dispatch's own refusal below unchanged.
     const auto resolutionPath = ResolveScfPath(input.method.method);
-    const bool unrestrictedLegs = resolutionPath.has_value() && IsUnrestrictedPath(*resolutionPath);
+    const bool perSpinLegs = resolutionPath.has_value() && IsPerSpinPath(*resolutionPath);
 
     const qcx::driver::SelectionResolutionInput resolutionInput{topology,
                                                                 input,
@@ -10061,7 +10208,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                                                                 nonHybridKohnSham,
                                                                 nPairs,
                                                                 qcx::backend::DefaultOmpTeamSize(),
-                                                                unrestrictedLegs};
+                                                                perSpinLegs};
     auto selection = qcx::driver::ResolveBuilderSelection(resolutionInput);
 
     if (!selection.has_value())
@@ -10227,7 +10374,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         return refuse(scfPath.error());
     }
 
-    const bool isUnrestricted = IsUnrestrictedPath(*scfPath);
+    const bool isPerSpin = IsPerSpinPath(*scfPath);
     const bool isKs = IsKohnShamPath(*scfPath);
 
     // `enforce_certified_bound` is a CLAIM, and this is its one remaining
@@ -10255,15 +10402,18 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     // composition that rides it does not either - the option travels to the
     // direct family's options struct in the RHF wiring alone, so NO route on
     // these legs can report the bound the claim asserts.
-    if (input.method.enforceCertifiedBound && isUnrestricted)
+    if (input.method.enforceCertifiedBound && isPerSpin)
     {
         // The route names the METHOD, not its shape: "an unrestricted run"
-        // is true of two different words now that UKS exists, and a refusal
-        // that stops naming what it refuses is a refusal an author cannot
-        // act on (the same rule the dispatch's own refusals follow).
-        const std::string route =
-            isKs ? std::string{"a UKS run (the per-spin direct wiring carries no enforcement)"}
-                 : std::string{"a UHF run (the per-spin direct wiring carries no enforcement)"};
+        // is true of two different words now that UKS exists (and of the
+        // restricted open-shell pair, which rides the same per-spin wiring),
+        // and a refusal that stops naming what it refuses is a refusal an
+        // author cannot act on (the same rule the dispatch's own refusals
+        // follow). The word comes from the classifier's own output, as the
+        // record's method word does.
+        const std::string route = "a " +
+                                  std::string(qcx::io::ToString(ScfPathMethodWord(*scfPath))) +
+                                  " run (the per-spin direct wiring carries no enforcement)";
 
         return refuse(
             Err(qcx::ErrorCode::kUnimplemented,
@@ -10299,12 +10449,12 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     // the one outcome the `eri_store` block cannot disclose, and it is
     // therefore reserved for the case the block cannot state - an
     // unrestricted family whose requested arrangement has no other name.
-    if (!input.method.eriCacheStore.empty() && isUnrestricted &&
+    if (!input.method.eriCacheStore.empty() && isPerSpin &&
         selection->kind != qcx::io::BuilderKind::kDirect)
     {
-        return refuse(Err(
-            qcx::ErrorCode::kUnimplemented,
-            UnrestrictedEriStoreRefusalText(input.method.eriCacheStore, selection->kind, isKs)));
+        return refuse(Err(qcx::ErrorCode::kUnimplemented,
+                          UnrestrictedEriStoreRefusalText(
+                              input.method.eriCacheStore, selection->kind, input.method.method)));
     }
 
     // The in-memory ERI cache budget (`method.eri_cache_bytes`) and this is
@@ -10446,7 +10596,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     // species inherit the run's guess, so a SAD guess covers them too.
     std::optional<std::map<int, qcx::scf::AtomicUhfInputs>> atomicInputs;
 
-    if (input.properties.hirshfeld || (isUnrestricted && input.guess == qcx::io::GuessKind::kSad))
+    if (input.properties.hirshfeld || (isPerSpin && input.guess == qcx::io::GuessKind::kSad))
     {
         auto built = BuildAtomicInputs(*molecule, *basis);
 
@@ -10775,7 +10925,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         result.resourcesResolved.computeProfile = std::move(*validated);
     }
 
-    if (isUnrestricted)
+    if (isPerSpin)
     {
         // The run's disk-tier ERI store wiring (`method.eri_cache_store`) on
         // this arm, the out-parameter the direct runner installs the
@@ -11537,9 +11687,10 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         // converged reference and attached to the properties block the run
         // just filled, on the restricted Hartree-Fock and restricted
         // Kohn-Sham lanes alike. A request the assembly refuses - a
-        // non-converged SCF, a non-stationary reference, a D4 dispersion
-        // gradient - fails the whole run by name: a requested gradient is
-        // never silently dropped from the record.
+        // non-converged SCF, a non-stationary reference, a dispersion request
+        // the module refuses (a charged D4 molecule, an uncovered element) -
+        // fails the whole run by name: a requested gradient is never
+        // silently dropped from the record.
         auto totalGradient = BuildTotalGradientBlock(*molecule, *basis, *scf, input);
 
         if (!totalGradient.has_value())

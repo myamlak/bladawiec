@@ -103,22 +103,47 @@ struct DispersionGradient {
     Eigen::VectorXd gradient;
 };
 
+/// Which derivative of the D4 two-body energy a gradient request takes.
+///
+/// The two-body energy's C6 and C8 coefficients are functions of the geometry
+/// through the coordination numbers and the electronegativity-equilibration
+/// charges that build the reference polarizabilities, so the energy has two
+/// distinct coordinate derivatives depending on what is held fixed.
+/// \ingroup qcx-dispersion
+enum class DispersionGradientTier {
+    /// Hold C6 and C8 at the geometry's own values and differentiate through
+    /// the interatomic distances: the frozen-charge tier, which this module
+    /// implements.
+    kFrozenCharge,
+    /// Differentiate C6 and C8 through the coordination numbers and the EEQ
+    /// charges as well: the full, charge-relaxed derivative, which this
+    /// module does not implement.
+    kChargeRelaxed,
+};
+
 /// Evaluates the resolved correction and its analytic coordinate gradient.
 ///
 /// The D3 arm is the zero-damping energy and its analytic gradient, from the
-/// same kernel and parameter resolution as EvaluateDispersion. The D4 arm has
-/// no coordinate-gradient tier and is refused by name rather than answered
-/// with the energy alone: a gradient consumer that silently received a zero
-/// derivative would drop the term.
+/// same kernel and parameter resolution as EvaluateDispersion. The D4 arm is
+/// the frozen-charge coordinate gradient: the interatomic-distance derivative
+/// with the pair C6, C8 and Becke-Johnson damping radius held at the values
+/// the energy entry used. A charge-relaxed D4 request is refused by name
+/// rather than answered with the frozen-charge number, because the two are
+/// different derivatives of the same energy.
 /// \param molecule The molecule, its coordinates in Bohr.
 /// \param resolved The resolved form and values.
+/// \param tier The derivative a D4 request takes; the D3 arm has one
+/// derivative and ignores the tier.
 /// \returns The energy in Hartree and the 3N gradient in Hartree/Bohr, or an
-/// Error: the D4 arm is kUnimplemented naming the missing gradient tier, and
-/// an element the form does not cover or a kernel-level refusal is reported
-/// as in EvaluateDispersion.
+/// Error: a charge-relaxed D4 request is kUnimplemented naming the coefficients
+/// it cannot differentiate, and a charged D4 molecule, an element the form
+/// does not cover or a kernel-level refusal is reported as in
+/// EvaluateDispersion.
 /// \ingroup qcx-dispersion
-qcx::Result<DispersionGradient> EvaluateDispersionGradient(const molecule::Molecule& molecule,
-                                                           const ResolvedDispersion& resolved);
+qcx::Result<DispersionGradient> EvaluateDispersionGradient(
+    const molecule::Molecule& molecule,
+    const ResolvedDispersion& resolved,
+    DispersionGradientTier tier = DispersionGradientTier::kFrozenCharge);
 
 /// The resolved values under the form's own key names.
 ///

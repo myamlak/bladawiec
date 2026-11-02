@@ -374,6 +374,28 @@ target_precompile_headers(qcx-bench-fock-parallel PRIVATE
     <Eigen/Dense>)
 qcx_apply_blas_runtime(qcx-bench-fock-parallel)
 
+# The link-mode hot-call instrument: wall time of ONE direct Fock build on the
+# fixed C6H14/STO-3G fixture, each call wrapped in the fixed-work canary, with
+# a machine-readable record (--json) and a Fock checksum the comparison reads
+# to catch the arms computing different matrices. The checksum is a sum, so it
+# catches a differing matrix but does not prove two matrices equal. Plain
+# main(), not a google-benchmark run.
+# Consumed by tools/bench/link_mode_comparison.py, which owns the protocol
+# (quiet window, memory gate, warm-up, ABBA ordering, ratio band, canary band);
+# this target only measures one arm's calls.
+add_executable(qcx-bench-fock-hot fock_hot_call.cpp)
+target_include_directories(qcx-bench-fock-hot PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/fixtures)
+target_compile_features(qcx-bench-fock-hot PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-fock-hot PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-fock-hot PRIVATE qcx-integrals qcx-test-fixtures)
+target_precompile_headers(qcx-bench-fock-hot PRIVATE
+    <qcx/integrals/fock_build.hpp>
+    <Eigen/Dense>)
+qcx_apply_blas_runtime(qcx-bench-fock-hot)
+
 # The disk-store read-vs-recompute crossover measurement:
 # per class of the disk-integral surface, wall time of serving the
 # whole class from the store vs recomputing it through the underlying

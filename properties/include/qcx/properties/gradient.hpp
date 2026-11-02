@@ -194,8 +194,9 @@ struct TotalGradientOptions {
     /// exchange-correlation skeleton term.
     std::optional<TotalGradientXcOptions> xc;
     /// The dispersion correction to add. Empty adds no term and leaves
-    /// `TotalGradientTerms::dispersion` empty; a D4 request is refused by the
-    /// dispersion module's gradient entry, whose refusal is propagated.
+    /// `TotalGradientTerms::dispersion` empty. A D4 request takes the
+    /// dispersion module's frozen-charge tier; that entry's refusals (a
+    /// charged molecule, an uncovered element) are propagated.
     std::optional<dispersion::ResolvedDispersion> dispersion;
     /// The gate on `max|2 F_ai|`: a reference above it is not a stationary
     /// point of the energy the gradient differentiates, so its gradient is
@@ -332,7 +333,8 @@ qcx::Result<response::ResponseState> BuildResponseState(
 /// correlation engine's or walks' own errors, the derivative walks' own
 /// errors, the stationarity or energy-reconstruction refusal
 /// (kInvalidArgument, naming the residual and the tolerance), or the
-/// dispersion entry's refusal (kUnimplemented for a D4 gradient).
+/// dispersion entry's refusal (kUnimplemented for a charged D4 molecule or an
+/// element its table does not cover).
 /// \ingroup qcx-properties
 qcx::Result<TotalGradient> ComputeTotalGradient(const qcx::molecule::Molecule& molecule,
                                                 const qcx::basisset::BasisSet& basisSet,

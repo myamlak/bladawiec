@@ -85,6 +85,46 @@
         "CMAKE_CXX_COMPILER": "clang++-21",
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "wsl-gcc-shared",
+      "displayName": "Linux GCC Debug, shared first-party libraries (local-only)",
+      "description": "The wsl-gcc configuration with QCX_BUILD_SHARED=ON: qcx-<module> become libqcx-<module>.so with PIC and ELF default visibility, every vendored tree stays static. All first-party executables and shared libraries land in build/wsl-gcc-shared/bin. Local-only, like every shared preset - the static presets are the shipped configurations.",
+      "inherits": "wsl-gcc",
+      "binaryDir": "${sourceDir}/build/wsl-gcc-shared",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "wsl-gcc-shared-release",
+      "displayName": "Linux GCC Release, shared first-party libraries (local-only)",
+      "description": "The wsl-gcc-release configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared's description; only the build type differs. This is the configuration the wall-time comparison takes its shared arm from.",
+      "inherits": "wsl-gcc-release",
+      "binaryDir": "${sourceDir}/build/wsl-gcc-shared-release",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "wsl-clang-shared",
+      "displayName": "Linux Clang Debug, shared first-party libraries (local-only)",
+      "description": "The wsl-clang configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared's description; only the compiler differs.",
+      "inherits": "wsl-clang",
+      "binaryDir": "${sourceDir}/build/wsl-clang-shared",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "wsl-clang-shared-release",
+      "displayName": "Linux Clang Release, shared first-party libraries (local-only)",
+      "description": "The wsl-clang-release configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared-release's description; only the compiler differs.",
+      "inherits": "wsl-clang-release",
+      "binaryDir": "${sourceDir}/build/wsl-clang-shared-release",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
     }
   ],
   "buildPresets": [

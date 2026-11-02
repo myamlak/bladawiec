@@ -348,6 +348,15 @@ struct RunTotalGradient {
     std::vector<double> gradient;
     /// The decomposition.
     RunTotalGradientTerms terms;
+    /// The derivative tier the dispersion term was taken at, serialized as
+    /// "dispersion_tier": `"frozen_charge"` when the correction's form is
+    /// `d4`, whose C6 and C8 coefficients depend on the geometry, so its
+    /// coordinate derivative has two readings and the assembly holds the
+    /// coefficients at the energy's geometry's values. Present exactly when
+    /// `terms.dispersion` is present and the form names a tier; absent for
+    /// `d3`, whose single zero-damping derivative has no variants, and absent
+    /// when no correction was requested - the null-honesty rule.
+    std::optional<std::string> dispersionTier;
     /// The energies the terms belong to.
     RunTotalGradientEnergies energies;
     /// The dimensions the gradient was computed at.
@@ -1964,10 +1973,11 @@ struct RunResult {
     /// carrying a total nuclear gradient against one that could carry none.
     /// The block is absent unless the run asked and is written on the `rhf`
     /// lane only; a request the assembly refuses - a non-converged SCF, a
-    /// non-stationary reference, a D4 dispersion gradient - fails the run by
-    /// name rather than being recorded as an absent block, and a term nobody
-    /// requested (the dispersion correction without a `[dispersion]` block)
-    /// is absent inside the block, never a zero-filled vector.
+    /// non-stationary reference, a charged D4 molecule or one with an element
+    /// its table does not cover - fails the run by name rather than being
+    /// recorded as an absent block, and a term nobody requested (the
+    /// dispersion correction without a `[dispersion]` block) is absent inside
+    /// the block, never a zero-filled vector.
     ///
     /// Schema 46 ADDS the optional `total_gradient.terms.xc` member: the
     /// exchange-correlation skeleton term of the total analytic nuclear
@@ -1998,7 +2008,15 @@ struct RunResult {
     /// `false` is a statement about the lane (switched off, or the preset's
     /// own kTight gate), never an inference from an absent key, and it is
     /// the creation policy rather than a per-quartet delivery tally.
-    static constexpr int kSchemaVersion = 47;
+    ///
+    /// Schema 48 ADDS the optional `total_gradient.dispersion_tier` member:
+    /// the derivative tier the dispersion term was taken at. A `d4`
+    /// correction's C6 and C8 coefficients are functions of the geometry, so
+    /// its coordinate derivative has two readings; the assembly ships the
+    /// frozen-charge one and this member names it. A key added, so the number
+    /// moved with it. The member is absent for `d3` (one zero-damping
+    /// derivative, no variants) and when no correction was requested.
+    static constexpr int kSchemaVersion = 48;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.

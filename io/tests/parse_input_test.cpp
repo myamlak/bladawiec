@@ -277,7 +277,8 @@ accuracy = "kNormal"
 )");
     ASSERT_FALSE(typo.has_value());
     EXPECT_EQ(typo.error().code, qcx::ErrorCode::kInvalidArgument);
-    EXPECT_NE(typo.error().message.find("(rhf | uhf | rks | uks)"), std::string::npos);
+    EXPECT_NE(typo.error().message.find("(rhf | uhf | rks | uks | rohf | roks)"),
+              std::string::npos);
 }
 
 TEST(RunInputParseTest, ScfToleranceDefaultsApplyWhenTheBlockOmitsTheKeys) {
@@ -854,9 +855,12 @@ molden = 42
 }
 
 TEST(RunInputParseTest, RejectsUnknownVocabularyWords) {
+    // The word is one letter off a wired one ("rohf" is accepted now, so the
+    // row uses the near-miss a typo actually produces) - the parser refuses
+    // by name rather than by prefix.
     const auto unknownMethod = ParseRunInput(
         "[molecule]\natoms = [[\"H\", 0.0, 0.0, 0.0]]\n[basis]\norbital = \"sto-3g\"\n"
-        "[method]\ntype = \"rohf\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\n");
+        "[method]\ntype = \"rohfx\"\nfock_builder = \"direct\"\naccuracy = \"kNormal\"\n");
     ASSERT_FALSE(unknownMethod.has_value());
     EXPECT_EQ(unknownMethod.error().code, qcx::ErrorCode::kInvalidArgument);
 
@@ -1595,7 +1599,8 @@ accuracy = "kNormal"
 )");
     ASSERT_FALSE(input.has_value());
     EXPECT_EQ(input.error().code, qcx::ErrorCode::kInvalidArgument);
-    EXPECT_EQ(input.error().message, "\"method.type\" is required (rhf | uhf | rks | uks)");
+    EXPECT_EQ(input.error().message,
+              "\"method.type\" is required (rhf | uhf | rks | uks | rohf | roks)");
 }
 
 TEST(RunInputParseTest, RejectsWrongTypedScalarsInsteadOfSilentDefaults) {
@@ -2154,8 +2159,8 @@ TEST(RunInputParseTest, AccuracyPresetWordRoundTripsThroughTheParser) {
 }
 
 TEST(RunInputParseTest, MethodTypeWordRoundTripsThroughTheParser) {
-    // The vocabulary pin: the four [method] type words the parser accepts
-    // are the four words ToString writes into the record's `method` key, so
+    // The vocabulary pin: the six [method] type words the parser accepts
+    // are the six words ToString writes into the record's `method` key, so
     // the input side and the artifact side are one vocabulary - a consumer
     // that reads "rks" out of a record can write "rks" back into a file.
     const auto roundTrips = [](const std::string& word) {
@@ -2172,6 +2177,8 @@ TEST(RunInputParseTest, MethodTypeWordRoundTripsThroughTheParser) {
     roundTrips("uhf");
     roundTrips("rks");
     roundTrips("uks");
+    roundTrips("rohf");
+    roundTrips("roks");
 }
 
 TEST(RunInputParseTest, ParsesTheGridBlockKeys) {

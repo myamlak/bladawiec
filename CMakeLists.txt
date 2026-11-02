@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.27)
-project(qcx VERSION 0.7.0 LANGUAGES CXX)
+project(qcx VERSION 0.8.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,6 +7,90 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(QCX_BUILD_TESTS "Build tests" ON)
 option(QCX_ASAN "Enable AddressSanitizer (MSVC only; Clang/GCC builds use their own flags)" OFF)
+
+# ===========================================================================
+# THE LINK MODE OF THE FIRST-PARTY LIBRARIES
+# ===========================================================================
+#
+# OFF is the shipped configuration and what every preset and CI build: each
+# qcx-<module> is a static archive. ON makes them shared libraries by setting
+# BUILD_SHARED_LIBS, which is the only switch the module CMakeLists leave to
+# the standard variable. The option defines no compile definition and edits no
+# source, so no per-call cost can follow from the option itself; a shared
+# build does carry the ELF/dynamic-loader indirection the comparison
+# instrument exists to price, and that indirection is what the instrument
+# measures. What it does change, per platform, is stated where each term is
+# set below.
+option(QCX_BUILD_SHARED
+    "Build the first-party qcx libraries as shared libraries (vendored trees stay static)"
+    OFF)
+
+if (BUILD_SHARED_LIBS AND NOT QCX_BUILD_SHARED)
+    # BUILD_SHARED_LIBS alone would make the modules shared without the PIC,
+    # export and runtime-deployment terms below - a configuration that links
+    # on one platform and fails on the next. Refuse it rather than build it.
+    message(FATAL_ERROR
+        "BUILD_SHARED_LIBS is ON but QCX_BUILD_SHARED is OFF. Configure with "
+        "-DQCX_BUILD_SHARED=ON: that option sets BUILD_SHARED_LIBS and the "
+        "per-platform terms that a working shared build needs.")
+endif()
+
+if (QCX_BUILD_SHARED)
+    set(BUILD_SHARED_LIBS ON)
+
+    # PIC for every STATIC archive that ends up inside a shared library: the
+    # vendored spdlog (qcx-core links it PUBLIC), excgrid (qcx-grid), any
+    # static Boost/HDF5 that find_package returns, and the per-class OBJECT
+    # libraries whose objects qcx-integrals takes through target_sources().
+    # The variable initializes the target property, so it must precede the
+    # first target in the tree.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+    if (MSVC)
+        # REFUSED, and the reason is a defect this mode would ship: an inline
+        # variable defined in a header gets ONE copy per DLL on MSVC. The tree
+        # keeps mutable instrumentation state that way - the allocation
+        # instrument's switches and per-tag counters
+        # (memory/include/qcx/memory/allocation_instrument.hpp) and the CPU
+        # scheduler's process-wide settings (backend/include/qcx/backend/
+        # cpu_scheduler.hpp) - and the driver's thread ceiling writes one
+        # copy while the library reads another. Measured on the shared build:
+        # `dumpbin /exports qcx-memory.dll` exports
+        # gAttributionEnabled and the per-tag arrays, and a driver run with
+        # [memory_instrument] enabled reported zeroes in every column. A
+        # shared MSVC build therefore changes program semantics, and an
+        # import/export macro on the mutable data would put an indirection on
+        # the allocation and Fock hot paths - the runtime-effectiveness rule
+        # forbids paying that silently. The route to the MSVC arm is an
+        # out-of-line instrument state with an explicit API, priced as its own
+        # change; until then the shared mode is the ELF one.
+        message(FATAL_ERROR
+            "QCX_BUILD_SHARED is not available on MSVC: header-defined mutable "
+            "inline variables are duplicated per DLL, so the memory instrument "
+            "and the CPU scheduler would run with per-module copies (measured; "
+            "see the comment above). Use the ELF shared presets (wsl-gcc-shared, "
+            "wsl-clang-shared) for the link-mode comparison.")
+    else()
+        # ELF: default visibility is the choice, not an omission. The public
+        # API is C++ headers with inline and template content and no promised
+        # ABI; a version script would need a hand-maintained list of every
+        # public name and would hide internals the tests and benchmark probes
+        # reach through public headers. It buys nothing in a phase that does
+        # not ship a stable ABI.
+        set(CMAKE_CXX_VISIBILITY_PRESET default)
+        set(CMAKE_VISIBILITY_INLINES_HIDDEN OFF)
+    endif()
+
+    # ONE RUNTIME DIRECTORY for every first-party executable and shared
+    # library. Windows has no build-tree rpath: a test binary in
+    # <module>/Release must find the module DLLs, and test discovery runs the
+    # binary at build time. A single bin directory is what makes that true for
+    # every target at once instead of a per-target copy rule. The
+    # multi-configuration generators append their configuration below this.
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+endif()
 
 # Added as a compile option rather than via CMAKE_CXX_FLAGS so CMake's default
 # MSVC flags (/EHsc, /W3, ...) survive alongside the sanitizer flag.
@@ -514,6 +598,16 @@ if (QCX_ENABLE_IO)
     endif()
 endif()
 
+# THE VENDORED TREES STAY STATIC IN BOTH LINK MODES. scoping BUILD_SHARED_LIBS
+# OFF here and restoring it after excgrid covers the whole vendored block:
+# spdlog's own switch ORs the standard variable (SPDLOG_BUILD_SHARED OFF alone
+# is not enough), and gtest, Google Benchmark and excgrid all follow it. Their
+# static archives still get PIC from the shared-mode block at the top of this
+# file, which is what a shared qcx-core (spdlog) and qcx-grid (excgrid) need.
+if (QCX_BUILD_SHARED)
+    set(BUILD_SHARED_LIBS OFF)
+endif()
+
 # spdlog builds as a static library from source.
 set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
@@ -573,6 +667,11 @@ add_subdirectory(${EXCGRID_ROOT} external/excgrid)
 
 # THE VENDORED TREES END HERE: every add_subdirectory() below this line is
 # first-party, and that ordering IS the mechanism of the block below.
+
+# The vendored block is over; first-party targets take the requested link mode.
+if (QCX_BUILD_SHARED)
+    set(BUILD_SHARED_LIBS ON)
+endif()
 
 # First-party warning level (2026-09-17). Every qcx target - the modules, their
 # tests, the driver and the benchmarks - compiles at /W4. This is a MEASUREMENT

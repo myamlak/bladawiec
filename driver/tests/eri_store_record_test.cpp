@@ -697,7 +697,10 @@ eri_cache_store = ")" + path +
         << run.error().message;
     EXPECT_NE(run.error().message.find("fock_builder = \"qfmm\""), std::string::npos)
         << run.error().message;
-    EXPECT_NE(run.error().message.find("a UHF run"), std::string::npos) << run.error().message;
+    // The method word is the schema's, named from the classifier's own
+    // output: the refusal fires on all four per-spin words, so it cannot
+    // say "UHF" on a run that wrote one of the others.
+    EXPECT_NE(run.error().message.find("on a uhf run"), std::string::npos) << run.error().message;
     // Written as ONE literal on ONE line for the same reason the source's is:
     // a phrase this row asserts must be findable by a single-line search, and
     // a phrase split across two adjacent literals is not. The sentence is the

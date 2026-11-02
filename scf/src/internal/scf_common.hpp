@@ -478,14 +478,134 @@ inline void ApplyVirtualSpaceLevelShift(Eigen::MatrixXd& fock,
     fock += shiftedVirtual * projected.rightCols(numVirtual).transpose();
 }
 
-// The UHF convergence gate (the uhf.cpp call site; shared here so the
-// tests can exercise the predicate directly): the two-way Roothaan-Hall
-// pair - energy change plus RMS density change (the /n divisor, the BUG-1
-// lesson; never the /n^2 form) - plus, behind UhfOptions::useRobustGate,
-// the max-density-change leg at the full densityTolerance and the per-spin
-// DIIS-error leg below kDiisErrorGateTolerance, with the RMS leg tightened
-// by kDiisDensityGateFactor. The boundary convention is strict <
-// throughout, matching the two-way gate.
+// The two-shift level shift of the restricted open-shell case, in the
+// ORTHONORMAL solver space where the closed/open projectors are already
+// held:
+//
+//     F' = F + openShift · P_o + virtualShift · P_v.
+//
+// It is the closed-relative form of the recipe documented on the helper
+// above: applying shift_1 over the alpha occupied set (closed + open) lifts
+// the virtual space by shift_1, and applying shift_2 - shift_1 over the beta
+// occupied set (closed) lifts the open and virtual spaces by the difference,
+// leaving the closed block at zero - so shift_1 = virtualShift - openShift
+// and shift_2 = virtualShift. Only differences of the block energies matter,
+// which is why the closed block's zero is without loss of generality.
+// A zero pair is a legal no-op. Applied after the DIIS extrapolation and
+// outside the energy path, so the shifted matrix never enters the energy
+// computation; the projectors are the PREVIOUS iterate's, which is why the
+// loop skips the shift on its first iterate.
+inline void ApplyOpenShellLevelShift(Eigen::MatrixXd& fock,
+                                     const Eigen::MatrixXd& closedProjector,
+                                     const Eigen::MatrixXd& openProjector,
+                                     double openShift,
+                                     double virtualShift) {
+    if (openShift == 0.0 && virtualShift == 0.0)
+    {
+        return;
+    }
+
+    const Eigen::MatrixXd virtualProjector =
+        Eigen::MatrixXd::Identity(fock.rows(), fock.cols()) - closedProjector - openProjector;
+
+    if (openShift != 0.0)
+    {
+        fock += openShift * openProjector;
+    }
+
+    if (virtualShift != 0.0)
+    {
+        fock += virtualShift * virtualProjector;
+    }
+}
+
+// The exact projected factors of the commutator error e = A B^T - B A^T,
+// for a density factor C_s whose columns carry KNOWN weights:
+//
+//     M = (B^T B)^{-1} B^T A,   R = A - B M,   s = M - M^T.
+//
+// The RHF/ROHF densities are diagonal in their own orbital basis with
+// occupations (2, 1, 0), so C_s = C diag(w) with w = sqrt(2) on the closed
+// block and 1 on the open one, and B^T B = diag(w^2) EXACTLY (the columns
+// are S-orthonormal). The projection is therefore the row scaling of B^T A
+// by 1/w^2, evaluated from the known weights rather than from a Gram matrix
+// whose computed diagonal would carry rounding into R: R is the part of A
+// outside range(B), and that is what makes the extrapolator's inner
+// products stable as the error shrinks (DiisErrorFactors' note). The
+// uniform weight sqrt(2) reproduces the RHF loop's M = (1/2) B^T A.
+//
+// A and B arrive in whichever space the caller's Fock lives in - the AO
+// images X^T F C_s, X^T S C_s for the closed-shell loop, the orthonormal
+// images for the restricted open-shell one - and the returned factors are a
+// value the DiisExtrapolator stores against that same Fock.
+/// \param a The Fock image of the scaled factor.
+/// \param b The overlap image of the scaled factor (C_s itself in the
+/// orthonormal basis).
+/// \param columnWeights One weight per factor column; must be positive and
+/// match b's column count.
+/// \returns The factors, or an Error (kInvalidArgument on a shape or weight
+/// mismatch).
+/// \ingroup qcx-scf
+inline qcx::Result<DiisErrorFactors> ProjectDiisErrorFactors(const Eigen::MatrixXd& a,
+                                                             const Eigen::MatrixXd& b,
+                                                             const Eigen::VectorXd& columnWeights) {
+    if (a.rows() != b.rows() || a.cols() != b.cols() || b.cols() != columnWeights.size() ||
+        columnWeights.size() == 0)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       "the error factors need one positive weight per factor column"});
+    }
+
+    for (Eigen::Index i = 0; i < columnWeights.size(); ++i)
+    {
+        if (!(columnWeights(i) > 0.0))
+        {
+            return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                              "the error-factor column weights must be positive"});
+        }
+    }
+
+    // M = (B^T B)^{-1} B^T A with B^T B diagonal: each row of B^T A is
+    // scaled by 1/w_i^2.
+    Eigen::MatrixXd m = b.transpose() * a;
+
+    for (Eigen::Index i = 0; i < columnWeights.size(); ++i)
+    {
+        m.row(i) /= columnWeights(i) * columnWeights(i);
+    }
+
+    return DiisErrorFactors{b, a - b * m, m - m.transpose()};
+}
+
+// The gate over ONE error channel: the two-way Roothaan-Hall pair, and
+// behind useRobustGate the max-density leg plus that channel's DIIS-error
+// leg. The restricted loops have one commutator to watch (the RHF Fock's;
+// the ROHF effective Fock's), the per-spin loop passes the worse of its
+// two. Same strict < boundaries.
+inline bool IsScfConverged(int iteration,
+                           double totalEnergy,
+                           double previousTotalEnergy,
+                           double rmsDensityChange,
+                           double maxDensityChange,
+                           double diisErrorNorm,
+                           double energyTolerance,
+                           double densityTolerance,
+                           bool useRobustGate) {
+    const double rmsGate =
+        useRobustGate ? densityTolerance / kDiisDensityGateFactor : densityTolerance;
+    const bool energyAndRmsGate = iteration > 0 &&
+                                  std::fabs(totalEnergy - previousTotalEnergy) < energyTolerance &&
+                                  rmsDensityChange < rmsGate;
+
+    if (!useRobustGate)
+    {
+        return energyAndRmsGate;
+    }
+
+    return energyAndRmsGate && maxDensityChange < densityTolerance &&
+           diisErrorNorm < kDiisErrorGateTolerance;
+}
 
 // The joint-system DIIS extrapolator: one extrapolation subspace shared by the
 // alpha and beta channels. Pulay's extrapolation finds the weights that make
@@ -743,19 +863,17 @@ inline bool IsUhfConverged(int iteration,
                            double diisErrorAlphaNorm,
                            double diisErrorBetaNorm,
                            const UhfOptions& options) {
-    const double rmsGate = options.useRobustGate ? options.densityTolerance / kDiisDensityGateFactor
-                                                 : options.densityTolerance;
-    const bool energyAndRmsGate =
-        iteration > 0 && std::fabs(totalEnergy - previousTotalEnergy) < options.energyTolerance &&
-        rmsDensityChange < rmsGate;
-
-    if (!options.useRobustGate)
-    {
-        return energyAndRmsGate;
-    }
-
-    return energyAndRmsGate && maxDensityChange < options.densityTolerance &&
-           std::max(diisErrorAlphaNorm, diisErrorBetaNorm) < kDiisErrorGateTolerance;
+    // The per-spin form passes the worse of the two channels to the shared
+    // one-channel gate; the comparison is the one this predicate always made.
+    return IsScfConverged(iteration,
+                          totalEnergy,
+                          previousTotalEnergy,
+                          rmsDensityChange,
+                          maxDensityChange,
+                          std::max(diisErrorAlphaNorm, diisErrorBetaNorm),
+                          options.energyTolerance,
+                          options.densityTolerance,
+                          options.useRobustGate);
 }
 
 // The period-2 limit-cycle detector: a pure read-only observer over

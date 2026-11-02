@@ -2,6 +2,7 @@ add_library(qcx-scf
   src/rhf.cpp
   src/density_energy.cpp
   src/uhf.cpp
+  src/rohf.cpp
   src/diis.cpp
   src/symmetry_reduction.cpp
   src/internal/scf_common.cpp
@@ -33,6 +34,7 @@ target_compile_options(qcx-scf PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
 target_precompile_headers(qcx-scf PRIVATE
     <qcx/scf/rhf.hpp>
     <qcx/scf/uhf.hpp>
+    <qcx/scf/rohf.hpp>
     <qcx/scf/density_energy.hpp>
     <Eigen/Dense>)
 
@@ -49,6 +51,8 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/ri_rhf_test.cpp
         tests/uhf_test.cpp
         tests/direct_uhf_test.cpp
+        tests/rohf_test.cpp
+        tests/direct_rohf_test.cpp
         tests/symmetry_block_test.cpp
         tests/symmetry_reduction_test.cpp
         tests/robustness_uhf_test.cpp
@@ -80,6 +84,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         <gtest/gtest.h>
         <qcx/scf/rhf.hpp>
         <qcx/scf/uhf.hpp>
+        <qcx/scf/rohf.hpp>
         <qcx/scf/density_energy.hpp>)
 
     include(GoogleTest)

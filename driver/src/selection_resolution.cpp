@@ -272,9 +272,9 @@ LadderPick PickFromLadder(const SelectionResolutionInput& input) {
 // that cannot carry the enforcement is rewritten onto the direct family's
 // MACHINERY member, and the rewrite is disclosed in the warning (stderr and
 // the record) and in the reasoning (the record's own why) - never silent.
-// Unrestricted runs are left exactly as resolved: their wiring carries no
-// enforcement field on any builder, so no rewrite could honour the key, and
-// the driver refuses it by name there.
+// Unrestricted and restricted open-shell runs are left exactly as resolved:
+// their per-spin wiring carries no enforcement field on any builder, so no
+// rewrite could honour the key, and the driver refuses it by name there.
 //
 // The route is named as the resolution reached it, and the request in the
 // input's own spelling, because "the run was demoted" is only actionable
@@ -284,7 +284,7 @@ LadderPick PickFromLadder(const SelectionResolutionInput& input) {
 // against the machinery member the rewrite wires.
 ResolvedBuilderSelection ApplyCertifiedBoundDemotion(const SelectionResolutionInput& input,
                                                      ResolvedBuilderSelection resolved) {
-    if (!input.input.method.enforceCertifiedBound || input.unrestricted)
+    if (!input.input.method.enforceCertifiedBound || input.perSpin)
     {
         return resolved;
     }

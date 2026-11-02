@@ -90,9 +90,9 @@ reaches that builder it resolves an auxiliary basis itself.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `type` | string | — | required; `rhf`, `uhf`, `rks` or `uks` |
+| `type` | string | — | required; `rhf`, `uhf`, `rks`, `uks`, `rohf` or `roks` |
 | `accuracy` | string | — | required; `kLoose`, `kNormal` or `kTight` |
-| `functional` | string | — | the density functional's name, for `rks` and `uks` |
+| `functional` | string | — | the density functional's name, for `rks`, `uks` and `roks` |
 | `screening_tolerance` | float | `1e-10` | finite and at least 0; `0.0` selects the dense path |
 | `fock_builder` | string | — | **deprecated** — write `[builder]` instead |
 | `theta` | float | — | finite; the multipole-expansion separation threshold |
@@ -126,7 +126,7 @@ An `ri_tensor_mode` value of `"forced_disk"` is refused by name; the force is sp
 
 #### Kohn-Sham keys
 
-`rks` and `uks` are the Kohn-Sham lanes and they are wired: a Kohn-Sham run folds an
+`rks`, `uks` and `roks` are the Kohn-Sham lanes and they are wired: a Kohn-Sham run folds an
 exchange-correlation potential into the Fock build. Such a run needs `functional`, and a run
 without one is refused with the list of names this build ships.
 
@@ -136,9 +136,23 @@ Shipped functionals: `slater`, `vwn5`, `vwn3`, `pw92`, `svwn`, `spw92`, `becke88
 six are hybrids, and carry a fraction of exact exchange.
 
 `functional`, `screening_tolerance` and the whole `[grid]` block belong to this family. Writing any
-of them on an `rhf` or `uhf` run is refused, never ignored: a `functional` on a Hartree-Fock run
-means the author expected a density functional run, and running Hartree-Fock under that label is
+of them on an `rhf`, `uhf` or `rohf` run is refused, never ignored: a `functional` on a Hartree-Fock
+run means the author expected a density functional run, and running Hartree-Fock under that label is
 the failure the refusal exists to prevent.
+
+#### The restricted open-shell lanes
+
+`rohf` and `roks` run one spatial orbital set in which the lowest `(electrons - (multiplicity - 1))
+/ 2` orbitals are doubly occupied and the next `multiplicity - 1` singly occupied. The unpaired
+electrons are the method's own state, so `[molecule] multiplicity` may be anything the electron
+count allows; a singlet `rohf` run is the `rhf` run and a singlet `roks` run is the `rks` run.
+`roks` takes this family's keys (`functional`, `screening_tolerance`, the `[grid]` block) and reads
+`properties.xc_gradient`, exactly as `uks` does; `rohf` refuses them as `rhf` does. The per-spin
+refusals apply here for the per-spin reason: `guess restart`, `scf.checkpoint_file`,
+`properties.nocv_fragments`, the device builder families and the `ri_j_link` disk rungs are all
+refused, and `[symmetry] full_group` must be written `false`, because the labeling stage does not
+preserve the closed/open split the method is built from. `properties.total_gradient` is refused: it
+differentiates a converged closed-shell reference, and the open-shell response is not implemented.
 
 #### The deprecated builder key
 
@@ -208,9 +222,10 @@ than leaving an empty trace that reads like a measurement.
 `checkpoint_file` is written when the run exits without converging — the iteration budget spent, so
 that a later run can seed from the last iterate instead of starting over. Setting
 `checkpoint_converged = true` widens it to the converged exit as well. Both the write and the
-`[guess] type = "restart"` read that consumes it are restricted to `rhf`; a `uhf` run that writes
-`checkpoint_file` is refused, because nothing on the unrestricted side could read the file back.
-A `density_dump` on a `uhf` run is ignored rather than refused.
+`[guess] type = "restart"` read that consumes it are restricted to `rhf`; a per-spin run (`uhf`,
+`uks`, `rohf` or `roks`) that writes `checkpoint_file` is refused, because nothing on the
+unrestricted side could read the file back. A `density_dump` on a per-spin run is ignored rather
+than refused.
 
 ### `[guess]`
 
@@ -219,10 +234,11 @@ A `density_dump` on a `uhf` run is ignored rather than refused.
 | `type` | string | `"core"` | `core`, `gwh`, `sad` or `restart` |
 | `restart_path` | string | `""` | the checkpoint file to seed from; required when `type = "restart"` |
 
-`core` and `gwh` are accepted by both a restricted and an unrestricted run. `sad` builds
-per-element atomic fragments, which only the unrestricted path does, so it is refused on `rhf`;
-the atomic-multiplicity table this version carries stops at Z = 10. `restart` seeds the restricted
-solver, so it is refused on `uhf`. An absent `type` means `core`.
+`core` and `gwh` are accepted by both a closed-shell and a per-spin run. `sad` builds per-element
+atomic fragments, which only the per-spin path does, so it is refused on the closed-shell lanes
+(`rhf` and `rks`); the atomic-multiplicity table this version carries stops at Z = 10. `restart`
+seeds the restricted solver, so it is refused on every per-spin lane (`uhf`, `uks`, `rohf` and
+`roks`). An absent `type` means `core`.
 
 ### `[resources]`
 
@@ -241,7 +257,9 @@ hardware thread is available; `thread_cap = 1` restricts the run to one.
 | `full_group` | bool | `true` | the full-group labeling stage; `false` disables it |
 
 With `full_group = true` the run labels its orbitals and states the point group it found. With
-`false` the stage does not run at all and the result carries no symmetry block.
+`false` the stage does not run at all and the result carries no symmetry block. The `rohf` and
+`roks` lanes require `false`: the stage does not preserve the closed/open split those methods are
+built from, so a `true` there is refused by name rather than run.
 
 ### `[grid]`
 
@@ -264,8 +282,8 @@ The Lebedev sizes this build carries are 6, 14, 26, 38, 50, 74, 86, 110, 146, 17
 
 A geometry-only London dispersion correction added to the total energy. It is method-independent:
 both forms ship an `hf` parameter set, so unlike the `functional` key and the `[grid]` block it is
-accepted on every method — an `rhf` or `uhf` run may carry it. A block with no keys is the same as
-no block: no correction is evaluated and the result carries no `dispersion` block.
+accepted on every method — an `rhf`, `uhf` or `rohf` run may carry it. A block with no keys is the
+same as no block: no correction is evaluated and the result carries no `dispersion` block.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -285,7 +303,7 @@ The parameter source is exactly one of three:
 - the selected form's **complete** numeric set: `d3` takes all of `s6, s8, rs6, alpha6, rs8,
   alpha8`; `d4` takes all of `s6, s8, a1, a2`. A partial set is refused, naming every missing key.
 - neither, in which case the set defaults to the run method's own family: the `functional` name on
-  an `rks`/`uks` run, `"hf"` on `rhf`/`uhf`.
+  an `rks`/`uks`/`roks` run, `"hf"` on `rhf`/`uhf`/`rohf`.
 
 Refused rather than silently reinterpreted: a `preset` and numeric keys together (two parameter
 sources for one form); a key of the other form (`a1`/`a2` with `form = "d3"`, or `rs6`/`alpha6`/
@@ -345,10 +363,10 @@ because a path cannot be mistyped into a different valid path.
 `nocv_fragments` is an array of arrays of atom indices, each group non-empty and each index
 non-negative. The indices count the `atoms` rows as written in the file, starting at 0. The groups
 must be disjoint and must cover every atom exactly once. The decomposition is closed-shell only,
-so it is refused on a `uhf` or `uks` run.
+so it is refused on a per-spin run (`uhf`, `uks`, `rohf` or `roks`).
 
-`xc_gradient` is a Kohn-Sham key and is **refused** on `rhf` and `uhf`, like the `functional` key and
-the `[grid]` block: there is no functional on those lanes to differentiate. It reports the derivative
+`xc_gradient` is a Kohn-Sham key and is **refused** on `rhf`, `uhf` and `rohf`, like the
+`functional` key and the `[grid]` block: there is no functional on those lanes to differentiate. It reports the derivative
 of the exchange-correlation energy the run integrated, with respect to the nuclear positions, at the
 density the run converged to and on the grid it integrated over. The density is held fixed, so the
 density's own response to a displaced nucleus is **not** in it — neither are the one-electron,
@@ -361,8 +379,9 @@ written in.
 Two analyses are limited by the element table this version carries: `hirshfeld` needs the atomic
 fragments of the SAD guess, which stops at Z = 10, and `nalewajski` needs isolated-atom fragment
 SCFs, which stop at Z = 19. Beyond those, the analysis refuses by name. `fukui` is refused on a
-`rks` or `uks` run, because its charged species are run on the unrestricted Hartree-Fock path,
-which would mix two physics under one label.
+`rks`, `uks` or `roks` run: the charged species follow the run's own method, so the indices would be
+Kohn-Sham ones, but that path has no reference test yet and the funded property closure adds it.
+`rohf` runs it (the species are restricted open-shell, like the parent).
 
 ### `[memory_instrument]`
 
@@ -385,8 +404,8 @@ A force key makes a mechanism engage that a run would otherwise reach only by it
 that a measurement can show the mechanism ran rather than being silently swapped for the default.
 It is read where the disk store can be wired. On the `ri_j_link` family with `rhf` the force is
 honoured: the disk-backed store is built directly and the result reports the disk mode with
-`mode_record.forced_disk = true`. On `ri_j_link` with `uhf`, `rks` or `uks` the run is refused and
-the refusal names the key, because those legs have no disk route. On every other route the run keeps
+`mode_record.forced_disk = true`. On `ri_j_link` with `uhf`, `uks`, `rohf`, `rks` or `roks` the run
+is refused and the refusal names the key, because those legs have no disk route. On every other route the run keeps
 its own route and records the reason the force was not taken, so a forced request is never dropped
 in silence.
 

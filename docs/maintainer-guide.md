@@ -38,6 +38,17 @@ matches CI:
 | `windows-msvc-a3c`, `windows-msvc-pf` | the narrower local configurations |
 | `wsl-gcc`, `wsl-clang` | the GCC and Clang parity configurations, Debug |
 | `wsl-gcc-release`, `wsl-clang-release` | the same configurations in Release |
+| `wsl-gcc-shared`, `wsl-clang-shared` | the same configurations with the first-party libraries linked shared, local-only |
+| `wsl-gcc-shared-release`, `wsl-clang-shared-release` | the shared configurations in Release, for the link-mode comparison |
+
+The shared mode is ELF-only. On MSVC it is refused at configure, by name: a
+header-defined mutable inline variable gets one copy per DLL there, so the memory
+instrument's switches and counters and the CPU scheduler's process-wide settings would
+run with per-module copies (the driver's thread ceiling would set one copy while the
+library read another). An import/export macro on that state would put an indirection on
+the allocation and Fock hot paths, which the runtime-effectiveness rule forbids. The
+Windows shared arm waits for an out-of-line instrument state; until then measure the
+link mode under WSL.
 
 Run both parity configurations before asking for review: some diagnostics are
 compiler-specific, and the compiler you did not build with is the only one that reports
@@ -45,6 +56,10 @@ them.
 
 A multi-configuration generator is in use, so a module's test binary lands under its
 configuration: `build/windows-msvc/<module>/Release/qcx-<module>-tests.exe`.
+
+The shared presets are the exception: every first-party executable and shared library
+lands in `build/<preset>/bin`, with the configuration as a subdirectory on a
+multi-configuration generator. The static layout above is unchanged.
 
 The options that matter when configuring:
 
@@ -59,6 +74,26 @@ The options that matter when configuring:
 | `QCX_REFERENCE_REGENERATION_CHECK` | `OFF` | the local-only regeneration checks |
 | `QCX_TEST_TIMEOUT_SECONDS` | `2400` | the per-test timeout |
 | `QCX_INTEGRALS_LMAX` | `6` | the instantiation ceiling for the MD 2e/3c class matrix (6 is the supported bound and what CI builds; lower values build a reduced matrix for local compile-time experiments) |
+| `QCX_BUILD_SHARED` | `OFF` | builds the first-party `qcx-<module>` libraries shared; every vendored tree stays static. Configure it through a `-shared` preset, which also sets ELF default visibility and the common `bin` output directory. Refused on MSVC (see the note above); the CUDA libraries stay static |
+
+The link-mode comparison is `tools/bench/link_mode_comparison.py`: one hot call in a
+base revision and a head revision, reported as a ratio with the session canary and a
+pre-registered band. `--dry-run` prints the plan without building or launching
+anything. It is a quiet-window instrument; run it on an idle machine and read the
+canary beside the ratio.
+
+**When it is required.** Any change that touches a per-call hot path — the Fock
+builders, the integral kernels, the grid assembly, the XC evaluation — carries a
+comparison record in its pull request. The command is
+
+    python tools/bench/link_mode_comparison.py --base-rev <base> --head-rev HEAD \
+        --link-mode shared --record <record.json>
+
+and the record goes in the PR body with its verdict. FAIL blocks the merge; PROVISIONAL
+means repeat it in a quiet window; PASS is the claim that the change did not cost
+per-call time. The first run of a branch that introduces the instrument has no base
+revision that can build the benchmark target — use the commit the instrument landed on
+as the base from then on.
 
 ## 2. Test selection
 

@@ -38,7 +38,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsFortySeven) {
+TEST(ResultJsonTest, SchemaVersionIsFortyEight) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -195,7 +195,17 @@ TEST(ResultJsonTest, SchemaVersionIsFortySeven) {
     // moves with it; it is written on every present block, so `false` states
     // the lane is off (or the preset's own kTight gate) rather than leaving
     // the state to be inferred from an absent key.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 47);
+    //
+    // v47 -> v48: `total_gradient` GAINS the optional `dispersion_tier`
+    // member, the derivative tier the dispersion term was taken at. A `d4`
+    // correction's C6 and C8 coefficients are functions of the geometry, so
+    // its coordinate derivative has two readings and the number alone cannot
+    // say which one produced it; the assembly's frozen-charge tier is
+    // written as `"frozen_charge"`. A key added, so the number moves with it.
+    // The member is absent for `d3` (one zero-damping derivative) and when no
+    // correction was requested, so an A/B document outside a `d4` gradient is
+    // byte-identical under the change.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 48);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -850,6 +860,35 @@ TEST(ResultJsonTest, TotalGradientBlockEmittedWithEveryReportedMember) {
     // The dispersion pair inside the block: absent, not zero.
     EXPECT_EQ(CountOccurrences(json, "\"dispersion\""), 0);
     EXPECT_EQ(json.find("dispersion_hartree"), std::string::npos);
+}
+
+TEST(ResultJsonTest, TotalGradientDispersionTierIsWrittenOnlyWhenTheTermNamesOne) {
+    // Schema 48: a `d4` dispersion term's record names the derivative tier it
+    // was taken at (`"frozen_charge"`), and an unset tier is ABSENT rather
+    // than an empty string - the null-honesty rule one level down.
+    qcx::io::RunResult result;
+    qcx::io::RunProperties properties;
+
+    qcx::io::RunTotalGradient total;
+    total.gradient = {0.125, -0.375};
+    total.terms.dispersion = std::vector<double>{0.5, -0.5};
+    total.dispersionTier = "frozen_charge";
+    total.energies.dispersion = -0.25;
+    properties.totalGradient = total;
+    result.properties = std::move(properties);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(CountOccurrences(json, "\"dispersion_tier\": \"frozen_charge\""), 1);
+
+    qcx::io::RunResult withoutTier;
+    qcx::io::RunProperties withoutTierProperties;
+    qcx::io::RunTotalGradient tierless;
+    tierless.gradient = {0.125, -0.375};
+    withoutTierProperties.totalGradient = std::move(tierless);
+    withoutTier.properties = std::move(withoutTierProperties);
+
+    const std::string tierlessJson = qcx::io::SerializeRunResultJson(withoutTier);
+    EXPECT_EQ(tierlessJson.find("dispersion_tier"), std::string::npos);
 }
 
 TEST(ResultJsonTest, TotalGradientXcTermIsPresentOnlyOnADensityFunctionalReference) {

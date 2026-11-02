@@ -556,7 +556,11 @@ if (QCX_ENABLE_CUDA)
     # boys::BoysStatus semantics - the retired qcx::Result /
     # DeviceBuffer host layer is gone). It is self-contained: no qcx-core /
     # qcx-backend / qcx-memory links, raw device pointers + void* streams.
-    add_library(qcx-integrals-cuda
+    # STATIC in both link modes - the backend block's reason, repeated here
+    # because this lane has its own targets: CI never builds CUDA, and its
+    # nvcc/device link is not part of the CPU contract QCX_BUILD_SHARED
+    # configures.
+    add_library(qcx-integrals-cuda STATIC
         ${_qcxBoysExt}/src/boys_cuda.cpp
         ${_qcxBoysExt}/src/boys_cuda.cu)
     target_include_directories(qcx-integrals-cuda PUBLIC
@@ -763,7 +767,7 @@ if (QCX_ENABLE_CUDA)
     target_link_libraries(qcx-integrals PUBLIC CUDA::cublas)
     target_compile_definitions(qcx-integrals PUBLIC QcxHasCuda=1)
 
-    add_library(qcx-integrals-cuda-md src/eri_cuda.cpp src/eri_cuda.cu
+    add_library(qcx-integrals-cuda-md STATIC src/eri_cuda.cpp src/eri_cuda.cu
         src/eri_cuda_fock.cu)
     target_sources(qcx-integrals-cuda-md PRIVATE ${_qcxCudaMdObjects})
     target_include_directories(qcx-integrals-cuda-md PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

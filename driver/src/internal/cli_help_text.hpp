@@ -83,15 +83,15 @@ input file keys (a key marked required must be written):
                                     matched -rifit fit where one exists and the
                                     universal fit otherwise
 [method]
-    type = "rhf"                    required; rhf | uhf | rks | uks
+    type = "rhf"                    required; rhf | uhf | rks | uks | rohf | roks
     functional = "pbe0"             optional; a name from the built-in
-                                    functional registry. Required by rks and
-                                    uks, refused on rhf and uhf
+                                    functional registry. Required by rks, uks
+                                    and roks, refused on rhf, uhf and rohf
     screening_tolerance = 1e-10     optional; >= 0, finite; the density
                                     screening threshold of the functional's
                                     evaluation on the grid, 0.0 evaluating
-                                    densely. Read by rks and uks; 1e-10 when
-                                    absent
+                                    densely. Read by rks, uks and roks; 1e-10
+                                    when absent
     fock_builder = "direct"         optional; DEPRECATED - accepted, never
                                     refused, never warned; write the [builder]
                                     axes instead. One of: direct | ri_j_link |
@@ -110,8 +110,8 @@ input file keys (a key marked required must be written):
                                     machinery member: a restricted run resolved
                                     to any other builder is demoted to that
                                     member, and the divergence is reported.
-                                    Refused on uhf and uks, whose wiring
-                                    carries no enforcement on any route
+                                    Refused on uhf, uks, rohf and roks, whose
+                                    wiring carries no enforcement on any route
     force_certified_lane = false    optional; ask for the certified fp32 lane
                                     itself. Honoured by the direct family's
                                     machinery member only, and refused at
@@ -243,14 +243,17 @@ input file keys (a key marked required must be written):
                                     ladder would not pick it, by building the
                                     disk-backed builder directly. Honoured by
                                     ri_j_link under rhf; refused there on rks,
-                                    uks and uhf, which cannot wire the disk
-                                    store; on every other route the run keeps
-                                    its own route and records the demotion with
-                                    its reason
+                                    uks, uhf, rohf and roks, which cannot wire
+                                    the disk store; on every other route the
+                                    run keeps its own route and records the
+                                    demotion with its reason
 [symmetry]
     full_group = true               bool; the post-SCF full-group labeling stage
-                                    (false restores the pre-stage behavior)
-[grid] read by rks and uks only
+                                    (false restores the pre-stage behavior);
+                                    refused on rohf and roks, whose fixed
+                                    closed/open split the stage does not
+                                    preserve - write false on those lanes
+[grid] read by rks, uks and roks only
     radial_points = 75              the radial points per atom; >= 1
     angular_points = 302            a Lebedev angular size: 6 | 14 | 26 | 38 |
                                     50 | 74 | 86 | 110 | 146 | 170 | 194 | 230
@@ -265,9 +268,10 @@ input file keys (a key marked required must be written):
     type = "core"                   core | gwh | sad | restart; the initial
                                     guess. "core" is the method's own default
                                     start (on rhf that is the gwh guess); "gwh"
-                                    serves rhf and uhf, "sad" needs the uhf path,
-                                    and "restart" seeds from guess.restart_path
-                                    and is rhf only
+                                    serves rhf and the per-spin lanes, "sad"
+                                    needs the per-spin path, and "restart"
+                                    seeds from guess.restart_path and is rhf
+                                    only
     restart_path = ""               a path; the checkpoint to seed from;
                                     required when type = "restart"
 [dispersion]
@@ -320,10 +324,11 @@ input file keys (a key marked required must be written):
                                     Hartree/Bohr per atom and direction, with
                                     the electronic terms, the nuclear repulsion
                                     and any dispersion correction kept apart.
-                                    rhf only: refused on uhf and the Kohn-Sham
-                                    lanes, when the SCF did not converge, when
-                                    the reference is not stationary, and for a
-                                    d4 dispersion gradient
+                                    rhf only: refused on uhf, rohf and the
+                                    Kohn-Sham lanes, when the SCF did not
+                                    converge, when the reference is not
+                                    stationary, and for a d4 dispersion
+                                    gradient
     nocv_fragments = [[0, 1]]       optional; one atom-index array per fragment
                                     (the indices count the atom rows as
                                     written). ETS-NOCV, closed-shell only

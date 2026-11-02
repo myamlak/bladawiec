@@ -46,7 +46,12 @@ struct ValidationReport {
 ///     method cannot inherit "no restriction" silently;
 /// \li basis.orbital resolves to a bundled basis directory, and basis.aux
 ///     (explicit, or auto-selected on the RHF ri_j_link path) resolves too,
-///     through the same ParseNwchemDirectory call the driver uses.
+///     through the same ParseNwchemDirectory call the driver uses;
+/// \li the resolved basis.orbital carries no effective-core potential for any
+///     element the run contains (the BSE corpus metadata, BasisSet::Ecps()).
+///     Effective-core potentials are not implemented, so such a request would
+///     run all-electron with a valence-only orbital set and report the wrong
+///     energy and electron count; it is refused by name instead.
 ///
 /// Deliberately not checked here: TOML syntax/type/vocabulary errors (the
 /// parser's job, fail-fast single-error) and the method/builder/guess
