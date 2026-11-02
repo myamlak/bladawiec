@@ -8574,14 +8574,17 @@ TEST(DriverErrorTest, NocvOnASingleAtomFragmentBeyondTheTableNamesTheAufbauLimit
     // single-atom fragment on a molecule whose SCF can run; the fragment
     // check precedes the fragment SCF, so the run fails at the named limit
     // and not inside a heavier calculation.
+    // A deliberately asymmetric geometry: the linear CaH2 cell trips the
+    // symmetry strong-form guard before the fragment check is reached, so
+    // this fixture is C1 and the run fails at the table it is about.
     const auto calciumHydride = RunInputText(R"(
 [molecule]
 charge = 0
 multiplicity = 1
 atoms = [
     ["Ca", 0.0, 0.0, 0.0],
-    ["H", 0.0, 0.0, 1.2],
-    ["H", 0.0, 0.0, -1.2],
+    ["H", 0.0, 0.0, 1.6],
+    ["H", 0.4, 0.2, -1.2],
 ]
 [basis]
 orbital = "sto-3g"
