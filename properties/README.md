@@ -12,20 +12,26 @@ re-documentation.
 
 ## DAG position
 
-13 of 14 — depends on: core, molecule, basisset, grid, integrals, scf —
-consumed by: driver. Machine-checked by `tools/check_dag.py`; this line is a
-summary, not the source of truth.
+15 of 16 — depends on: core, molecule, basisset, grid, dispersion, integrals,
+scf, response, io — consumed by: driver. Machine-checked by
+`tools/check_dag.py`; this line is a summary, not the source of truth.
 
 ## Public headers / key types
 
 - `properties/include/qcx/properties/`: `populations.hpp`, `multipoles.hpp`,
   `charges.hpp`, `esp.hpp`, `eddb.hpp`, `nalewajski.hpp`, `fukui.hpp`,
-  `nocv.hpp`
+  `nocv.hpp`, `density_at_nuclei.hpp`, `qtaim.hpp`, `gradient.hpp`,
+  `wavefunction_view.hpp`, `property_registry.hpp`
 - `AnalyzePopulations` — the four population analyses (S and S^1/2 shared).
 - `AnalyzeMultipoles` — dipole + traceless quadrupole.
 - `AnalyzeHirshfeld` / `AnalyzeVoronoi` — density-grid charges.
 - `AnalyzeEspCharges` — the CHELPG/MK fits.
 - `AnalyzeNocvEts` — the ETS-NOCV decomposition.
+- `WavefunctionView` — the read-only view a property reads: total density,
+  the spin densities when the run is unrestricted, the method word, and the
+  convergence state.
+- `DeclarationFor` / `AllDeclarations` — the coverage record: what each
+  analysis supports and the named reason where the driver refuses it.
 
 ## Rationale pointers
 
