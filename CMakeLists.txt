@@ -8,6 +8,82 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(QCX_BUILD_TESTS "Build tests" ON)
 option(QCX_ASAN "Enable AddressSanitizer (MSVC only; Clang/GCC builds use their own flags)" OFF)
 
+# ===========================================================================
+# THE LINK MODE OF THE FIRST-PARTY LIBRARIES
+# ===========================================================================
+#
+# OFF is the shipped configuration and what every preset and CI build: each
+# qcx-<module> is a static archive. ON makes them shared libraries by setting
+# BUILD_SHARED_LIBS, which is the only switch the module CMakeLists leave to
+# the standard variable. The option is a BUILD-SYSTEM axis only: it defines no
+# compile definition and changes no source, so no per-call cost can follow
+# from it. What it does change, per platform, is stated where each term is
+# set below.
+option(QCX_BUILD_SHARED
+    "Build the first-party qcx libraries as shared libraries (vendored trees stay static)"
+    OFF)
+
+if (BUILD_SHARED_LIBS AND NOT QCX_BUILD_SHARED)
+    # BUILD_SHARED_LIBS alone would make the modules shared without the PIC,
+    # export and runtime-deployment terms below - a configuration that links
+    # on one platform and fails on the next. Refuse it rather than build it.
+    message(FATAL_ERROR
+        "BUILD_SHARED_LIBS is ON but QCX_BUILD_SHARED is OFF. Configure with "
+        "-DQCX_BUILD_SHARED=ON: that option sets BUILD_SHARED_LIBS and the "
+        "per-platform terms that a working shared build needs.")
+endif()
+
+if (QCX_BUILD_SHARED)
+    set(BUILD_SHARED_LIBS ON)
+
+    # PIC for every STATIC archive that ends up inside a shared library: the
+    # vendored spdlog (qcx-core links it PUBLIC), excgrid (qcx-grid), any
+    # static Boost/HDF5 that find_package returns, and the per-class OBJECT
+    # libraries whose objects qcx-integrals takes through target_sources().
+    # The variable initializes the target property, so it must precede the
+    # first target in the tree.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+    if (MSVC)
+        # MSVC exports nothing from a DLL by default. AUTOEXPORT rather than a
+        # QCX_API macro on every public declaration: the public surface is
+        # large and header-heavy, the option must not touch a single public
+        # header, and the documented gap of this property - a data symbol
+        # needs __declspec(dllimport) at the consumer - does not arise here
+        # (the tree defines no cross-DLL data symbol; its only non-constexpr
+        # static member is function-local). An export macro would be a second,
+        # hand-maintained copy of the public API in every header.
+        #
+        # Auto-export scans EVERY object handed to the linker, PCH objects
+        # included, and a PCH object carries a mangled `__@@_PchSym_...` whose
+        # bare `__` prefix the .def writer emits as an export. One PCH object
+        # per link is therefore a hard requirement of this mode: two leave the
+        # linker unable to choose (LNK4022, then LNK2001). The one module with
+        # an OBJECT-library split compiles those TUs into the DLL itself in
+        # this mode; integrals/CMakeLists.txt states the mechanism there.
+        set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    else()
+        # ELF: default visibility is the choice, not an omission. The public
+        # API is C++ headers with inline and template content and no promised
+        # ABI; a version script would need a hand-maintained list of every
+        # public name and would hide internals the tests and benchmark probes
+        # reach through public headers. It buys nothing in a phase that does
+        # not ship a stable ABI.
+        set(CMAKE_CXX_VISIBILITY_PRESET default)
+        set(CMAKE_VISIBILITY_INLINES_HIDDEN OFF)
+    endif()
+
+    # ONE RUNTIME DIRECTORY for every first-party executable and shared
+    # library. Windows has no build-tree rpath: a test binary in
+    # <module>/Release must find the module DLLs, and test discovery runs the
+    # binary at build time. A single bin directory is what makes that true for
+    # every target at once instead of a per-target copy rule. The
+    # multi-configuration generators append their configuration below this.
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+endif()
+
 # Added as a compile option rather than via CMAKE_CXX_FLAGS so CMake's default
 # MSVC flags (/EHsc, /W3, ...) survive alongside the sanitizer flag.
 if (QCX_ASAN)
@@ -514,6 +590,16 @@ if (QCX_ENABLE_IO)
     endif()
 endif()
 
+# THE VENDORED TREES STAY STATIC IN BOTH LINK MODES. scoping BUILD_SHARED_LIBS
+# OFF here and restoring it after excgrid covers the whole vendored block:
+# spdlog's own switch ORs the standard variable (SPDLOG_BUILD_SHARED OFF alone
+# is not enough), and gtest, Google Benchmark and excgrid all follow it. Their
+# static archives still get PIC from the shared-mode block at the top of this
+# file, which is what a shared qcx-core (spdlog) and qcx-grid (excgrid) need.
+if (QCX_BUILD_SHARED)
+    set(BUILD_SHARED_LIBS OFF)
+endif()
+
 # spdlog builds as a static library from source.
 set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
@@ -573,6 +659,11 @@ add_subdirectory(${EXCGRID_ROOT} external/excgrid)
 
 # THE VENDORED TREES END HERE: every add_subdirectory() below this line is
 # first-party, and that ordering IS the mechanism of the block below.
+
+# The vendored block is over; first-party targets take the requested link mode.
+if (QCX_BUILD_SHARED)
+    set(BUILD_SHARED_LIBS ON)
+endif()
 
 # First-party warning level (2026-09-17). Every qcx target - the modules, their
 # tests, the driver and the benchmarks - compiles at /W4. This is a MEASUREMENT

@@ -43,6 +43,16 @@
       "binaryDir": "${sourceDir}/build/windows-msvc-pf"
     },
     {
+      "name": "windows-msvc-shared",
+      "displayName": "Windows MSVC shared first-party libraries (local-only)",
+      "description": "The link-mode axis: QCX_BUILD_SHARED builds qcx-<module> as DLLs (MSVC auto-export), keeps every vendored tree static, and puts all first-party executables and DLLs in build/windows-msvc-shared/bin/<config> so a test binary finds the modules beside it. The static windows-msvc preset is the shipped configuration; this one exists for the wall-time comparison instrument (tools/bench/link_mode_comparison.py) and is never a CI leg.",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-shared",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
+    },
+    {
       "name": "wsl-gcc",
       "displayName": "Linux GCC (CI; shipped integral ceiling, see ci.yml)",
       "description": "Debug parity configuration. It names no QCX_INTEGRALS_LMAX, so the configure takes the 6 that integrals/CMakeLists.txt ships (154 instantiated MD classes) - the bound the engine supports, and the only class matrix CI builds since the owner's 2026-10-20 ruling. It used to pin 2 (24 classes). AN EXISTING build/wsl-gcc TREE KEEPS THE OLD VALUE: the cache entry is set without FORCE, so a tree that already holds 2 goes on holding it; delete it or edit CMakeCache.txt rather than assume this preset moved it. The Debug selection skips the two footprint cases through the same fast-mode gate every other heavy numerical case uses; Release at 6 runs them, and the measurements are on the windows-msvc Configure note in ci.yml.",
@@ -85,6 +95,46 @@
         "CMAKE_CXX_COMPILER": "clang++-21",
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "wsl-gcc-shared",
+      "displayName": "Linux GCC Debug, shared first-party libraries (local-only)",
+      "description": "The wsl-gcc configuration with QCX_BUILD_SHARED=ON: qcx-<module> become libqcx-<module>.so with PIC and ELF default visibility, every vendored tree stays static. All first-party executables and shared libraries land in build/wsl-gcc-shared/bin. Local-only, like every shared preset - the static presets are the shipped configurations.",
+      "inherits": "wsl-gcc",
+      "binaryDir": "${sourceDir}/build/wsl-gcc-shared",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "wsl-gcc-shared-release",
+      "displayName": "Linux GCC Release, shared first-party libraries (local-only)",
+      "description": "The wsl-gcc-release configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared's description; only the build type differs. This is the configuration the wall-time comparison takes its shared arm from.",
+      "inherits": "wsl-gcc-release",
+      "binaryDir": "${sourceDir}/build/wsl-gcc-shared-release",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "wsl-clang-shared",
+      "displayName": "Linux Clang Debug, shared first-party libraries (local-only)",
+      "description": "The wsl-clang configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared's description; only the compiler differs.",
+      "inherits": "wsl-clang",
+      "binaryDir": "${sourceDir}/build/wsl-clang-shared",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "wsl-clang-shared-release",
+      "displayName": "Linux Clang Release, shared first-party libraries (local-only)",
+      "description": "The wsl-clang-release configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared-release's description; only the compiler differs.",
+      "inherits": "wsl-clang-release",
+      "binaryDir": "${sourceDir}/build/wsl-clang-shared-release",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -98,6 +148,18 @@
       "name": "windows-msvc-release",
       "displayName": "Windows MSVC Release",
       "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-msvc-shared-debug",
+      "displayName": "Windows MSVC shared Debug",
+      "configurePreset": "windows-msvc-shared",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-msvc-shared-release",
+      "displayName": "Windows MSVC shared Release",
+      "configurePreset": "windows-msvc-shared",
       "configuration": "Release"
     }
   ]

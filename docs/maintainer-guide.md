@@ -38,6 +38,9 @@ matches CI:
 | `windows-msvc-a3c`, `windows-msvc-pf` | the narrower local configurations |
 | `wsl-gcc`, `wsl-clang` | the GCC and Clang parity configurations, Debug |
 | `wsl-gcc-release`, `wsl-clang-release` | the same configurations in Release |
+| `windows-msvc-shared`, `wsl-gcc-shared`, `wsl-clang-shared` | the same configurations with the first-party libraries linked shared, local-only |
+| `windows-msvc-shared-debug`, `windows-msvc-shared-release` | the shared build presets over `windows-msvc-shared` |
+| `wsl-gcc-shared-release`, `wsl-clang-shared-release` | the shared configurations in Release, for the link-mode comparison |
 
 Run both parity configurations before asking for review: some diagnostics are
 compiler-specific, and the compiler you did not build with is the only one that reports
@@ -45,6 +48,12 @@ them.
 
 A multi-configuration generator is in use, so a module's test binary lands under its
 configuration: `build/windows-msvc/<module>/Release/qcx-<module>-tests.exe`.
+
+The shared presets are the exception: every first-party executable and DLL lands in
+`build/<preset>/bin`, with the configuration as a subdirectory on a multi-configuration
+generator (`build/windows-msvc-shared/bin/Release`). Windows has no build-tree rpath, so a
+test binary finds its modules only when they sit beside it. The static layout above is
+unchanged.
 
 The options that matter when configuring:
 
@@ -59,6 +68,13 @@ The options that matter when configuring:
 | `QCX_REFERENCE_REGENERATION_CHECK` | `OFF` | the local-only regeneration checks |
 | `QCX_TEST_TIMEOUT_SECONDS` | `2400` | the per-test timeout |
 | `QCX_INTEGRALS_LMAX` | `6` | the instantiation ceiling for the MD 2e/3c class matrix (6 is the supported bound and what CI builds; lower values build a reduced matrix for local compile-time experiments) |
+| `QCX_BUILD_SHARED` | `OFF` | builds the first-party `qcx-<module>` libraries shared; every vendored tree stays static. Configure it through a `-shared` preset, which also sets the per-platform terms (MSVC auto-export, ELF default visibility) and the common `bin` output directory. The CUDA libraries stay static: their device link is not part of the MSVC auto-export flow |
+
+The link-mode comparison is `tools/bench/link_mode_comparison.py`: one hot call in a
+base revision and a head revision, reported as a ratio with the session canary and a
+pre-registered band. `--dry-run` prints the plan without building or launching
+anything. It is a quiet-window instrument; run it on an idle machine and read the
+canary beside the ratio.
 
 ## 2. Test selection
 

@@ -100,7 +100,11 @@ if (QCX_ENABLE_CUDA)
     # cuda_backend.cpp defines the symbol.
     target_compile_definitions(qcx-backend PUBLIC QcxHasCuda=1)
 
-    add_library(qcx-backend-cuda
+    # STATIC in both link modes: the CUDA backend is a local-only lane that CI
+    # never builds, its nvcc/device link is not the MSVC auto-export flow, and
+    # QCX_BUILD_SHARED promises the CPU path only. An explicit type keeps the
+    # static default's linkage exactly.
+    add_library(qcx-backend-cuda STATIC
       src/cuda_backend.cpp
       src/cuda_backend.cu
       src/gpu_compute_profile.cu
