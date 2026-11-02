@@ -763,6 +763,25 @@ xc_gradient = true
     EXPECT_EQ(gradient.issues[0],
               "properties.xc_gradient: rhf does not take an exchange-correlation gradient (no "
               "density functional is differentiated; the Kohn-Sham methods rks, uks and roks do)");
+
+    // The same key on the other Hartree-Fock word, so the rule is shown to
+    // come from the classifier rather than from one word's arm. The coverage
+    // record gives uhf the same kXcGradientRequiresFunctional cell as rhf.
+    const auto uhfGradient = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "uhf"
+accuracy = "kNormal"
+[properties]
+xc_gradient = true
+)");
+    ASSERT_EQ(uhfGradient.issues.size(), 1u);
+    EXPECT_EQ(uhfGradient.issues[0],
+              "properties.xc_gradient: uhf does not take an exchange-correlation gradient (no "
+              "density functional is differentiated; the Kohn-Sham methods rks, uks and roks do)");
 }
 
 TEST(RunInputValidationTest, KohnShamMethodsAcceptTheKohnShamKeys) {
@@ -841,6 +860,31 @@ full_group = false
     EXPECT_EQ(rohf.issues[0],
               "method.functional: rohf does not take a functional (the Kohn-Sham methods rks, "
               "uks and roks do; remove the key or change method.type)");
+
+    // The fourth key on the same word, without a functional beside it: the
+    // refusal is the classifier's own xc-gradient sentence, whose reason is
+    // the absent density functional (the rohf lane runs none). This is the
+    // rohf cell of the coverage matrix's xc-gradient row, and the message
+    // names the method and the quantity, never the other Kohn-Sham keys.
+    const auto rohfGradient = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rohf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[properties]
+xc_gradient = true
+[symmetry]
+full_group = false
+)");
+    ASSERT_EQ(rohfGradient.issues.size(), 1u);
+    EXPECT_EQ(rohfGradient.issues[0],
+              "properties.xc_gradient: rohf does not take an exchange-correlation gradient (no "
+              "density functional is differentiated; the Kohn-Sham methods rks, uks and roks do)");
 
     const auto roks = Validate(R"(
 [molecule]

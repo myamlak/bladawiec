@@ -4511,6 +4511,48 @@ hirshfeld = true
 )");
     ASSERT_FALSE(hirshfeldArgon.has_value());
     EXPECT_EQ(hirshfeldArgon.error().code, qcx::ErrorCode::kUnimplemented);
+    // The refusal NAMES the missing capability, which is what the coverage
+    // record's kHirshfeldSadTableZLimit cell claims: the SAD
+    // atomic-multiplicity table stops at neon, and the element that crossed
+    // it is named by its atomic number. A code-only assertion would pass on
+    // any other kUnimplemented this run could raise.
+    EXPECT_NE(
+        hirshfeldArgon.error().message.find("the SAD atomic-multiplicity table (v1, Z <= 10)"),
+        std::string::npos)
+        << hirshfeldArgon.error().message;
+    EXPECT_NE(hirshfeldArgon.error().message.find("element Z = 18"), std::string::npos)
+        << hirshfeldArgon.error().message;
+}
+
+TEST(DriverErrorTest, NalewajskiOnAnElementBeyondTheTableNamesTheTableLimit) {
+    // The coverage record's kNalewajskiFragmentTableZLimit cell (max Z = 19,
+    // molecule scope) had no test behind it: the analysis classifies one
+    // atomic fragment per element and its Aufbau table stops at Z = 19.
+    // Calcium is the first element past it. The refusal is the analysis's
+    // own sentence, naming the table - the one fact that makes the answer
+    // actionable, because no other key in the file would change it.
+    const auto calcium = RunInputText(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [["Ca", 0.0, 0.0, 0.0]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[scf]
+max_iterations = 100
+use_diis = true
+[properties]
+nalewajski = true
+)");
+    ASSERT_FALSE(calcium.has_value());
+    EXPECT_EQ(calcium.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(calcium.error().message.find("the Nalewajski-Mrozek Aufbau table covers Z = 1..19"),
+              std::string::npos)
+        << calcium.error().message;
 }
 
 TEST(DriverErrorTest, RksRiJkRunsTheComposedFullRiCompositionAndDisclosesIt) {
@@ -4755,10 +4797,10 @@ accuracy = "kNormal"
               std::string::npos);
 
     // Leg 4 - the fukui guard, which is about the analysis and not the Fock:
-    // the N +- 1 species run on the direct-UHF runner, so a Kohn-Sham parent
-    // would mix two physics under one label. Refused by name, and a
-    // Hartree-Fock fall-through runs the analysis happily - the same
-    // silent-substitution shape one layer up.
+    // the charged species follow the run's own method, so a Kohn-Sham parent
+    // would need the Kohn-Sham Fukui path, which has no reference test yet.
+    // Refused by name, and a Hartree-Fock fall-through runs the analysis
+    // happily - the same silent-substitution shape one layer up.
     const auto fukui = RunInputText(R"(
 [molecule]
 atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
@@ -4775,6 +4817,63 @@ fukui = true
     EXPECT_EQ(fukui.error().code, qcx::ErrorCode::kUnimplemented);
     EXPECT_NE(fukui.error().message.find("properties.fukui is not wired for a Kohn-Sham run"),
               std::string::npos);
+}
+
+TEST(DriverErrorTest, FukuiOnUksAndRoksNamesTheKohnShamSpeciesReason) {
+    // Leg 4 above pins the `rks` cell of the coverage record's fukui row; the
+    // other two Kohn-Sham words carry the same kFukuiKohnShamSpecies cell and
+    // had no test. The guard is the ONE IsKohnShamPath test the dispatch
+    // reads, so a word that fell out of it would not refuse - it would run the
+    // N +- 1 species on the Kohn-Sham seam with no reference test behind the
+    // indices, which is the silent substitution the guard prevents.
+    // Both legs therefore assert the refusal's sentence, not just its code.
+    const auto uks = RunInputText(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "uks"
+functional = "slater"
+accuracy = "kNormal"
+[properties]
+fukui = true
+)");
+    ASSERT_FALSE(uks.has_value());
+    EXPECT_EQ(uks.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(uks.error().message.find("properties.fukui is not wired for a Kohn-Sham run in v1"),
+              std::string::npos)
+        << uks.error().message;
+    EXPECT_NE(uks.error().message.find("the charged species now follow the run's own method"),
+              std::string::npos)
+        << uks.error().message;
+
+    // ROKS is the Kohn-Sham word of the restricted open-shell pair: it names
+    // a functional and integrates on a grid, so its Fukui species follow the
+    // same Kohn-Sham path UKS's would. full_group = false is the lane's own
+    // spelling.
+    const auto roks = RunInputText(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "roks"
+functional = "slater"
+accuracy = "kNormal"
+[symmetry]
+full_group = false
+[properties]
+fukui = true
+)");
+    ASSERT_FALSE(roks.has_value());
+    EXPECT_EQ(roks.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(roks.error().message.find("properties.fukui is not wired for a Kohn-Sham run in v1"),
+              std::string::npos)
+        << roks.error().message;
+    EXPECT_NE(roks.error().message.find("the charged species now follow the run's own method"),
+              std::string::npos)
+        << roks.error().message;
 }
 
 TEST(DriverErrorTest, GpuSplitRequestIsRefusedByNameNotRunAsDirect) {
@@ -8356,7 +8455,11 @@ TEST(DriverErrorTest, FukuiRejectsUnconvergedSpeciesScf) {
 
 TEST(DriverErrorTest, RejectsUhfNocvCombination) {
     // The ETS-NOCV analysis is closed-shell in v1; the combination is
-    // rejected before the SCF runs.
+    // rejected before the SCF runs. The refusal is asserted by its sentence,
+    // not only by its code: kUnimplemented is shared with the functional
+    // refusal one check below this one and with every other unwired leg, so
+    // the message is the only half that says WHICH capability is missing -
+    // the coverage record's kEtsNocvClosedShellOnly cell.
     const auto uhfNocv = RunInputText(R"(
 [molecule]
 atoms = [["O", 0.0, 0.0, 0.0], ["O", 0.0, 0.0, 1.2]]
@@ -8371,6 +8474,132 @@ nocv_fragments = [[0], [1]]
 )");
     ASSERT_FALSE(uhfNocv.has_value());
     EXPECT_EQ(uhfNocv.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(uhfNocv.error().message.find("the ETS-NOCV analysis is closed-shell in v1"),
+              std::string::npos)
+        << uhfNocv.error().message;
+    EXPECT_NE(uhfNocv.error().message.find("cannot be requested on a uhf run"), std::string::npos)
+        << uhfNocv.error().message;
+}
+
+TEST(DriverErrorTest, NocvOnUksRohfAndRoksNamesTheClosedShellReason) {
+    // The per-spin check above fires on every per-spin path (IsPerSpinPath):
+    // the two unrestricted words and the restricted open-shell pair. The
+    // coverage record gives all four the kEtsNocvClosedShellOnly cell, and
+    // these three legs had no test. The ordering is part of the cell: the
+    // closed-shell check precedes the functional one, so a UKS or ROKS run -
+    // both naming a functional - reports the closed-shell reason and must
+    // NOT report the Hartree-Fock-in-v1 sentence.
+    const auto uks = RunInputText(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "uks"
+functional = "slater"
+accuracy = "kNormal"
+[properties]
+nocv_fragments = [[0], [1]]
+)");
+    ASSERT_FALSE(uks.has_value());
+    EXPECT_EQ(uks.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(uks.error().message.find("the ETS-NOCV analysis is closed-shell in v1"),
+              std::string::npos)
+        << uks.error().message;
+    EXPECT_NE(uks.error().message.find("cannot be requested on a uks run"), std::string::npos)
+        << uks.error().message;
+    EXPECT_EQ(uks.error().message.find("the ETS-NOCV analysis is Hartree-Fock in v1"),
+              std::string::npos)
+        << "the functional reason precedes the closed-shell one: " << uks.error().message;
+
+    // ROHF, the OH doublet: no functional is named, and the method is still
+    // per spin, so the closed-shell sentence is the one it must get.
+    const auto rohf = RunInputText(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rohf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[symmetry]
+full_group = false
+[properties]
+nocv_fragments = [[0], [1]]
+)");
+    ASSERT_FALSE(rohf.has_value());
+    EXPECT_EQ(rohf.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(rohf.error().message.find("the ETS-NOCV analysis is closed-shell in v1"),
+              std::string::npos)
+        << rohf.error().message;
+    EXPECT_NE(rohf.error().message.find("cannot be requested on a rohf run"), std::string::npos)
+        << rohf.error().message;
+
+    // ROKS, the same fixture with the Kohn-Sham keys: closed-shell reason,
+    // not the functional one.
+    const auto roks = RunInputText(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "roks"
+functional = "slater"
+accuracy = "kNormal"
+[symmetry]
+full_group = false
+[properties]
+nocv_fragments = [[0], [1]]
+)");
+    ASSERT_FALSE(roks.has_value());
+    EXPECT_EQ(roks.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(roks.error().message.find("the ETS-NOCV analysis is closed-shell in v1"),
+              std::string::npos)
+        << roks.error().message;
+    EXPECT_NE(roks.error().message.find("cannot be requested on a roks run"), std::string::npos)
+        << roks.error().message;
+    EXPECT_EQ(roks.error().message.find("the ETS-NOCV analysis is Hartree-Fock in v1"),
+              std::string::npos)
+        << "the functional reason precedes the closed-shell one: " << roks.error().message;
+}
+
+TEST(DriverErrorTest, NocvOnASingleAtomFragmentBeyondTheTableNamesTheAufbauLimit) {
+    // The coverage record's kEtsNocvFragmentTableZLimit cell (max Z = 19,
+    // single-atom-fragment scope) had no test behind it: a one-atom fragment
+    // takes its Hund multiplicity from the Aufbau table, which stops at
+    // Z = 19. Calcium is the first element past it, written as its own
+    // single-atom fragment on a molecule whose SCF can run; the fragment
+    // check precedes the fragment SCF, so the run fails at the named limit
+    // and not inside a heavier calculation.
+    const auto calciumHydride = RunInputText(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["Ca", 0.0, 0.0, 0.0],
+    ["H", 0.0, 0.0, 1.2],
+    ["H", 0.0, 0.0, -1.2],
+]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[scf]
+max_iterations = 100
+use_diis = true
+[properties]
+nocv_fragments = [[0], [1, 2]]
+)");
+    ASSERT_FALSE(calciumHydride.has_value());
+    EXPECT_EQ(calciumHydride.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(calciumHydride.error().message.find("the Aufbau table covers Z = 1..19"),
+              std::string::npos)
+        << calciumHydride.error().message;
 }
 
 TEST(DriverErrorTest, CertifiedBoundEnforcementDemotesWhereItCannotRunAndRefusesOnThePerSpinLegs) {
