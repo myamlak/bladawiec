@@ -27,11 +27,12 @@ scf, response, io — consumed by: driver. Machine-checked by
 - `AnalyzeHirshfeld` / `AnalyzeVoronoi` — density-grid charges.
 - `AnalyzeEspCharges` — the CHELPG/MK fits.
 - `AnalyzeNocvEts` — the ETS-NOCV decomposition.
-- `WavefunctionView` — the read-only view a property reads: total density,
-  the spin densities when the run is unrestricted, the method word, and the
-  convergence state.
-- `DeclarationFor` / `AllDeclarations` — the coverage record: what each
-  analysis supports and the named reason where the driver refuses it.
+- `WavefunctionView` — the read-only view a property will read: total density,
+  the spin densities when the run is spin-resolved (unrestricted or
+  restricted open-shell), the method word, and the convergence state. It is a
+  declaration today; the analyses still take the raw density matrices.
+- `DeclarationFor` / `AllDeclarations` — the coverage record: what the driver
+  does with each analysis today, and the named reason where it refuses.
 
 ## Rationale pointers
 

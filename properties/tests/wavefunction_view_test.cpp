@@ -1,6 +1,6 @@
 // The wavefunction view's contract: it copies no density, it reports the
 // driver's method word and convergence state unchanged, and it carries spin
-// densities only when the unrestricted constructor supplied them.
+// densities only when the spin-resolved constructor supplied them.
 
 #include "qcx/io/run_input.hpp"
 #include "qcx/properties/wavefunction_view.hpp"
@@ -54,20 +54,37 @@ TEST(WavefunctionViewTest, ARestrictedViewHasNoSpinDensities) {
     }
 }
 
-TEST(WavefunctionViewTest, AnUnrestrictedViewCarriesBothSpins) {
+TEST(WavefunctionViewTest, ASpinResolvedViewCarriesBothSpins) {
     const Eigen::MatrixXd total = MakeDensity(3.0);
     const Eigen::MatrixXd alpha = MakeDensity(2.0);
     const Eigen::MatrixXd beta = MakeDensity(1.0);
 
-    for (const MethodType method : {MethodType::kUhf, MethodType::kUks})
+    for (const MethodType method :
+         {MethodType::kUhf, MethodType::kUks, MethodType::kRohf, MethodType::kRoks})
     {
         const WavefunctionView view(total, alpha, beta, method, true);
 
         EXPECT_TRUE(view.HasSpinDensities());
-        EXPECT_TRUE(view.IsUnrestricted());
         EXPECT_EQ(&view.TotalDensity(), &total);
         EXPECT_EQ(&view.AlphaDensity(), &alpha);
         EXPECT_EQ(&view.BetaDensity(), &beta);
+    }
+}
+
+// "Restricted" is not "equal spins": the restricted open-shell pair has one
+// spatial orbital set but a real spin density, so it is spin-resolved and NOT
+// unrestricted. A property that needs the spins asks HasSpinDensities().
+TEST(WavefunctionViewTest, RestrictedOpenShellIsSpinResolvedButNotUnrestricted) {
+    const Eigen::MatrixXd total = MakeDensity(3.0);
+    const Eigen::MatrixXd alpha = MakeDensity(2.0);
+    const Eigen::MatrixXd beta = MakeDensity(1.0);
+
+    for (const MethodType method : {MethodType::kRohf, MethodType::kRoks})
+    {
+        const WavefunctionView view(total, alpha, beta, method, true);
+
+        EXPECT_TRUE(view.HasSpinDensities()) << qcx::io::ToString(method);
+        EXPECT_FALSE(view.IsUnrestricted()) << qcx::io::ToString(method);
     }
 }
 
@@ -87,8 +104,12 @@ TEST(WavefunctionViewTest, ACopyAddressesTheSameMatrices) {
 TEST(WavefunctionViewTest, MethodAndConvergenceAreTheDrivers) {
     const Eigen::MatrixXd total = MakeDensity(2.0);
 
-    for (const MethodType method :
-         {MethodType::kRhf, MethodType::kUhf, MethodType::kRks, MethodType::kUks})
+    for (const MethodType method : {MethodType::kRhf,
+                                    MethodType::kUhf,
+                                    MethodType::kRks,
+                                    MethodType::kUks,
+                                    MethodType::kRohf,
+                                    MethodType::kRoks})
     {
         const WavefunctionView view(total, method, false);
 

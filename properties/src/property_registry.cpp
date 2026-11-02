@@ -21,6 +21,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
@@ -31,6 +33,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .kind = PropertyKind::kMultipoles,
         .name = "multipoles",
         .byMethod = {RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone},
@@ -47,6 +51,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 10,
@@ -58,6 +64,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .kind = PropertyKind::kVoronoi,
         .name = "voronoi",
         .byMethod = {RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone},
@@ -72,6 +80,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
@@ -82,6 +92,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .kind = PropertyKind::kEddb,
         .name = "eddb",
         .byMethod = {RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone},
@@ -98,6 +110,10 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kFukuiKohnShamSpecies,
+                     RefusalReason::kFukuiKohnShamSpecies,
+                     // ROHF is not a Kohn-Sham run: the charged species are
+                     // Hartree-Fock ones, the same physics as the parent.
+                     RefusalReason::kNone,
                      RefusalReason::kFukuiKohnShamSpecies},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
@@ -109,6 +125,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .kind = PropertyKind::kNalewajski,
         .name = "nalewajski",
         .byMethod = {RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone},
@@ -123,6 +141,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
@@ -133,6 +153,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .kind = PropertyKind::kQtaim,
         .name = "qtaim",
         .byMethod = {RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone},
@@ -151,6 +173,10 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kEtsNocvClosedShellOnly,
                      RefusalReason::kEtsNocvHartreeFockOnly,
+                     RefusalReason::kEtsNocvClosedShellOnly,
+                     // The restricted open-shell pair is per spin, so the
+                     // closed-shell refusal fires before the functional one.
+                     RefusalReason::kEtsNocvClosedShellOnly,
                      RefusalReason::kEtsNocvClosedShellOnly},
         .refusesWhenFunctionalNamed = true,
         .maxAtomicNumber = 19,
@@ -165,20 +191,26 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kNone,
                      RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
                      RefusalReason::kNone},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
         .elementRefusal = RefusalReason::kNone,
         .evidence = "WriteMoldenExport; tests H2MoldenEndToEnd, O2MoldenUhfTwoBlocks",
     },
-    // Both gradients refuse by the method's Kohn-Sham key policy before the
-    // driver is reached.
+    // xc_gradient refuses by the method's Kohn-Sham key policy before the
+    // driver is reached; total_gradient refuses by its own closed-shell rule
+    // (the assembly differentiates a converged closed-shell reference), which
+    // the input validator states separately.
     {
         .kind = PropertyKind::kXcGradient,
         .name = "xc-gradient",
         .byMethod = {RefusalReason::kXcGradientRequiresFunctional,
                      RefusalReason::kXcGradientRequiresFunctional,
                      RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kXcGradientRequiresFunctional,
                      RefusalReason::kNone},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
@@ -192,6 +224,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kTotalGradientRequiresClosedShell,
                      RefusalReason::kNone,
+                     RefusalReason::kTotalGradientRequiresClosedShell,
+                     RefusalReason::kTotalGradientRequiresClosedShell,
                      RefusalReason::kTotalGradientRequiresClosedShell},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
@@ -205,7 +239,7 @@ static_assert(kDeclarations.size() == static_cast<std::size_t>(PropertyKind::kTo
               "the declaration table must hold one row per PropertyKind, in enumerator order");
 
 // The position of a method kind in a declaration's column order, which is
-// MethodType's own order. A value outside the four returns kMethodKindCount:
+// MethodType's own order. A value outside the six returns kMethodKindCount:
 // the lookup below reports it as kUnclassifiedMethod rather than reading past
 // the row.
 constexpr std::size_t MethodIndex(MethodType method) noexcept {
@@ -219,6 +253,10 @@ constexpr std::size_t MethodIndex(MethodType method) noexcept {
         return 2;
     case MethodType::kUks:
         return 3;
+    case MethodType::kRohf:
+        return 4;
+    case MethodType::kRoks:
+        return 5;
     }
 
     return kMethodKindCount;

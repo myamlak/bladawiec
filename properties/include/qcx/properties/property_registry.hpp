@@ -13,9 +13,12 @@ namespace qcx::properties {
 /// One analysis the driver can run over an SCF result.
 ///
 /// The order is the registry's order: the declaration table holds exactly one
-/// entry per enumerator, and the coverage test walks this list against the
-/// driver's behaviour. The names are the stable words of the coverage record;
-/// ToString is their one home.
+/// entry per enumerator, and the coverage test walks the table against the
+/// driver outcomes transcribed from its code paths (the properties module
+/// cannot link the driver, so the transcription is the test's input and the
+/// driver tests named in each row's evidence are what makes it checkable).
+/// The names are the stable words of the coverage record; ToString is their
+/// one home, and a test holds every declaration's copy equal to it.
 /// \ingroup qcx-properties
 enum class PropertyKind : std::uint8_t {
     kPopulations, ///< Mulliken/Lowdin/Mayer/Gopinathan-Jug (always on).
@@ -94,7 +97,7 @@ enum class RefusalReason : std::uint8_t {
 /// The number of method kinds a declaration states, one per
 /// qcx::io::MethodType enumerator.
 /// \ingroup qcx-properties
-inline constexpr std::size_t kMethodKindCount = 4;
+inline constexpr std::size_t kMethodKindCount = 6;
 
 /// Where a declaration's element limit applies.
 /// \ingroup qcx-properties
@@ -121,9 +124,11 @@ struct PropertyDeclaration {
     /// The stable word of the coverage record (ToString(kind)).
     std::string_view name;
     /// The outcome on each method kind, in the method-kind order ToString
-    /// documents for qcx::io::MethodType: rhf, uhf, rks, uks. kNone means
-    /// the driver runs the property on that kind.
+    /// documents for qcx::io::MethodType: rhf, uhf, rks, uks, rohf, roks.
+    /// kNone means the driver runs the property on that kind.
     std::array<RefusalReason, kMethodKindCount> byMethod{
+        RefusalReason::kNone,
+        RefusalReason::kNone,
         RefusalReason::kNone,
         RefusalReason::kNone,
         RefusalReason::kNone,

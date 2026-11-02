@@ -44,6 +44,8 @@ constexpr std::array<MethodType, qcx::properties::kMethodKindCount> kMethodKinds
     MethodType::kUhf,
     MethodType::kRks,
     MethodType::kUks,
+    MethodType::kRohf,
+    MethodType::kRoks,
 };
 
 constexpr std::size_t kPropertyCount = static_cast<std::size_t>(PropertyKind::kTotalGradient) + 1;
@@ -72,53 +74,113 @@ struct ExpectedRow {
 };
 
 // The driver's current outcome, one row per property, in the column order
-// rhf, uhf, rks, uks. The refusals are transcribed from the driver's pre-run
-// checks (fukui on a Kohn-Sham parent; ETS-NOCV on an unrestricted run and on
-// a functional-naming method) and the input validator's two gradient
-// policies; the element limits are declared beside the table and checked
-// separately.
+// rhf, uhf, rks, uks, rohf, roks. The refusals are transcribed from the
+// driver's pre-run checks (fukui on a Kohn-Sham parent; ETS-NOCV on a per-spin
+// run and on a functional-naming method) and the input validator's two
+// gradient policies plus the restricted open-shell key policy; the element
+// limits are declared beside the table and checked separately.
 constexpr std::array<ExpectedRow, kPropertyCount> kExpected{{
     {PropertyKind::kPopulations,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kMultipoles,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kHirshfeld,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kVoronoi,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kEsp,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kEddb,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kFukui,
      {RefusalReason::kNone,
       RefusalReason::kNone,
       RefusalReason::kFukuiKohnShamSpecies,
+      RefusalReason::kFukuiKohnShamSpecies,
+      RefusalReason::kNone,
       RefusalReason::kFukuiKohnShamSpecies}},
     {PropertyKind::kNalewajski,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kDensityAtNuclei,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kQtaim,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     // The closed-shell check precedes the functional check, so uks reports the
-    // closed-shell reason and only rks reports the Hartree-Fock one.
+    // closed-shell reason and only rks reports the Hartree-Fock one; the
+    // restricted open-shell pair is per spin and reports the closed-shell
+    // reason like uks.
     {PropertyKind::kEtsNocv,
      {RefusalReason::kNone,
       RefusalReason::kEtsNocvClosedShellOnly,
       RefusalReason::kEtsNocvHartreeFockOnly,
+      RefusalReason::kEtsNocvClosedShellOnly,
+      RefusalReason::kEtsNocvClosedShellOnly,
       RefusalReason::kEtsNocvClosedShellOnly}},
     {PropertyKind::kMolden,
-     {RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone, RefusalReason::kNone}},
+     {RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kXcGradient,
      {RefusalReason::kXcGradientRequiresFunctional,
       RefusalReason::kXcGradientRequiresFunctional,
       RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kXcGradientRequiresFunctional,
       RefusalReason::kNone}},
     {PropertyKind::kTotalGradient,
      {RefusalReason::kNone,
       RefusalReason::kTotalGradientRequiresClosedShell,
       RefusalReason::kNone,
+      RefusalReason::kTotalGradientRequiresClosedShell,
+      RefusalReason::kTotalGradientRequiresClosedShell,
       RefusalReason::kTotalGradientRequiresClosedShell}},
 }};
 
@@ -224,9 +286,9 @@ TEST(PropertyRegistryTest, TheFunctionalRuleMatchesTheKohnShamCells) {
             continue;
         }
 
-        // Both Kohn-Sham method words name a functional; the rule says every
+        // Every Kohn-Sham method word names a functional; the rule says every
         // one of them is refused, whichever reason has precedence.
-        for (const MethodType method : {MethodType::kRks, MethodType::kUks})
+        for (const MethodType method : {MethodType::kRks, MethodType::kUks, MethodType::kRoks})
         {
             EXPECT_NE(RefusalFor(declaration.kind, method), RefusalReason::kNone)
                 << ToString(declaration.kind) << " on " << qcx::io::ToString(method);
@@ -315,6 +377,11 @@ TEST(PropertyRegistryTest, TheMatrixPrints) {
         matrix << " | " << qcx::io::ToString(method);
     }
 
+    // The cross-cutting conditions are columns too: a matrix that showed only
+    // the method axis would hide the element caps and the functional rule the
+    // same declaration states.
+    matrix << " | max-Z | element-scope | functional-refused";
+
     for (const ExpectedRow& expected : kExpected)
     {
         matrix << "\n" << ToString(expected.kind);
@@ -323,6 +390,12 @@ TEST(PropertyRegistryTest, TheMatrixPrints) {
         {
             matrix << " | " << ToString(RefusalFor(expected.kind, method));
         }
+
+        const PropertyDeclaration& declaration = DeclarationFor(expected.kind);
+        matrix << " | " << declaration.maxAtomicNumber << " | "
+               << (declaration.elementScope == ElementScope::kMolecule ? "molecule"
+                                                                       : "single-atom-fragment")
+               << " | " << (declaration.refusesWhenFunctionalNamed ? "yes" : "no");
     }
 
     const std::string printed = matrix.str();

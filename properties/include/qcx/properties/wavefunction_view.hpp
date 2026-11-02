@@ -30,10 +30,13 @@ namespace qcx::properties {
 /// where they are not supplied, rather than receiving fabricated halves.
 ///
 /// The trap this shape exists to avoid: "restricted" does not mean "the two
-/// spins are equal". A restricted open-shell wavefunction has a real spin
-/// density and is not expressible through this two-constructor view. When that
-/// kind lands it extends the view with the spin density; it must never be
-/// approximated by the closed-shell halves.
+/// spins are equal". A restricted open-shell (ROHF/ROKS) wavefunction has a
+/// real spin density, so it takes the SPIN-RESOLVED constructor with the
+/// pair the restricted loop returns - the same halves every other per-spin
+/// run carries - and it is never approximated by the closed-shell halves.
+/// Its IsUnrestricted() answer stays false (one spatial orbital set), which is
+/// why a property that needs the spin densities asks HasSpinDensities() and
+/// never IsUnrestricted().
 /// \ingroup qcx-properties
 class WavefunctionView {
 public:
@@ -50,15 +53,15 @@ public:
                      bool converged) noexcept :
         _totalDensity(totalDensity), _method(method), _converged(converged) {}
 
-    /// Views an unrestricted run: the total density plus both spin densities.
+    /// Views a spin-resolved run: the total density plus both spin densities.
     /// \param totalDensity The run's total density P_alpha + P_beta.
     /// \param alphaDensity The alpha spin density P_alpha.
     /// \param betaDensity The beta spin density P_beta.
     /// \param method The method kind the driver ran.
     /// \param converged True when the SCF reported convergence; false means
     /// the densities are the last iterate.
-    /// \pre \p method is qcx::io::MethodType::kUhf or
-    /// qcx::io::MethodType::kUks.
+    /// \pre \p method is qcx::io::MethodType::kUhf, qcx::io::MethodType::kUks,
+    /// qcx::io::MethodType::kRohf or qcx::io::MethodType::kRoks.
     /// \pre \p alphaDensity + \p betaDensity equals \p totalDensity. The
     /// caller owns the sum: the view copies no matrix and cannot check it.
     WavefunctionView(const Eigen::MatrixXd& totalDensity,
@@ -90,7 +93,7 @@ public:
     }
 
     /// The method kind the driver ran.
-    /// \returns One of the four qcx::io::MethodType enumerators.
+    /// \returns One of the six qcx::io::MethodType enumerators.
     qcx::io::MethodType Method() const noexcept {
         return _method;
     }
@@ -103,7 +106,10 @@ public:
         return _converged;
     }
 
-    /// Whether the run is an unrestricted kind (UHF or UKS).
+    /// Whether the run is an unrestricted kind (UHF or UKS), i.e. whether its
+    /// two spin channels have independent orbital sets. The restricted
+    /// open-shell pair is spin-resolved but restricted, so this predicate is
+    /// false there while HasSpinDensities() is true.
     /// \returns True for qcx::io::MethodType::kUhf and
     /// qcx::io::MethodType::kUks.
     bool IsUnrestricted() const noexcept {
