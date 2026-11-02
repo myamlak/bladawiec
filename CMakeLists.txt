@@ -15,9 +15,11 @@ option(QCX_ASAN "Enable AddressSanitizer (MSVC only; Clang/GCC builds use their 
 # OFF is the shipped configuration and what every preset and CI build: each
 # qcx-<module> is a static archive. ON makes them shared libraries by setting
 # BUILD_SHARED_LIBS, which is the only switch the module CMakeLists leave to
-# the standard variable. The option is a BUILD-SYSTEM axis only: it defines no
-# compile definition and changes no source, so no per-call cost can follow
-# from it. What it does change, per platform, is stated where each term is
+# the standard variable. The option defines no compile definition and edits no
+# source, so no per-call cost can follow from the option itself; a shared
+# build does carry the ELF/dynamic-loader indirection the comparison
+# instrument exists to price, and that indirection is what the instrument
+# measures. What it does change, per platform, is stated where each term is
 # set below.
 option(QCX_BUILD_SHARED
     "Build the first-party qcx libraries as shared libraries (vendored trees stay static)"
@@ -45,23 +47,29 @@ if (QCX_BUILD_SHARED)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
     if (MSVC)
-        # MSVC exports nothing from a DLL by default. AUTOEXPORT rather than a
-        # QCX_API macro on every public declaration: the public surface is
-        # large and header-heavy, the option must not touch a single public
-        # header, and the documented gap of this property - a data symbol
-        # needs __declspec(dllimport) at the consumer - does not arise here
-        # (the tree defines no cross-DLL data symbol; its only non-constexpr
-        # static member is function-local). An export macro would be a second,
-        # hand-maintained copy of the public API in every header.
-        #
-        # Auto-export scans EVERY object handed to the linker, PCH objects
-        # included, and a PCH object carries a mangled `__@@_PchSym_...` whose
-        # bare `__` prefix the .def writer emits as an export. One PCH object
-        # per link is therefore a hard requirement of this mode: two leave the
-        # linker unable to choose (LNK4022, then LNK2001). The one module with
-        # an OBJECT-library split compiles those TUs into the DLL itself in
-        # this mode; integrals/CMakeLists.txt states the mechanism there.
-        set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+        # REFUSED, and the reason is a defect this mode would ship: an inline
+        # variable defined in a header gets ONE copy per DLL on MSVC. The tree
+        # keeps mutable instrumentation state that way - the allocation
+        # instrument's switches and per-tag counters
+        # (memory/include/qcx/memory/allocation_instrument.hpp) and the CPU
+        # scheduler's process-wide settings (backend/include/qcx/backend/
+        # cpu_scheduler.hpp) - and the driver's thread ceiling writes one
+        # copy while the library reads another. Measured on the shared build:
+        # `dumpbin /exports qcx-memory.dll` exports
+        # gAttributionEnabled and the per-tag arrays, and a driver run with
+        # [memory_instrument] enabled reported zeroes in every column. A
+        # shared MSVC build therefore changes program semantics, and an
+        # import/export macro on the mutable data would put an indirection on
+        # the allocation and Fock hot paths - the runtime-effectiveness rule
+        # forbids paying that silently. The route to the MSVC arm is an
+        # out-of-line instrument state with an explicit API, priced as its own
+        # change; until then the shared mode is the ELF one.
+        message(FATAL_ERROR
+            "QCX_BUILD_SHARED is not available on MSVC: header-defined mutable "
+            "inline variables are duplicated per DLL, so the memory instrument "
+            "and the CPU scheduler would run with per-module copies (measured; "
+            "see the comment above). Use the ELF shared presets (wsl-gcc-shared, "
+            "wsl-clang-shared) for the link-mode comparison.")
     else()
         # ELF: default visibility is the choice, not an omission. The public
         # API is C++ headers with inline and template content and no promised

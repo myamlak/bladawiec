@@ -30,10 +30,13 @@ THE PROTOCOL (taken from the tree's timing tools, not invented here)
     those per-round ratios, with a seeded percentile bootstrap interval over
     the rounds. It is never a difference of separately measured medians. The
     minimum call time is the robust figure the Fock acceptance benchmark
-    documents; the mean carries the first-call warm-up.
+    documents; the warm-up calls are discarded before it is taken, so the
+    mean would carry nothing the minimum does not - it is not used.
   * The ratio is reported with its whole sample (every per-round ratio) and
     with the interval. A wide interval is reported as wide; the script does not
-    re-run a cell until it looks tight.
+    re-run a cell until it looks tight. One interval rule binds: a point
+    estimate that passes but whose interval reaches past the fail bound is
+    FLAGGED, because such a run cannot tell a pass from a fail.
 
 THE PRE-REGISTERED BANDS
   Ratio (head/base, upper side - the rule gates slowdown):
@@ -130,9 +133,9 @@ CanaryPassPercent = 5.0
 CanaryProvisionalPercent = 10.0
 ChecksumTolerance = 1e-10
 
-# The measurement shape. Ten rounds is the amendment's working default for a
-# paired comparison; five is the floor below which an interval says nothing
-# the reader can act on.
+# The measurement shape. Ten rounds is this instrument's default for a paired
+# comparison; five is the floor below which an interval says nothing the reader
+# can act on.
 DefaultRounds = 10
 MinimumRounds = 5
 DefaultIterations = 21
@@ -675,12 +678,19 @@ def CanaryVerdict(readings: list) -> dict:
 
 
 def RatioVerdict(ratio: float, ci: dict) -> dict:
-    """The pre-registered band on the ratio. The interval is reported beside
-    the verdict but does not overrule it: the band is on the point estimate,
-    and a wide interval is a reason to repeat the run, which the PROVISIONAL
-    status already says."""
+    """The pre-registered band on the ratio.
+
+    The point estimate decides the band, with one interval rule: a run whose
+    point estimate passes but whose interval reaches past the fail bound is
+    not evidence of a pass - it cannot tell a pass from a fail - so it is
+    reported as a flag (PROVISIONAL at the combined stage) rather than as a
+    pass. That is the pre-registered reading of "repeat it in a quiet
+    window"."""
     if ratio <= RatioPassBound:
         verdict = "pass"
+
+        if ci.get("high") is not None and ci["high"] > RatioFailBound:
+            verdict = "flag"
     elif ratio <= RatioFailBound:
         verdict = "flag"
     else:
@@ -688,12 +698,38 @@ def RatioVerdict(ratio: float, ci: dict) -> dict:
 
     return {"verdict": verdict, "ratio": ratio, "pass_bound": RatioPassBound,
             "fail_bound": RatioFailBound,
-            "ci_low": ci.get("low"), "ci_high": ci.get("high")}
+            "ci_low": ci.get("low"), "ci_high": ci.get("high"),
+            "interval_crosses_fail_bound": bool(
+                ci.get("high") is not None and ci["high"] > RatioFailBound)}
 
 
 def CombinedVerdict(canary: dict, ratio: dict, checksum: dict,
-                    quiet: dict) -> dict:
+                    quiet: dict, freshness: dict | None = None) -> dict:
     reasons = []
+
+    # A binary older than the tree that produced it is not this revision's
+    # binary: the timing belongs to whatever revision is in the file. The
+    # freshness verdict is the tree's own index, so a stale arm refuses the
+    # run outright rather than being averaged into it.
+    stale = [label for label, record in (freshness or {}).items()
+             if record and record.get("stale") is True]
+
+    if stale:
+        reasons.append(
+            f"the {' and '.join(stale)} executable is older than its build "
+            f"tree (stale); a stale binary proves nothing about this revision")
+        return {"status": "FAIL", "exit_code": 1, "reasons": reasons}
+
+    # An arm whose freshness cannot be judged (a private copy, a tree with no
+    # index entry) is not stale, but it is also not proved; the run is
+    # provisional rather than silently trusted.
+    unproved = [label for label, record in (freshness or {}).items()
+                if record is not None and record.get("stale") is None]
+
+    if unproved:
+        reasons.append(
+            f"the {' and '.join(unproved)} executable's freshness could not "
+            f"be judged ({', '.join(str((freshness[label] or {}).get('reason')) for label in unproved)})")
 
     # The checksum does not depend on the clock: a disagreement means the arms
     # did different work, and no timing from such a run means anything.
@@ -723,9 +759,14 @@ def CombinedVerdict(canary: dict, ratio: dict, checksum: dict,
             f"canary peak {canary['peak_percent']:.1f}% is above "
             f"{CanaryPassPercent:.0f}%")
     if ratio["verdict"] == "flag":
-        reasons.append(
-            f"ratio {ratio['ratio']:.4f} is above {RatioPassBound} but inside "
-            f"the fail bound")
+        if ratio.get("interval_crosses_fail_bound") and ratio["ratio"] <= RatioPassBound:
+            reasons.append(
+                f"ratio {ratio['ratio']:.4f} passes but its interval reaches "
+                f"{ratio['ci_high']:.4f}, past the fail bound {RatioFailBound}")
+        else:
+            reasons.append(
+                f"ratio {ratio['ratio']:.4f} is above {RatioPassBound} but "
+                f"inside the fail bound {RatioFailBound}")
     if canary["verdict"] == "unmeasurable":
         reasons.append("the canary produced no reading")
     if quiet.get("verdict") in ("busy", "unmeasurable"):
@@ -777,7 +818,9 @@ def RunRounds(arms: dict, args) -> dict:
 
 def ChecksumSummary(rounds: list) -> dict:
     """Both arms must produce the same Fock matrix: the comparison's premise
-    is that they did the same work, and a checksum is what proves it."""
+    is that they did the same work. The record carries one sum per arm, so it
+    catches a differing matrix rather than proving two matrices equal; a
+    disagreement is enough to void the run, which is what the premise needs."""
     values = [row["arms"][label]["fock_sum"] for row in rounds
               for label in ("base", "head")]
     reference = values[0]
@@ -1069,7 +1112,23 @@ def Main(argv: list) -> int:
             if arm.get("exe"):
                 continue
 
-            if not (args.reuse_trees and arm["tree"].exists()):
+            if args.reuse_trees and arm["tree"].exists():
+                # A reused tree is only this arm if it is AT the revision
+                # asked for. A head tree left at the base revision would
+                # otherwise produce ratio 1.0 and a false pass.
+                reused = subprocess.run(
+                    ["git", "-C", str(arm["tree"]), "rev-parse", "HEAD"],
+                    capture_output=True, text=True)
+
+                head = reused.stdout.strip() if reused.returncode == 0 else ""
+
+                if head != arm["commit"]:
+                    raise SetupError(
+                        f"the reused {label} tree {arm['tree']} is at "
+                        f"{head or 'an unreadable revision'}, not the "
+                        f"requested {arm['commit']} ({arm['rev']}): drop "
+                        f"--reuse-trees or remove the tree")
+            else:
                 CreateArmTree(repo, arm["tree"], arm["rev"])
                 created_trees.append(arm["tree"])
 
@@ -1123,8 +1182,12 @@ def Main(argv: list) -> int:
         rounds = measured["rounds"]
         summary = Summarize(rounds, args)
         checksum = ChecksumSummary(rounds)
+        arm_records = {label: ArmRecord(label, arms[label])
+                       for label in ("base", "head")}
+        freshness = {label: record.get("freshness")
+                     for label, record in arm_records.items()}
         verdict = CombinedVerdict(summary["canary"], summary["ratio"],
-                                  checksum, quiet)
+                                  checksum, quiet, freshness)
 
         record = {
             "schema": "qcx-link-mode-comparison/1",
@@ -1151,8 +1214,7 @@ def Main(argv: list) -> int:
             "machine": system.MachineState(),
             "covariates_before": covariates_before,
             "covariates_after": covariates_after,
-            "arms": {label: ArmRecord(label, arms[label])
-                     for label in ("base", "head")},
+            "arms": arm_records,
             "quiet": quiet,
             "rounds": rounds,
             "summary": summary,

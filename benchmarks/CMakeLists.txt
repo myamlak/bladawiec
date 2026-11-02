@@ -375,9 +375,11 @@ target_precompile_headers(qcx-bench-fock-parallel PRIVATE
 qcx_apply_blas_runtime(qcx-bench-fock-parallel)
 
 # The link-mode hot-call instrument: wall time of ONE direct Fock build on the
-# fixed C12H26/STO-3G fixture, each call wrapped in the fixed-work canary, with
-# a machine-readable record (--json) and the Fock checksum that proves both
-# arms computed the same matrix. Plain main(), not a google-benchmark run.
+# fixed C6H14/STO-3G fixture, each call wrapped in the fixed-work canary, with
+# a machine-readable record (--json) and a Fock checksum the comparison reads
+# to catch the arms computing different matrices. The checksum is a sum, so it
+# catches a differing matrix but does not prove two matrices equal. Plain
+# main(), not a google-benchmark run.
 # Consumed by tools/bench/link_mode_comparison.py, which owns the protocol
 # (quiet window, memory gate, warm-up, ABBA ordering, ratio band, canary band);
 # this target only measures one arm's calls.

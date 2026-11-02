@@ -281,8 +281,7 @@ target_precompile_headers(qcx-integrals PRIVATE
 # 2*QCX_INTEGRALS_LMAX) UNION the RI rectangle (LKet <= QCX_INTEGRALS_LMAX,
 # LBra <= 2*QCX_INTEGRALS_LMAX) - 154 classes at Lmax=6, 24 at Lmax=2 (a
 # reduced local build; the counts match the CUDA matrix below). The classes are one OBJECT library, not
-# one per class (in the MSVC shared build they compile into the DLL itself,
-# for the linker reason stated in the loop below): a precompiled header of <internal/md_vrr.hpp> measured about
+# one per class: a precompiled header of <internal/md_vrr.hpp> measured about
 # 1 GiB, so one per class wrote 152 GiB and filled the Windows runners' disks
 # (C1085/C1088). One PCH for the matrix bounds the disk; parallelism is the
 # build tool's (Ninja compiles sources in parallel, and the vcpkg toolchain's
@@ -344,36 +343,14 @@ foreach(_lket RANGE 0 ${_qcxLmax2})
     endforeach()
 endforeach()
 set(_qcxMdClassObjects "")
-set(_qcxMdSharedTus "")
 foreach(_shard RANGE 0 7)
     set(_shardVar qcxMdShard_${_shard}_tus)
     if (${_shardVar})
-        if (QCX_BUILD_SHARED AND MSVC)
-            # ONE PCH OBJECT PER DLL LINK. MSVC's auto-export scans every
-            # object handed to the linker, PCH objects included, and each PCH
-            # object carries a mangled `__@@_PchSym_...` whose bare `__` prefix
-            # the .def writer emits as an export. Two PCH objects in one link
-            # (the DLL's own and the shard's) leave the linker unable to choose
-            # between them: LNK4022, then LNK2001 on `__`. Compiling the class
-            # TUs into the DLL itself keeps exactly one, and keeps them
-            # precompiled - the target's header instead of the shard's. The
-            # shard target exists only in the static build, so its PCH is not
-            # built there at all.
-            set(_qcxMdSharedTus ${_qcxMdSharedTus} ${${_shardVar}})
-        else()
-            qcx_add_md_class_shard(${_shard} ${${_shardVar}})
-            list(APPEND _qcxMdClassObjects $<TARGET_OBJECTS:qcx-md-class-shard-${_shard}>)
-        endif()
+        qcx_add_md_class_shard(${_shard} ${${_shardVar}})
+        list(APPEND _qcxMdClassObjects $<TARGET_OBJECTS:qcx-md-class-shard-${_shard}>)
     endif()
 endforeach()
-if (QCX_BUILD_SHARED AND MSVC)
-    target_sources(qcx-integrals PRIVATE ${_qcxMdSharedTus})
-    # The shard project's ceiling, for the same reason: one project now holds
-    # every class TU.
-    target_compile_options(qcx-integrals PRIVATE /MP4)
-else()
-    target_sources(qcx-integrals PRIVATE ${_qcxMdClassObjects})
-endif()
+target_sources(qcx-integrals PRIVATE ${_qcxMdClassObjects})
 
 if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-integrals-tests
@@ -581,8 +558,8 @@ if (QCX_ENABLE_CUDA)
     # qcx-backend / qcx-memory links, raw device pointers + void* streams.
     # STATIC in both link modes - the backend block's reason, repeated here
     # because this lane has its own targets: CI never builds CUDA, and its
-    # nvcc/device link is not the MSVC auto-export flow QCX_BUILD_SHARED
-    # configures for the CPU modules.
+    # nvcc/device link is not part of the CPU contract QCX_BUILD_SHARED
+    # configures.
     add_library(qcx-integrals-cuda STATIC
         ${_qcxBoysExt}/src/boys_cuda.cpp
         ${_qcxBoysExt}/src/boys_cuda.cu)

@@ -101,9 +101,9 @@ if (QCX_ENABLE_CUDA)
     target_compile_definitions(qcx-backend PUBLIC QcxHasCuda=1)
 
     # STATIC in both link modes: the CUDA backend is a local-only lane that CI
-    # never builds, its nvcc/device link is not the MSVC auto-export flow, and
-    # QCX_BUILD_SHARED promises the CPU path only. An explicit type keeps the
-    # static default's linkage exactly.
+    # never builds, its nvcc/device link is not part of the shared mode's CPU
+    # contract, and QCX_BUILD_SHARED promises the CPU path only. An explicit
+    # type keeps the static default's linkage exactly.
     add_library(qcx-backend-cuda STATIC
       src/cuda_backend.cpp
       src/cuda_backend.cu
