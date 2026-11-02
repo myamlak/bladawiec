@@ -94,6 +94,15 @@ std::optional<ClosedShellRule> ClosedShellRuleFor(MethodType method) {
 
     case MethodType::kRks:
         return ClosedShellRule{"rks", "uks"};
+
+    // The restricted open-shell lanes are open-shell NATIVE: their fixed
+    // closed/open split is what carries the unpaired electrons, so a
+    // multiplicity above one is exactly the request they are for and there is
+    // no spin rule this layer could state. They name the answer explicitly
+    // rather than inheriting it from a no-restriction default.
+    case MethodType::kRohf:
+    case MethodType::kRoks:
+        return std::nullopt;
     }
 
     // Reached only by a value no enumerator names (a programmatic caller's
@@ -124,6 +133,12 @@ std::string_view MethodWord(MethodType method) {
 
     case MethodType::kUks:
         return "uks";
+
+    case MethodType::kRohf:
+        return "rohf";
+
+    case MethodType::kRoks:
+        return "roks";
     }
 
     return "unknown";
@@ -166,10 +181,12 @@ std::optional<XcKeyPolicy> XcKeyPolicyFor(MethodType method) {
     // ignored (the no-silent-substitution posture).
     case MethodType::kRhf:
     case MethodType::kUhf:
+    case MethodType::kRohf:
         return XcKeyPolicy{false, false, false, false};
 
     case MethodType::kRks:
     case MethodType::kUks:
+    case MethodType::kRoks:
         return XcKeyPolicy{true, true, true, true};
     }
 
@@ -349,7 +366,7 @@ ValidationReport ValidateInput(const RunInput& input) {
     {
         report.issues.push_back(
             "method.functional: " + std::string(MethodWord(input.method.method)) +
-            " does not take a functional (the Kohn-Sham methods rks and uks do; "
+            " does not take a functional (the Kohn-Sham methods rks, uks and roks do; "
             "remove the key or change method.type)");
     }
 
@@ -359,7 +376,7 @@ ValidationReport ValidateInput(const RunInput& input) {
         report.issues.push_back(
             "method.screening_tolerance: " + std::string(MethodWord(input.method.method)) +
             " does not take a screening tolerance (nothing is evaluated on a grid; the "
-            "Kohn-Sham methods rks and uks do)");
+            "Kohn-Sham methods rks, uks and roks do)");
     }
 
     // The `[grid]` block belongs to the same family: the XC integration
@@ -374,7 +391,7 @@ ValidationReport ValidateInput(const RunInput& input) {
         report.issues.push_back(
             "[grid]: " + std::string(MethodWord(input.method.method)) +
             " does not take an XC integration grid (no density functional is integrated, so "
-            "nothing is evaluated on a grid; the Kohn-Sham methods rks and uks do)");
+            "nothing is evaluated on a grid; the Kohn-Sham methods rks, uks and roks do)");
     }
 
     // `[properties] xc_gradient` is the same family's fourth key: the quantity
@@ -388,7 +405,7 @@ ValidationReport ValidateInput(const RunInput& input) {
         report.issues.push_back(
             "properties.xc_gradient: " + std::string(MethodWord(input.method.method)) +
             " does not take an exchange-correlation gradient (no density functional is "
-            "differentiated; the Kohn-Sham methods rks and uks do)");
+            "differentiated; the Kohn-Sham methods rks, uks and roks do)");
     }
 
     // `[properties] total_gradient` is the closed-shell analytic gradient's
@@ -411,6 +428,26 @@ ValidationReport ValidateInput(const RunInput& input) {
             " does not take the total analytic gradient (the assembly differentiates a "
             "converged closed-shell reference; the rhf and rks methods are the only lanes "
             "that run one)");
+    }
+
+    // `[symmetry] full_group` is refused on the restricted open-shell lanes,
+    // by name. The labeling stage symmetrizes the occupied space it is handed,
+    // and the closed/open split the Roothaan effective Fock is assembled from
+    // is exactly what that symmetrization does not preserve: a stage free to
+    // rotate within the occupied space can mix a closed orbital into the open
+    // set, and the fixed occupation the method states would then describe a
+    // different determinant. The stage is a-posteriori on every other lane,
+    // which is why it is on by default there; on these two the key must be
+    // written false, so the refusal names the key and the value (no silent
+    // demotion of a written request).
+    if ((input.method.method == MethodType::kRohf || input.method.method == MethodType::kRoks) &&
+        input.symmetry.fullGroup)
+    {
+        report.issues.push_back(
+            "[symmetry]: full_group is not available on method " +
+            std::string(MethodWord(input.method.method)) +
+            " (the labeling stage symmetrizes the occupied space without preserving the "
+            "closed/open split the method is built from); write full_group = false");
     }
 
     // The `[dispersion]` block's cross-key rules. The module resolves a

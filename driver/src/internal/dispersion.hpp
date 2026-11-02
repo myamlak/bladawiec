@@ -29,10 +29,12 @@ namespace qcx::driver::internal {
 /// The method family a run with no dispersion parameters defaults to.
 ///
 /// The Kohn-Sham lanes read the input's own `[method] functional` name; the
-/// Hartree-Fock lanes name no functional and use "hf", which both forms'
-/// tables carry. An rks/uks run with no functional yields an empty family:
-/// that run is refused by the Kohn-Sham composition for the same missing key,
-/// and a dispersion default cannot be invented ahead of it.
+/// Hartree-Fock lanes (the closed-shell and unrestricted pair and the
+/// restricted open-shell one, which is Hartree-Fock in the functional's
+/// sense) name no functional and use "hf", which both forms' tables carry. A
+/// Kohn-Sham run with no functional yields an empty family: that run is
+/// refused by the Kohn-Sham composition for the same missing key, and a
+/// dispersion default cannot be invented ahead of it.
 /// \param input The run input.
 /// \returns The family name, or an empty view when the run names none.
 /// \ingroup qcx-driver
@@ -41,9 +43,11 @@ inline std::string_view DispersionMethodFamily(const qcx::io::RunInput& input) {
     {
     case qcx::io::MethodType::kRhf:
     case qcx::io::MethodType::kUhf:
+    case qcx::io::MethodType::kRohf:
         return "hf";
     case qcx::io::MethodType::kRks:
     case qcx::io::MethodType::kUks:
+    case qcx::io::MethodType::kRoks:
         return input.method.functional.has_value() ? std::string_view(*input.method.functional)
                                                    : std::string_view{};
     }

@@ -159,6 +159,88 @@ accuracy = "kNormal"
     EXPECT_TRUE(report.IsValid());
 }
 
+TEST(RunInputValidationTest, RestrictedOpenShellMethodsAcceptNonSingletMultiplicity) {
+    // The restricted open-shell lanes are open-shell NATIVE: their fixed
+    // closed/open split is what carries the unpaired electrons, so a doublet
+    // is exactly the request they are for and the closed-shell rule must not
+    // fire. The fixture writes full_group = false because the labeling stage
+    // is refused on these lanes (the next test), and this one pins the
+    // MULTIPLICITY rule alone.
+    const auto rohf = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rohf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[symmetry]
+full_group = false
+)");
+    EXPECT_TRUE(rohf.IsValid()) << (rohf.issues.empty() ? "" : rohf.issues[0]);
+
+    const auto roks = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "roks"
+accuracy = "kNormal"
+functional = "pbe"
+[symmetry]
+full_group = false
+)");
+    EXPECT_TRUE(roks.IsValid()) << (roks.issues.empty() ? "" : roks.issues[0]);
+}
+
+TEST(RunInputValidationTest, RestrictedOpenShellRefusesTheFullGroupLabeling) {
+    // The full-group labeling stage symmetrizes the occupied space it is
+    // handed, and the closed/open split the restricted open-shell method is
+    // built from is exactly what that symmetrization does not preserve. The
+    // key is refused by name on both words - full_group defaults to true, so
+    // a run that writes no [symmetry] block is refused too - and the refusal
+    // says what to write instead.
+    const auto rohf = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rohf"
+fock_builder = "direct"
+accuracy = "kNormal"
+)");
+    ASSERT_EQ(rohf.issues.size(), 1u);
+    EXPECT_EQ(rohf.issues[0],
+              "[symmetry]: full_group is not available on method rohf (the labeling stage "
+              "symmetrizes the occupied space without preserving the closed/open split the "
+              "method is built from); write full_group = false");
+
+    const auto roks = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "roks"
+accuracy = "kNormal"
+functional = "pbe"
+[symmetry]
+full_group = true
+)");
+    ASSERT_EQ(roks.issues.size(), 1u);
+    EXPECT_EQ(roks.issues[0],
+              "[symmetry]: full_group is not available on method roks (the labeling stage "
+              "symmetrizes the occupied space without preserving the closed/open split the "
+              "method is built from); write full_group = false");
+}
+
 TEST(RunInputValidationTest, OddElectronCountNeedsEvenMultiplicity) {
     const auto report = Validate(R"(
 [molecule]
@@ -536,8 +618,8 @@ functional = "pbe"
 )");
     ASSERT_EQ(functional.issues.size(), 1u);
     EXPECT_EQ(functional.issues[0],
-              "method.functional: rhf does not take a functional (the Kohn-Sham methods rks and "
-              "uks do; remove the key or change method.type)");
+              "method.functional: rhf does not take a functional (the Kohn-Sham methods rks, uks "
+              "and roks do; remove the key or change method.type)");
 
     // The tolerance is refused on the other Hartree-Fock word, so the rule is
     // shown to come from the classifier rather than from one word's arm.
@@ -554,7 +636,7 @@ screening_tolerance = 1e-10
     ASSERT_EQ(tolerance.issues.size(), 1u);
     EXPECT_EQ(tolerance.issues[0],
               "method.screening_tolerance: uhf does not take a screening tolerance (nothing is "
-              "evaluated on a grid; the Kohn-Sham methods rks and uks do)");
+              "evaluated on a grid; the Kohn-Sham methods rks, uks and roks do)");
 
     // And the `[grid]` block, which joins the same family. The XC grid
     // engine is built by the Kohn-Sham composition alone, so a quadrature on an
@@ -577,8 +659,8 @@ radial_points = 40
     ASSERT_EQ(grid.issues.size(), 1u);
     EXPECT_EQ(grid.issues[0],
               "[grid]: rhf does not take an XC integration grid (no density functional is "
-              "integrated, so nothing is evaluated on a grid; the Kohn-Sham methods rks and uks "
-              "do)");
+              "integrated, so nothing is evaluated on a grid; the Kohn-Sham methods rks, uks and "
+              "roks do)");
 
     // The fourth key of the family is a `[properties]` member rather than a
     // method key, and it is refused by the same classifier: the quantity it
@@ -600,7 +682,7 @@ xc_gradient = true
     ASSERT_EQ(gradient.issues.size(), 1u);
     EXPECT_EQ(gradient.issues[0],
               "properties.xc_gradient: rhf does not take an exchange-correlation gradient (no "
-              "density functional is differentiated; the Kohn-Sham methods rks and uks do)");
+              "density functional is differentiated; the Kohn-Sham methods rks, uks and roks do)");
 }
 
 TEST(RunInputValidationTest, KohnShamMethodsAcceptTheKohnShamKeys) {
@@ -651,6 +733,55 @@ functional = "pbe"
 screening_tolerance = 0.0
 )");
     EXPECT_TRUE(uks.IsValid()) << (uks.issues.empty() ? "" : uks.issues[0]);
+}
+
+TEST(RunInputValidationTest, RestrictedOpenShellKeyPolicyFollowsTheFunctional) {
+    // The key policy is a pure function of the method word, and the two
+    // restricted open-shell words answer OPPOSITELY: rohf runs no functional,
+    // so all four keys are refused on it exactly as on rhf, while roks is a
+    // Kohn-Sham lane and takes them all - including xc_gradient, whose walk
+    // consumes the per-spin pair (the same call uks makes). Both fixtures
+    // write full_group = false, the lane's own key rule, so each assertion
+    // isolates the key policy.
+    const auto rohf = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rohf"
+fock_builder = "direct"
+accuracy = "kNormal"
+functional = "pbe"
+[symmetry]
+full_group = false
+)");
+    ASSERT_EQ(rohf.issues.size(), 1u);
+    EXPECT_EQ(rohf.issues[0],
+              "method.functional: rohf does not take a functional (the Kohn-Sham methods rks, "
+              "uks and roks do; remove the key or change method.type)");
+
+    const auto roks = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "roks"
+accuracy = "kNormal"
+functional = "pbe"
+screening_tolerance = 1e-10
+[grid]
+radial_points = 40
+angular_points = 50
+[properties]
+xc_gradient = true
+[symmetry]
+full_group = false
+)");
+    EXPECT_TRUE(roks.IsValid()) << (roks.issues.empty() ? "" : roks.issues[0]);
 }
 
 TEST(RunInputValidationTest,
@@ -721,6 +852,52 @@ total_gradient = true
     ASSERT_EQ(uks.issues.size(), 1u);
     EXPECT_EQ(uks.issues[0],
               "properties.total_gradient: uks does not take the total analytic gradient (the "
+              "assembly differentiates a converged closed-shell reference; the rhf and rks "
+              "methods are the only lanes that run one)");
+
+    // The restricted open-shell words are refused too, and for the sharper
+    // reason: their converged reference is a restricted determinant with an
+    // OPEN shell, and the closed-shell assembly (and the response layer behind
+    // it) does not describe it - the open-shell response is not implemented.
+    const auto rohf = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rohf"
+fock_builder = "direct"
+accuracy = "kNormal"
+[properties]
+total_gradient = true
+[symmetry]
+full_group = false
+)");
+    ASSERT_EQ(rohf.issues.size(), 1u);
+    EXPECT_EQ(rohf.issues[0],
+              "properties.total_gradient: rohf does not take the total analytic gradient (the "
+              "assembly differentiates a converged closed-shell reference; the rhf and rks "
+              "methods are the only lanes that run one)");
+
+    const auto roks = Validate(R"(
+[molecule]
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "roks"
+accuracy = "kNormal"
+functional = "pbe"
+[properties]
+total_gradient = true
+[symmetry]
+full_group = false
+)");
+    ASSERT_EQ(roks.issues.size(), 1u);
+    EXPECT_EQ(roks.issues[0],
+              "properties.total_gradient: roks does not take the total analytic gradient (the "
               "assembly differentiates a converged closed-shell reference; the rhf and rks "
               "methods are the only lanes that run one)");
 }

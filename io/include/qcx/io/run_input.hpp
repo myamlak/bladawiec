@@ -131,15 +131,17 @@ enum class MethodType {
     kUhf, ///< Unrestricted Hartree-Fock.
     kRks, ///< Restricted Kohn-Sham (closed shell; a density functional, not HF).
     kUks, ///< Unrestricted Kohn-Sham.
+    kRohf, ///< Restricted open-shell Hartree-Fock (Roothaan effective Fock).
+    kRoks, ///< Restricted open-shell Kohn-Sham.
 };
 
 /// The method word for one method type (schema 34); the inverse of the parser
 /// mapping (parse_input.cpp ParseMethod), so the record's `method` key and the
 /// input's `[method] type` key are one vocabulary - a consumer reads the same
-/// four words on both sides. Unknown values never occur from the parser; the
+/// six words on both sides. Unknown values never occur from the parser; the
 /// fallback keeps diagnostics total anyway.
 /// \param method The method family.
-/// \returns "rhf" | "uhf" | "rks" | "uks".
+/// \returns "rhf" | "uhf" | "rks" | "uks" | "rohf" | "roks".
 /// \ingroup qcx-io
 std::string_view ToString(MethodType method) noexcept;
 

@@ -59,7 +59,7 @@
 /// rather than run), and the v1 wiring has no ri_j link arm for UHF or for
 /// the Kohn-Sham lanes, and no qfmm arm for the Kohn-Sham lanes. The
 /// ladder's floor - the direct family's lean member - is wired for every
-/// method (RHF, both unrestricted legs through the unrestricted seam, and
+/// method (RHF, the per-spin legs through the per-spin seam, and
 /// Kohn-Sham through the same half-mode flags), so the walk always
 /// terminates and nothing refuses here.
 ///
@@ -72,10 +72,10 @@
 /// an explicit builder request: the key names no builder, so honouring it
 /// costs the resolved route and nothing else, and a refusal would make the
 /// claim unusable on every default (the auto-lean path is the default at
-/// nBasis <= 1000). An UNRESTRICTED run is left exactly as resolved - the
+/// nBasis <= 1000). A PER-SPIN run is left exactly as resolved - the
 /// per-spin wiring carries no enforcement field on any route, so no
 /// builder rewrite could honour the key there, and the driver refuses it
-/// by name (SelectionResolutionInput::unrestricted states the fact).
+/// by name (SelectionResolutionInput::perSpin states the fact).
 ///
 /// Apart from that key, an explicit [method].fock_builder wins verbatim
 /// (the ladder governs the ABSENT case only) and is never demoted - an
@@ -221,14 +221,15 @@ struct SelectionResolutionInput {
     bool nonHybridKohnSham = false;
     std::size_t nPairs = 0; ///< Shell-pair count (the pair-store sizing input).
     int effectiveThreads = 1; ///< The threadCap-clamped team.
-    /// True when this run executes the per-spin loop (UHF or UKS). The
-    /// enforce_certified_bound demotion does NOT apply to those legs: their
-    /// wiring never assigns the enforcement option on any builder, so no
-    /// builder rewrite could honour the key and the driver refuses it by
-    /// name instead. Stated by the caller for the same reason as the tier
-    /// runnability fields - this module is pure policy and never re-derives
-    /// the method classification.
-    bool unrestricted = false;
+    /// True when this run builds its Focks per spin (UHF and UKS, and the
+    /// restricted open-shell pair ROHF and ROKS, whose closed/open blocks
+    /// ARE a per-spin pair). The enforce_certified_bound demotion does NOT
+    /// apply to those legs: their wiring never assigns the enforcement
+    /// option on any builder, so no builder rewrite could honour the key and
+    /// the driver refuses it by name instead. Stated by the caller for the
+    /// same reason as the tier runnability fields - this module is pure
+    /// policy and never re-derives the method classification.
+    bool perSpin = false;
 };
 
 /// Resolves the run's builder (see ResolvedBuilderSelection). Total: the

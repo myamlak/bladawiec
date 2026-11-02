@@ -135,9 +135,19 @@ qcx::Result<MethodType> ParseMethod(std::string_view name) {
         return MethodType::kUks;
     }
 
-    return std::unexpected(
-        Err(qcx::ErrorCode::kInvalidArgument,
-            "unknown method.type \"" + std::string(name) + "\" (rhf | uhf | rks | uks)"));
+    if (name == "rohf")
+    {
+        return MethodType::kRohf;
+    }
+
+    if (name == "roks")
+    {
+        return MethodType::kRoks;
+    }
+
+    return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                               "unknown method.type \"" + std::string(name) +
+                                   "\" (rhf | uhf | rks | uks | rohf | roks)"));
 }
 
 // Maps one [dispersion] form word to the module enum; kInvalidArgument with
@@ -531,7 +541,7 @@ std::string_view ToString(CoordinateUnit unit) noexcept {
 // The inverse of ParseMethod; see run_input.hpp ToString(MethodType).
 // The words are the ones the [method] type key accepts, so the parse's
 // vocabulary and the record's `method` key (schema 34) are one vocabulary:
-// a consumer reads the same four words on the input side and the output side,
+// a consumer reads the same six words on the input side and the output side,
 // and the record's word is spelled by the parser's own home for it.
 std::string_view ToString(MethodType method) noexcept {
     switch (method)
@@ -544,6 +554,10 @@ std::string_view ToString(MethodType method) noexcept {
         return "rks";
     case MethodType::kUks:
         return "uks";
+    case MethodType::kRohf:
+        return "rohf";
+    case MethodType::kRoks:
+        return "roks";
     }
 
     return "unknown";
@@ -1472,7 +1486,8 @@ qcx::Result<RunInput> ParseRunInput(std::string_view tomlText) {
         return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument, "missing [method] table"));
     }
 
-    auto methodName = ReadRequiredString(method, "method.type", "rhf | uhf | rks | uks");
+    auto methodName =
+        ReadRequiredString(method, "method.type", "rhf | uhf | rks | uks | rohf | roks");
 
     if (!methodName.has_value())
     {

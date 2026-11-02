@@ -1330,6 +1330,48 @@ TEST(DriverPinTest, RksSlaterH2RunsTheKohnShamPathOnBothBuilderMembers) {
     EXPECT_NEAR(*leanTotal, *machineryTotal, 1e-9);
 }
 
+// The restricted open-shell Kohn-Sham word, end to end on the closed-shell
+// limit: H2/STO-3G at 1.4 bohr with nO = 0 IS the restricted Kohn-Sham run
+// (one closed orbital, no open block), so a ROKS run must reproduce the RKS
+// pin rather than a number of its own - the effective Fock collapses to the
+// spin average and the fixed occupation rule assigns the single closed
+// orbital. The Kohn-Sham keys are the run's, so the record carries the
+// functional and the grid; [symmetry] full_group = false is the lane's own
+// required spelling (the labeling stage is refused on it).
+TEST(DriverPinTest, RoksSlaterH2ReproducesTheRestrictedKohnShamPin) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    const std::string roksText =
+        H2MethodToml("type = \"roks\"\nfunctional = \"slater\"\nfock_builder = \"direct\"\n") +
+        "[symmetry]\nfull_group = false\n";
+    auto roks = RunInputText(roksText.c_str());
+    ASSERT_TRUE(roks.has_value()) << roks.error().message;
+
+    EXPECT_NE(roks->find("\"converged\": true"), std::string::npos);
+    EXPECT_NE(roks->find("\"method\": \"roks\""), std::string::npos);
+    EXPECT_NE(roks->find("\"functional\": \"slater\""), std::string::npos);
+    EXPECT_NE(roks->find("\"xc_grid\""), std::string::npos);
+
+    const auto total = JsonNumber(*roks, "\"total_energy_hartree\"");
+    ASSERT_TRUE(total.has_value());
+    // The RKS pin, from the composition's own measured energy for this
+    // fixture (KsCompositionTest's and RksSlaterH2's -1.025009958088). One
+    // number, three method words: the closed-shell limit is a limit, not a
+    // second implementation.
+    EXPECT_NEAR(*total, -1.025009958088, 1e-9);
+
+    // And NOT the Hartree-Fock number, one method word away.
+    const std::string hfText = H2MethodToml("type = \"rhf\"\nfock_builder = \"direct\"\n");
+    auto hf = RunInputText(hfText.c_str());
+    ASSERT_TRUE(hf.has_value()) << hf.error().message;
+    const auto hfTotal = JsonNumber(*hf, "\"total_energy_hartree\"");
+    ASSERT_TRUE(hfTotal.has_value());
+    EXPECT_GT(std::abs(*total - *hfTotal), 1e-3);
+}
+
 // ---------------------------------------------------------------------------
 // The grid + the method record: the record names the run's OWN PHYSICS - which method
 // ran, which functional produced the numbers, and which grid they were
@@ -3590,6 +3632,68 @@ TEST(DriverPinTest, OhUhfMatchesTheExternalReferenceAndStaysUnderTheRohfBound) {
     EXPECT_LT(*o2Total, kO2RohfBoundEnergy);
 }
 
+// The OH doublet under the restricted open-shell word: the UHF cell's
+// molecule, basis and [scf] block (its [guess] block is the UHF fixture's
+// own and is not carried over), one [method] word apart, plus the one
+// [symmetry] key this lane requires - full_group = false, because the
+// labeling stage symmetrizes the occupied space without preserving the
+// closed/open split. The reference is pyscf's ROHF -74.36153805173: the
+// number the UHF cell above uses as its variational BAR, reached here by the
+// loop that is FOR it.
+TEST(DriverPinTest, OhRohfRunsTheRestrictedOpenShellLoop) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    auto result = RunInputText(R"(
+[molecule]
+charge = 0
+multiplicity = 2
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.9697701567008378]]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rohf"
+fock_builder = "direct"
+accuracy = "kTight"
+
+[scf]
+use_diis = true
+energy_tolerance = 1e-8
+density_tolerance = 1e-6
+
+[symmetry]
+full_group = false
+
+[resources]
+thread_cap = 1
+)");
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+
+    EXPECT_NE(result->find("\"converged\": true"), std::string::npos);
+    // The record's physics word is the path the dispatch acted on: the input's
+    // own vocabulary, and the loop that produced the number.
+    EXPECT_NE(result->find("\"method\": \"rohf\""), std::string::npos);
+    // The labeling stage is off for this lane, so no labeling block is
+    // written - never a fabricated one.
+    EXPECT_EQ(result->find("\"symmetry_blocking\""), std::string::npos);
+
+    const auto total = JsonNumber(*result, "\"total_energy_hartree\"");
+    ASSERT_TRUE(total.has_value());
+    EXPECT_NEAR(*total, kOhRohfBoundEnergy, 1e-7);
+
+    // The restricted determinant's spin-squared is 0.75 EXACTLY (one unpaired
+    // electron in one open orbital), not the unrestricted value 0.753257: a
+    // run that reached the UHF fixed point under the ROHF label would land on
+    // the other number, which is the state this diagonal alone can see.
+    const auto spin = JsonNumber(*result, "\"spin_squared\"");
+    ASSERT_TRUE(spin.has_value());
+    EXPECT_NEAR(*spin, 0.75, 1e-8);
+}
+
 // The unrestricted seam, end to end and through the run record: the O2 triplet
 // with the [method].fock_builder key ABSENT. At nBasis 10 <= the 1000-basis-
 // function ceiling the UHF path now wires the direct family's within-family
@@ -4524,7 +4628,8 @@ accuracy = "kNormal"
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, qcx::ErrorCode::kInvalidArgument);
     EXPECT_NE(result.error().message.find("value 7"), std::string::npos);
-    EXPECT_NE(result.error().message.find("\"rhf\", \"uhf\", \"rks\" and \"uks\""),
+    EXPECT_NE(result.error().message.find("\"rhf\", \"uhf\", \"rks\", \"uks\", \"rohf\" and "
+                                          "\"roks\""),
               std::string::npos);
 
     // A refusal NAMES what it refuses, and the Kohn-Sham pair no longer
@@ -4635,7 +4740,8 @@ accuracy = "kNormal"
 )");
     ASSERT_FALSE(wrongFamily.has_value());
     EXPECT_EQ(wrongFamily.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(wrongFamily.error().message.find("a Kohn-Sham run (method.type = \"rks\"/\"uks\")"),
+    EXPECT_NE(wrongFamily.error().message.find(
+                  "a Kohn-Sham run (method.type = \"rks\", \"uks\" or \"roks\")"),
               std::string::npos);
     // The admitted set, named - which is the actionable half of the refusal.
     // DATED: this read "fock_builder = \"direct\" only" until the RI-J link's
@@ -8364,7 +8470,10 @@ enforce_certified_bound = true
 )");
     ASSERT_FALSE(uhf.has_value());
     EXPECT_EQ(uhf.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(uhf.error().message.find("UHF"), std::string::npos);
+    // The method word is the schema's, not a display form: the refusal names
+    // the lane the input asked for, the same spelling every other refusal and
+    // the record use.
+    EXPECT_NE(uhf.error().message.find("resolves to a uhf run"), std::string::npos);
 
     // The Kohn-Sham word on the same leg, and the reason the refusal has to
     // name the METHOD rather than its shape: "an unrestricted run" is true of
@@ -8386,7 +8495,49 @@ enforce_certified_bound = true
 )");
     ASSERT_FALSE(uks.has_value());
     EXPECT_EQ(uks.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(uks.error().message.find("UKS"), std::string::npos);
+    EXPECT_NE(uks.error().message.find("resolves to a uks run"), std::string::npos);
+
+    // The restricted open-shell pair rides the same per-spin wiring, so the
+    // help's "refused on uhf, uks, rohf and roks" is the same claim on both
+    // new words. They are refused by the same name-the-method route, and the
+    // refusal fires before any Fock exists, so this is a resolution test, not
+    // an SCF one.
+    const auto rohf = RunInputText(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8]]
+multiplicity = 2
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rohf"
+fock_builder = "direct"
+accuracy = "kNormal"
+enforce_certified_bound = true
+[symmetry]
+full_group = false
+)");
+    ASSERT_FALSE(rohf.has_value());
+    EXPECT_EQ(rohf.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(rohf.error().message.find("resolves to a rohf run"), std::string::npos);
+
+    const auto roks = RunInputText(R"(
+[molecule]
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8]]
+multiplicity = 2
+[basis]
+orbital = "sto-3g"
+[method]
+type = "roks"
+functional = "slater"
+fock_builder = "direct"
+accuracy = "kNormal"
+enforce_certified_bound = true
+[symmetry]
+full_group = false
+)");
+    ASSERT_FALSE(roks.has_value());
+    EXPECT_EQ(roks.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(roks.error().message.find("resolves to a roks run"), std::string::npos);
 
     // The route that can honour it without a rewrite stays silent: an
     // explicit fock_builder = "direct" IS the machinery member, so nothing
