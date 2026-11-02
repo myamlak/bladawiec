@@ -6321,6 +6321,29 @@ accuracy = "kNormal"
     EXPECT_NE(parityViolation.error().message.find("multiplicity"), std::string::npos);
 }
 
+TEST(DriverErrorTest, RefusesAnEcpCarryingBasisForARunElement) {
+    // A basis that would replace a run element's core electrons is refused
+    // through ValidateInput before any molecule, basis or Fock builder is
+    // wired: the one-electron Hamiltonian has no ECP term, so the run would
+    // be all-electron with a valence-only orbital set and report a different
+    // system's energy and electron count.
+    const auto ecpBasis = RunInputText(R"(
+[molecule]
+atoms = [["Xe", 0.0, 0.0, 0.0]]
+[basis]
+orbital = "def2-svp"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+)");
+    ASSERT_FALSE(ecpBasis.has_value());
+    EXPECT_EQ(ecpBasis.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(ecpBasis.error().message.find("effective-core potential"), std::string::npos);
+    EXPECT_NE(ecpBasis.error().message.find("Xe"), std::string::npos);
+    EXPECT_NE(ecpBasis.error().message.find("electron count would be wrong"), std::string::npos);
+}
+
 TEST(DriverErrorTest, RejectsRhfWithNonSingletMultiplicity) {
     // The O2 triplet under method rhf: 16 electrons and multiplicity 3 pass
     // the parity rule, but the RHF lane is closed-shell by construction -

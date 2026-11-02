@@ -306,6 +306,86 @@ accuracy = "kNormal"
               std::string::npos);
 }
 
+TEST(RunInputValidationTest, EcpBasisIsRefusedByNameForARunElement) {
+    // def2-svp replaces Xe's 28 core electrons with an effective-core
+    // potential. The one-electron Hamiltonian has no ECP term, so running it
+    // all-electron would report a Xe all-electron energy and a 54-electron
+    // count for a basis that describes 26 electrons. The refusal names the
+    // basis, the element and the core count, and says what is missing.
+    const auto report = Validate(R"(
+[molecule]
+atoms = [["Xe", 0.0, 0.0, 0.0]]
+[basis]
+orbital = "def2-svp"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+)");
+    ASSERT_EQ(report.issues.size(), 1u);
+    EXPECT_EQ(report.issues[0],
+              "basis.orbital: basis \"def2-svp\" carries an effective-core potential for Xe "
+              "(core 28); effective-core potentials are not implemented, so the core electrons "
+              "are not removed and the energy and electron count would be wrong (use an "
+              "all-electron basis)");
+}
+
+TEST(RunInputValidationTest, EcpRefusalWalksTheCorpusMetadataNotTheBasisName) {
+    // A second basis directory and a different core count prove the rule
+    // reads the corpus metadata (BasisSet::Ecps()) rather than matching one
+    // basis name: def2-tzvp replaces tungsten's 60 core electrons.
+    const auto report = Validate(R"(
+[molecule]
+atoms = [["W", 0.0, 0.0, 0.0]]
+[basis]
+orbital = "def2-tzvp"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+)");
+    ASSERT_EQ(report.issues.size(), 1u);
+    EXPECT_EQ(report.issues[0],
+              "basis.orbital: basis \"def2-tzvp\" carries an effective-core potential for W "
+              "(core 60); effective-core potentials are not implemented, so the core electrons "
+              "are not removed and the energy and electron count would be wrong (use an "
+              "all-electron basis)");
+}
+
+TEST(RunInputValidationTest, EcpCarryingBasisIsUnaffectedForAnAllElectronElement) {
+    // def2-svp is all-electron for H, so the very directory that carries the
+    // Xe ECP above is a valid request for H2: the rule is per element, and a
+    // run whose elements have no ECP entry is not refused.
+    const auto report = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "def2-svp"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+)");
+    EXPECT_TRUE(report.IsValid());
+}
+
+TEST(RunInputValidationTest, AllElectronBasisIsUnaffectedForAHeavyElement) {
+    // sto-3g is all-electron for Xe, so the element the metadata rule refuses
+    // with def2-svp above is accepted with an all-electron basis: the rule
+    // keys on the basis's ECP entry, never on the element's Z.
+    const auto report = Validate(R"(
+[molecule]
+atoms = [["Xe", 0.0, 0.0, 0.0]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+)");
+    EXPECT_TRUE(report.IsValid());
+}
+
 TEST(RunInputValidationTest, UnknownAuxBasisReported) {
     const auto report = Validate(R"(
 [molecule]
