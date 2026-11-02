@@ -22,11 +22,15 @@
 //
 // Plus the AccumulateBlock micro-benchmark: FockContractor::AccumulateBlock
 // in isolation at a representative block size. The kernel is ONE template
-// compiled twice (internal/fock_contract_kernel.hpp): the scalar copy (no
-// /arch flag) and the /arch:AVX2 copy (auto-vectorization only - no hand
-// intrinsics exist). Both copies register the same per-iteration batch range
-// over the (d,d,d,d) fixture - BenchAccumBlockScalar (the no-/arch baseline)
-// and BenchAccumBlockAvx2 (the /arch:AVX2 copy) each at 1 / 8 / 64 kernel
+// compiled twice (internal/fock_contract_kernel.hpp): the scalar template
+// path and the hand-vectorised AVX2 path. The scalar path is NOT a
+// no-/arch build - the whole program is compiled at the AVX2 + FMA tier
+// (the root CMakeLists states it once, on the directory), so the scalar
+// path may itself be auto-vectorised; the ratio below prices the explicit
+// kernel against the template path under the same tier, not two tiers.
+// Both copies register the same per-iteration batch range
+// over the (d,d,d,d) fixture - BenchAccumBlockScalar and
+// BenchAccumBlockAvx2 each at 1 / 8 / 64 kernel
 // calls per iteration. Batch 1 is the original ~5 µs floor row
 // (MEASURED-INCONCLUSIVE at the timing-resolution floor); batches 8 and 64
 // are the larger fixture - they lift the per-iteration time into the
