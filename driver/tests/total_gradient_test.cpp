@@ -10,9 +10,10 @@
 // energy, matching the record's own `dispersion` energy - the same
 // EvaluateDispersionGradient call - and a run without one carries neither
 // key inside the block. Fourth, every refusal the properties entry states is
-// refused by name through the driver: a non-converged SCF, a non-stationary
-// reference, and a D4 dispersion gradient (while a D4 run that asks for the
-// energy alone still runs). Fifth, the run's [method] accuracy reaches the
+// refused by name through the driver: a non-converged SCF and a non-stationary
+// reference, while a D4 run that asks for the gradient carries the module's
+// frozen-charge term and one that asks for the energy alone carries none.
+// Fifth, the run's [method] accuracy reaches the
 // assembly: the two-electron derivative walk's screening counts in the block
 // move with the preset, so a kLoose run's block carries the kLoose-derived
 // figure rather than the kNormal default. Sixth, a restricted Kohn-Sham run
@@ -501,23 +502,44 @@ fock_builder = "ri_j_link"
         << outcome.error().message;
 }
 
-TEST(TotalGradientTest, AD4GradientIsRefusedWhileTheEnergyAloneStillRuns) {
-    // The dispersion module's gradient entry has no D4 tier; the refusal is
-    // that entry's own, propagated with the request's key in front of it. A
-    // D4 run that asks for the energy alone is schema 41's supported request
-    // and must still run.
-    const auto refusedPath = TempInputPath("d4-gradient");
-    auto refused = RunFile(refusedPath,
-                           HydrogenToml(kRhfBody,
-                                        "[dispersion]\nform = \"d4\"\n"
-                                        "[properties]\ntotal_gradient = true\n"));
-    ASSERT_FALSE(refused.has_value()) << "a D4 coordinate gradient was emitted";
-    EXPECT_EQ(refused.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(refused.error().message.find("properties.total_gradient:"), std::string::npos)
-        << refused.error().message;
-    EXPECT_NE(refused.error().message.find("d4"), std::string::npos) << refused.error().message;
-    EXPECT_NE(refused.error().message.find("coordinate-gradient"), std::string::npos)
-        << refused.error().message;
+TEST(TotalGradientTest, AD4GradientIsAssembledWhileTheEnergyAloneStillRuns) {
+    // The dispersion module's D4 arm is the frozen-charge gradient, so a D4
+    // request with total_gradient is a supported run: the term is present
+    // exactly when the block was written, and it carries the module's own
+    // number rather than a zero-filled vector. A D4 run that asks for the
+    // energy alone is schema 41's supported request and carries no gradient.
+    const auto gradientPath = TempInputPath("d4-gradient");
+    auto gradient = RunFile(gradientPath,
+                            HydrogenToml(kRhfBody,
+                                         "[dispersion]\nform = \"d4\"\n"
+                                         "[properties]\ntotal_gradient = true\n"));
+    ASSERT_TRUE(gradient.has_value()) << gradient.error().message;
+    ASSERT_TRUE(gradient->result.properties->totalGradient.has_value());
+    const auto& block = *gradient->result.properties->totalGradient;
+    ASSERT_TRUE(block.terms.dispersion.has_value());
+    ASSERT_TRUE(block.energies.dispersion.has_value());
+    EXPECT_EQ(block.terms.dispersion->size(), 6u);
+    ASSERT_TRUE(gradient->result.dispersion.has_value());
+    EXPECT_NEAR(*block.energies.dispersion, gradient->result.dispersion->energyHartree, 1e-15);
+
+    // The pair term is along the bond and the two atoms carry equal and
+    // opposite vectors, so the net force vanishes; the term itself is not
+    // zero, which is what a dropped contribution would look like.
+    std::array<double, 3> net{0.0, 0.0, 0.0};
+    double magnitude = 0.0;
+
+    for (std::size_t entry = 0; entry < block.terms.dispersion->size(); ++entry)
+    {
+        net[entry % 3] += (*block.terms.dispersion)[entry];
+        magnitude += std::abs((*block.terms.dispersion)[entry]);
+    }
+
+    for (const double component : net)
+    {
+        EXPECT_LT(std::abs(component), 1e-10);
+    }
+
+    EXPECT_GT(magnitude, 0.0);
 
     const auto energyPath = TempInputPath("d4-energy");
     auto energy = RunFile(energyPath, HydrogenToml(kRhfBody, "[dispersion]\nform = \"d4\"\n"));

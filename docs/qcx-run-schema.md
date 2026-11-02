@@ -265,7 +265,7 @@ type is a parse error). The population/moment block has no switch
 | `[properties] qtaim` | bool; the Bader QTAIM bond critical points: the (3,-1) critical points of rho with their bond paths, ellipticity and laplacian; failed searches are reported in the output, never a run failure |
 | `[properties] molden` | string; the path of the Molden-format F-file written from the SCF result: the [Molden Format] [Atoms] (AU) [5D] [7F] [GTO] [MO] sections, RHF one spin block, UHF alpha then beta; an empty string counts as absent, and a file that cannot be written fails the run |
 | `[properties] xc_gradient` | bool; the fixed-density exchange-correlation contribution to the nuclear gradient, differentiated at the converged density on the grid the run integrated. A Kohn-Sham key: refused on `rhf`/`uhf`/`rohf` with the `functional` key and the `[grid]` block (see §2.3); on `roks` it consumes the converged per-spin density pair, the same call `uks` makes |
-| `[properties] total_gradient` | bool; schema 45. The total analytic nuclear gradient at the converged closed-shell reference: the electronic terms (one-electron, Coulomb, exchange, exchange-correlation on the density-functional lanes, orbital response), the nuclear repulsion and any `[dispersion]` correction, kept apart in the `total_gradient` record block (§3.4). Admitted on the two closed-shell lanes, `rhf` and `rks`; refused by name on the unrestricted lanes `uhf` and `uks` and on the restricted open-shell pair `rohf` and `roks` (their reference has an open shell, and the open-shell response is not implemented); refused when the SCF did not converge, when the reference is not stationary, and when a `[dispersion]` block of form `d4` asks for a coordinate gradient the module has no tier for |
+| `[properties] total_gradient` | bool; schema 45. The total analytic nuclear gradient at the converged closed-shell reference: the electronic terms (one-electron, Coulomb, exchange, exchange-correlation on the density-functional lanes, orbital response), the nuclear repulsion and any `[dispersion]` correction, kept apart in the `total_gradient` record block (§3.4). Admitted on the two closed-shell lanes, `rhf` and `rks`; refused by name on the unrestricted lanes `uhf` and `uks` and on the restricted open-shell pair `rohf` and `roks` (their reference has an open shell, and the open-shell response is not implemented); refused when the SCF did not converge, when the reference is not stationary, and when a `[dispersion]` block of form `d4` names a charged molecule or an element its table does not cover. A `d4` gradient takes the dispersion module's frozen-charge tier: its C6 and C8 coefficients are held at the geometry's values and only the interatomic distances differentiate |
 | `[properties] nocv_fragments` | array of non-empty arrays of non-negative atom indices (0-based, file row order); ETS-NOCV, closed-shell only (see §5) |
 
 `total_gradient` is the one key in this block that differentiates the run's
@@ -279,8 +279,12 @@ rather than dropping the request: a non-converged SCF (a last iterate is not
 the energy's stationary point), a reference whose `max|2 F_ai|` exceeds the
 assembly's stationarity gate (`1e-6`), a reference whose derivative walks do
 not reproduce its electronic energy (`1e-8`), and a `[dispersion]` block of
-form `d4`, whose coordinate-gradient tier is not implemented. A `d4` run may
-still request the energy alone (§2.4). The stationarity gate compares the
+form `d4` naming a charged molecule or an element its table does not cover.
+A `d4` gradient is the dispersion module's frozen-charge derivative: its C6
+and C8 coefficients are held at the geometry's values and only the
+interatomic distances differentiate, so the term is the derivative of the
+energy with those coefficients fixed. A `d4` run may still request the energy
+alone (§2.4). The stationarity gate compares the
 reference against the exact Roothaan Fock the assembly rebuilds: an SCF
 converged against that same exact Fock lands far inside the gate, while a
 reference converged against an approximate one - the RI-J family fits the
@@ -572,8 +576,9 @@ zero-filled block standing in for a gradient that was never computed. It is
 written on the closed-shell lanes, `rhf` and `rks`; a request on an
 unrestricted method word is refused before serialization (§2.2), and a
 request the assembly refuses (a non-converged SCF, a non-stationary
-reference, a D4 dispersion gradient) fails the run by name rather than being
-recorded as an absent block.
+reference, a charged D4 molecule or one with an element the D4 table does
+not cover) fails the run by name rather than being recorded as an absent
+block.
 
 | `total_gradient` key | Type | Meaning |
 |---|---|---|

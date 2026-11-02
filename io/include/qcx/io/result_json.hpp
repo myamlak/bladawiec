@@ -1964,10 +1964,11 @@ struct RunResult {
     /// carrying a total nuclear gradient against one that could carry none.
     /// The block is absent unless the run asked and is written on the `rhf`
     /// lane only; a request the assembly refuses - a non-converged SCF, a
-    /// non-stationary reference, a D4 dispersion gradient - fails the run by
-    /// name rather than being recorded as an absent block, and a term nobody
-    /// requested (the dispersion correction without a `[dispersion]` block)
-    /// is absent inside the block, never a zero-filled vector.
+    /// non-stationary reference, a charged D4 molecule or one with an element
+    /// its table does not cover - fails the run by name rather than being
+    /// recorded as an absent block, and a term nobody requested (the
+    /// dispersion correction without a `[dispersion]` block) is absent inside
+    /// the block, never a zero-filled vector.
     ///
     /// Schema 46 ADDS the optional `total_gradient.terms.xc` member: the
     /// exchange-correlation skeleton term of the total analytic nuclear

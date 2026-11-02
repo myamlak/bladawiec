@@ -4,8 +4,12 @@
 
 #include "qcx/grid/geometry_translation.hpp"
 
+#include <array>
+#include <cmath>
+#include <cstddef>
 #include <excgrid/d4.hpp>
 #include <excgrid/dispersion.hpp>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -112,6 +116,38 @@ D3ParameterValues ToValues(const D3ParameterRequest& request) {
 
 D4ParameterValues ToValues(const D4ParameterRequest& request) {
     return D4ParameterValues{*request.s6, *request.s8, *request.a1, *request.a2};
+}
+
+// The D4 arm's molecule contract, shared by the energy and gradient entries so
+// the two can never admit different requests.
+//
+// The shipped D4 energy evaluates its EEQ charges at total charge 0, so a
+// charged molecule's number would be computed at the wrong charge. The
+// charge-aware energy is the debt, not a boundary: until it exists the request
+// is refused by name rather than answered with the wrong number. The published
+// parameterization ends at radon.
+std::optional<qcx::Error> D4MoleculeRefusal(const molecule::Molecule& molecule) {
+    if (molecule.Charge() != 0)
+    {
+        return qcx::Error{
+            qcx::ErrorCode::kUnimplemented,
+            "dispersion: form \"d4\" evaluates its electronegativity-equilibration charges at "
+            "total charge 0, so a charged molecule cannot use it (use form \"d3\", which is "
+            "charge-independent; a charge-aware D4 energy is not implemented)"};
+    }
+
+    for (const auto& atom : molecule.Atoms())
+    {
+        if (!excgrid::D4CoversElement(atom.atomicNumber))
+        {
+            return qcx::Error{qcx::ErrorCode::kUnimplemented,
+                              "dispersion: form \"d4\" does not cover element Z = " +
+                                  std::to_string(atom.atomicNumber) +
+                                  " (the published parameterization ends at radon, Z = 86)"};
+        }
+    }
+
+    return std::nullopt;
 }
 
 } // namespace
@@ -355,29 +391,9 @@ qcx::Result<double> EvaluateDispersion(const molecule::Molecule& molecule,
             MakeError("dispersion: the resolved values do not match form \"d4\""));
     }
 
-    // The shipped D4 energy evaluates its EEQ charges at total charge 0, so a
-    // charged molecule's number would be computed at the wrong charge. The
-    // charge-aware energy is the debt, not a boundary: until it exists the
-    // request is refused by name rather than answered with the wrong number.
-    if (molecule.Charge() != 0)
+    if (auto refusal = D4MoleculeRefusal(molecule); refusal.has_value())
     {
-        return std::unexpected(qcx::Error{
-            qcx::ErrorCode::kUnimplemented,
-            "dispersion: form \"d4\" evaluates its electronegativity-equilibration charges at "
-            "total charge 0, so a charged molecule cannot use it (use form \"d3\", which is "
-            "charge-independent; a charge-aware D4 energy is not implemented)"});
-    }
-
-    for (const auto& atom : molecule.Atoms())
-    {
-        if (!excgrid::D4CoversElement(atom.atomicNumber))
-        {
-            return std::unexpected(
-                qcx::Error{qcx::ErrorCode::kUnimplemented,
-                           "dispersion: form \"d4\" does not cover element Z = " +
-                               std::to_string(atom.atomicNumber) +
-                               " (the published parameterization ends at radon, Z = 86)"});
-        }
+        return std::unexpected(std::move(*refusal));
     }
 
     const excgrid::D4Parameters parameters{values->s6, values->s8, values->a1, values->a2};
@@ -393,17 +409,20 @@ qcx::Result<double> EvaluateDispersion(const molecule::Molecule& molecule,
 }
 
 qcx::Result<DispersionGradient> EvaluateDispersionGradient(const molecule::Molecule& molecule,
-                                                           const ResolvedDispersion& resolved) {
-    // The energy entry refuses D4 only for the charge and element reasons; it
-    // has no gradient to refuse. Here the missing tier is the primary refusal,
-    // and naming it keeps the consumer from reading the energy as a complete
-    // answer.
-    if (resolved.form == DispersionForm::kD4)
+                                                           const ResolvedDispersion& resolved,
+                                                           DispersionGradientTier tier) {
+    // The frozen-charge tier is the derivative the module computes; the
+    // charge-relaxed one is a different derivative of the same energy and is
+    // named rather than answered with the frozen-charge number.
+    if (resolved.form == DispersionForm::kD4 && tier == DispersionGradientTier::kChargeRelaxed)
     {
         return std::unexpected(qcx::Error{
             qcx::ErrorCode::kUnimplemented,
-            "dispersion: form \"d4\" has no coordinate-gradient tier (only its energy is "
-            "implemented; use form \"d3\" for a gradient, or request the energy alone)"});
+            "dispersion: form \"d4\" has no charge-relaxed coordinate gradient: its C6 and C8 "
+            "coefficients depend on the geometry through the coordination numbers and the EEQ "
+            "partial charges, and that derivative is not implemented (the frozen-charge tier "
+            "holds those coefficients at the geometry's values and differentiates through the "
+            "interatomic distances)"});
     }
 
     auto geometry = qcx::grid::ToExcgridGeometry(molecule);
@@ -411,6 +430,93 @@ qcx::Result<DispersionGradient> EvaluateDispersionGradient(const molecule::Molec
     if (!geometry.has_value())
     {
         return std::unexpected(geometry.error());
+    }
+
+    if (resolved.form == DispersionForm::kD4)
+    {
+        if (auto refusal = D4MoleculeRefusal(molecule); refusal.has_value())
+        {
+            return std::unexpected(std::move(*refusal));
+        }
+
+        const auto* values = std::get_if<D4ParameterValues>(&resolved.parameters);
+
+        if (values == nullptr)
+        {
+            return std::unexpected(
+                MakeError("dispersion: the resolved values do not match form \"d4\""));
+        }
+
+        const excgrid::D4Parameters parameters{values->s6, values->s8, values->a1, values->a2};
+        auto energy = excgrid::D4TwoBodyEnergy(*geometry, parameters);
+
+        if (!energy.has_value())
+        {
+            return std::unexpected(
+                qcx::grid::TranslateExcgridError(energy.error(), "dispersion: the d4 kernel"));
+        }
+
+        // The pairs are the energy's own, in its own order: the same kernel
+        // fills the pair list it sums, so the gradient differentiates exactly
+        // the expression EvaluateDispersion returns.
+        auto pairs = excgrid::D4TwoBodyPairs(*geometry, parameters);
+
+        if (!pairs.has_value())
+        {
+            return std::unexpected(
+                qcx::grid::TranslateExcgridError(pairs.error(), "dispersion: the d4 kernel"));
+        }
+
+        // The frozen-charge derivative of one pair's term in the energy
+        // -[s6 C6/(r^6 + b^6) + s8 C8/(r^8 + b^8)], with C6, C8 and the
+        // damping radius b held fixed, is
+        //   g_a = sum_b [6 s6 C6 r^4/(r^6 + b^6)^2
+        //                + 8 s8 C8 r^6/(r^8 + b^8)^2] (R_a - R_b),
+        // and g_b is its negative. That is the translational sum rule by
+        // construction: every pair contributes equal and opposite vectors.
+        const auto displacements = static_cast<Eigen::Index>(3 * molecule.AtomCount());
+
+        DispersionGradient output;
+        output.energy = *energy;
+        output.gradient = Eigen::VectorXd::Zero(displacements);
+
+        for (const excgrid::D4TwoBodyPair& pair : *pairs)
+        {
+            const std::array<double, 3>& first = geometry->atoms[pair.first].position;
+            const std::array<double, 3>& second = geometry->atoms[pair.second].position;
+            const double dx = first[0] - second[0];
+            const double dy = first[1] - second[1];
+            const double dz = first[2] - second[2];
+            const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+            // A coincident pair is not in the kernel's list; the guard keeps a
+            // malformed list from dividing by zero rather than changing the sum.
+            if (!(r > 0.0))
+            {
+                continue;
+            }
+
+            const double r6 = std::pow(r, 6.0);
+            const double r8 = r6 * r * r;
+            const double radius6 = std::pow(pair.radius, 6.0);
+            const double radius8 = radius6 * pair.radius * pair.radius;
+            const double denominator6 = r6 + radius6;
+            const double denominator8 = r8 + radius8;
+            const double radial =
+                6.0 * values->s6 * pair.c6 * (r6 / (r * r)) / (denominator6 * denominator6) +
+                8.0 * values->s8 * pair.c8 * r6 / (denominator8 * denominator8);
+
+            const std::array<double, 3> displacement{dx, dy, dz};
+
+            for (std::size_t direction = 0; direction < 3; ++direction)
+            {
+                const double term = radial * displacement[direction];
+                output.gradient(static_cast<Eigen::Index>(3 * pair.first + direction)) += term;
+                output.gradient(static_cast<Eigen::Index>(3 * pair.second + direction)) -= term;
+            }
+        }
+
+        return output;
     }
 
     const auto* values = std::get_if<D3ParameterValues>(&resolved.parameters);

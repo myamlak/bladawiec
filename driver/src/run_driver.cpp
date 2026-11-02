@@ -6664,11 +6664,11 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
 
     // The dispersion correction the run requested, resolved by the energy
     // path's own seam. An absent block adds no term and leaves the
-    // dispersion term empty - never a zero-filled vector. A D4 request is
-    // refused by the dispersion module's gradient entry (there is no
-    // coordinate-gradient tier for that form), and the named refusal is
-    // propagated: a D4 run may still request the energy alone, as schema 41
-    // allows.
+    // dispersion term empty - never a zero-filled vector. A D4 request takes
+    // the module's frozen-charge gradient tier; a refusal from that entry
+    // (a charge-relaxed tier the module does not implement, a charged
+    // molecule, an uncovered element) is propagated by name, so a D4 run may
+    // still request the energy alone, as schema 41 allows.
     if (input.dispersion.has_value())
     {
         auto resolved = qcx::dispersion::ResolveDispersion(
@@ -11678,9 +11678,10 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         // converged reference and attached to the properties block the run
         // just filled, on the restricted Hartree-Fock and restricted
         // Kohn-Sham lanes alike. A request the assembly refuses - a
-        // non-converged SCF, a non-stationary reference, a D4 dispersion
-        // gradient - fails the whole run by name: a requested gradient is
-        // never silently dropped from the record.
+        // non-converged SCF, a non-stationary reference, a dispersion request
+        // the module refuses (a charged D4 molecule, an uncovered element) -
+        // fails the whole run by name: a requested gradient is never
+        // silently dropped from the record.
         auto totalGradient = BuildTotalGradientBlock(*molecule, *basis, *scf, input);
 
         if (!totalGradient.has_value())
