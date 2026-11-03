@@ -4997,15 +4997,17 @@ TEST(DriverErrorTest, LeanWordAdmitsTheLeanMemberAboveTheCeiling) {
     // n = 1210), never asserted as test arithmetic.
     // What it does NOT cover: a CONVERGED >1000 lean run (its physics and
     // its minutes of SCF cost belong to the ladder harness, not a unit
-    // suite). The 1 GiB cap is load-bearing in a second way: a looser one
-    // admits the lean builder into a real SCF, so 1 GiB is the measured
-    // window where the refusal is clean and fast - below either member's
-    // own Create-time requirement (which the refusals themselves report,
-    // so no estimate number is pinned here). The window's LOWER edge is no
-    // longer a property of this pin: the pre-gate setup admission decides
-    // before the ramp, so any cap above the process floor refuses cleanly,
-    // and TightCapRefusesBeforeThePreGateSetupRamp holds the crash band to
-    // that contract.
+    // suite). The cap is calibrated against the admission's own threshold,
+    // not a development machine's team size. The lean admission refuses when
+    // the required peak exceeds 1.5x the available cap, and that peak grows
+    // with the thread count: measured 1.301e9 B at one thread and 1.581e9 B
+    // at two on this fixture. At 1.0 GiB the two-thread ratio was below 1.5,
+    // so the first leg was admitted into a real SCF and the large lane timed
+    // out instead of refusing (the CI failures of 2026-10-24 to 2026-11-03).
+    // 0.5 GiB stays below required/1.5 from one thread upward while remaining
+    // above the process floor, so every runner reaches the admission's
+    // refusal. TightCapRefusesBeforeThePreGateSetupRamp holds the crash band
+    // to that contract.
     // CAPPED, therefore in the cap child: a memory cap applies to the
     // WHOLE process, so staging it here would leave every test after this
     // one running under the same ceiling when the binary is run directly
@@ -5022,7 +5024,7 @@ TEST(DriverErrorTest, LeanWordAdmitsTheLeanMemberAboveTheCeiling) {
     const auto marker = qcx::testing::CapChildMarkerPath(15);
     std::filesystem::remove(marker);
 
-    constexpr double kAboveCeilingCapGib = 1.0;
+    constexpr double kAboveCeilingCapGib = 0.5;
 
     // The child is BOUNDED. Each leg's expected outcome is a refusal at the
     // pre-gate setup admission - a DECISION, measured at 0.31 s on the GCC
