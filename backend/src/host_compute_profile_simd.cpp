@@ -1,12 +1,12 @@
 // The AVX2 measurement lane of the host compute-profile probe:
 // the design's register-bound SIMD FMA chains, explicit intrinsics only.
 //
-// The TU is compiled with /arch:AVX2 and skips the module PCH (clang rejects
-// a PCH built without the target feature the TU compiles with) - the same
-// pair of CMake properties the integrals module's SIMD TUs carry. It is
-// entered only after the runtime CpuHasAvx2Fma() check in
-// host_compute_profile.cpp, so no AVX2 instruction here can execute on a
-// machine that lacks it.
+// In the shipped QCX_ISA=avx2 configuration the TU is compiled with
+// /arch:AVX2 and skips the module PCH (clang rejects a PCH built without the
+// target feature the TU compiles with) - the same pair of CMake properties the
+// integrals module's SIMD TUs carry. It is entered only after the runtime
+// CpuHasAvx2Fma() check in host_compute_profile.cpp, so no AVX2 instruction
+// here can execute on a machine that lacks it.
 //
 // WHY INTRINSICS AND NEVER `a * b + c`. Two reasons, both load-bearing.
 // MSVC at its default /fp:precise does not contract, so a written
@@ -17,26 +17,27 @@
 // fp64 one would read a ratio of 4 - a false ON for the certified lane).
 // Explicit intrinsics pin both lanes to 8 and 4 lanes.
 //
-// ON A NON-x86-64 TARGET THIS TU COMPILES NO INTRINSICS AT ALL. The guards
-// below read the tree's one architecture test (QcxArchX86_64, defined by
-// qcx/backend/cpu_features.hpp), the intrinsics header is not included, and
-// MeasureFmaLaneAvx2() returns the scalar lane's reading. The caller's gate -
-// CpuHasAvx2Fma(), false on such a target - means the profile never selects
-// this lane there, but the function has to exist, and a caller that reaches it
-// anyway (a test, say) gets a measurement rather than a fabricated ratio.
+// ON A NON-x86-64 TARGET OR AT THE x86-64 BASELINE THIS TU COMPILES NO
+// INTRINSICS AT ALL. The guards below read the build's tier
+// (QcxIsaAvx2Fma, defined by qcx/backend/cpu_features.hpp), the intrinsics
+// header is not included, and MeasureFmaLaneAvx2() returns the scalar lane's
+// reading. The caller's gate - CpuHasAvx2Fma() and the tier, so false in
+// either configuration - means the profile never selects this lane there, but
+// the function has to exist, and a caller that reaches it anyway (a test, say)
+// gets a measurement rather than a fabricated ratio.
 
 #include "host_compute_profile_detail.hpp"
-// The architecture test is included before <immintrin.h> because the guard on
-// that include reads it.
+// The tier test is included before <immintrin.h> because the guard on that
+// include reads it.
 #include <qcx/backend/cpu_features.hpp>
 
-#if QcxArchX86_64
+#if QcxIsaAvx2Fma
 #include <immintrin.h>
 #endif
 
 namespace qcx::backend::internal {
 
-#if QcxArchX86_64
+#if QcxIsaAvx2Fma
 
 namespace {
 
@@ -136,15 +137,15 @@ void RunAvx2Fp64(int reps) noexcept {
 
 } // namespace
 
-#endif // QcxArchX86_64
+#endif // QcxIsaAvx2Fma
 
 FmaLaneReading MeasureFmaLaneAvx2() noexcept {
-#if QcxArchX86_64
+#if QcxIsaAvx2Fma
     return EstimateFmaLane(8, 4, RunAvx2Fp32, RunAvx2Fp64);
 #else
-    // No AVX2 lane exists on this target, so there is no 8-lane against 4-lane
-    // pair to time. The scalar lane's own reading is the honest answer: it is a
-    // measurement of this machine, made by the lane this target does have.
+    // No AVX2 lane is compiled in, so there is no 8-lane against 4-lane pair
+    // to time. The scalar lane's own reading is the honest answer: it is a
+    // measurement of this machine, made by the lane this build does have.
     return MeasureFmaLaneScalar();
 #endif
 }

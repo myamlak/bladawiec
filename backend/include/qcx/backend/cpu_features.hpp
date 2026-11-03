@@ -2,11 +2,12 @@
 
 // The host CPU-feature detection: one predicate per requirement, defined
 // once, so no two translation units anywhere in the tree can answer the same
-// question differently. Two consumers read it - the integrals module's
-// /arch:AVX2 translation units (fock_contract_simd.cpp, md_bra_simd.cpp) and
-// this module's own host compute-profile probe
+// question differently. Two consumers read it - the integrals module's SIMD
+// translation units (fock_contract_simd.cpp, md_bra_simd.cpp; AVX2 + FMA in
+// the shipped QCX_ISA=avx2 configuration, the portable fallback at
+// QCX_ISA=baseline) and this module's own host compute-profile probe
 // (host_compute_profile.hpp), whose AVX2 measurement lane is gated on
-// CpuHasAvx2Fma().
+// CpuHasAvx2Fma() and QcxIsaAvx2Fma.
 //
 // WHY IT LIVES IN backend. It was integrals/src/internal/cpu_features.hpp
 // until the host compute-profile probe was added. The
@@ -73,6 +74,19 @@
 #define QcxArchX86_64 1
 #else
 #define QcxArchX86_64 0
+#endif
+
+// The program's instruction-set tier, from the flags this translation unit was
+// compiled with: 1 at the shipped AVX2 + FMA tier (QCX_ISA=avx2), 0 at the
+// x86-64 baseline (QCX_ISA=baseline) and on every other architecture. The
+// build system states the tier once on the directory; this is the question a
+// body asks, derived the same way the Boys library derives it
+// (BOYS_ISA_AVX2_FMA, boys/isa_tiers.hpp). MSVC spells /arch:AVX2 as
+// __AVX2__ alone (measured), so there that macro is the answer.
+#if (defined(__AVX2__) && defined(__FMA__)) || (defined(_MSC_VER) && defined(__AVX2__))
+#define QcxIsaAvx2Fma 1
+#else
+#define QcxIsaAvx2Fma 0
 #endif
 
 #if QcxArchX86_64

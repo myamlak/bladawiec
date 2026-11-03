@@ -53,10 +53,12 @@ TEST(HostComputeProfileTest, TheProbeMeasurementIsRecorded) {
     RecordProperty("probe_pairs", std::to_string(probed.pairs));
     RecordProperty("probe_ratio_spread", std::to_string(probed.ratioSpread));
 
-    // The lane choice is the shared predicate's answer, never a second
-    // detector: the probe and the AVX2 kernels must agree on what this
-    // machine may execute.
-    EXPECT_EQ(probed.simdLane, qcx::backend::CpuHasAvx2Fma());
+    // The lane choice is the shared predicate's answer combined with the
+    // build's tier, never a second detector: the probe and the AVX2 kernels
+    // must agree on what this build may execute here. At QCX_ISA=baseline the
+    // SIMD lane is not compiled in, so the scalar lane is the answer even on a
+    // machine that carries AVX2.
+    EXPECT_EQ(probed.simdLane, (QcxIsaAvx2Fma != 0) && qcx::backend::CpuHasAvx2Fma());
 
     // A machine whose lanes can be timed must produce a reading. A false
     // here is the defect this pin exists for: a probe that silently reports

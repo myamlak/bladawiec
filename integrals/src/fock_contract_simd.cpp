@@ -1,9 +1,13 @@
 // The AVX2 copy of the Fock-contraction kernel: the one
-// kernel body from internal/fock_contract_kernel.hpp, compiled with
-// /arch:AVX2 (auto-vectorization only - no hand-written intrinsics in this
-// first shape) and entered only after the runtime cpuid
-// check (qcx::backend::CpuHasAvx2(), qcx/backend/cpu_features.hpp) passes. The scalar copy
-// instantiates inside fock_build.cpp (no /arch flag on that TU). The dispatch
+// kernel body from internal/fock_contract_kernel.hpp, compiled at the
+// program's tier (/arch:AVX2 in the shipped QCX_ISA=avx2 configuration;
+// auto-vectorization only - no hand-written intrinsics in this first shape)
+// and entered only after the runtime cpuid check
+// (qcx::backend::CpuHasAvx2(), qcx/backend/cpu_features.hpp) AND the build's
+// tier (QcxIsaAvx2Fma, same header) both pass. At QCX_ISA=baseline this TU is
+// the scalar code without a target feature, and the entry is not selected.
+// The scalar copy
+// instantiates inside fock_build.cpp. The dispatch
 // shape mirrors boys_simd.cpp: CPUID + OSXSAVE detection cached in a
 // function-local static, the caller gating on it before the AVX2 path is ever
 // entered - never assume the deployment machine has AVX2 just because the dev
@@ -32,7 +36,11 @@ bool FockAvx2Available() noexcept {
     // built with does let -ffp-contract=fast fuse, which is why that band is
     // a few ulps there and not zero - read cpu_features.hpp before changing
     // this to the FMA predicate.
-    static const bool available = qcx::backend::CpuHasAvx2();
+    //
+    // The build's tier is the other half: at QCX_ISA=baseline this TU carries
+    // no AVX2 target feature, so the runtime predicate alone would enter a
+    // copy the compiler compiled as scalar code.
+    static const bool available = QcxIsaAvx2Fma != 0 && qcx::backend::CpuHasAvx2();
     return available;
 }
 

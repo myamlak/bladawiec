@@ -223,7 +223,8 @@ FmaLaneReading EstimateFmaLane(int fp32Lanes,
 }
 
 /// The 256-bit FMA lane (AVX2: 8 fp32 lanes, 4 fp64 lanes), compiled in its
-/// own /arch:AVX2 TU. Called only when CpuHasAvx2Fma() holds.
+/// own /arch:AVX2 TU at QCX_ISA=avx2. Called only when the build carries the
+/// tier (QcxIsaAvx2Fma) and CpuHasAvx2Fma() holds.
 FmaLaneReading MeasureFmaLaneAvx2() noexcept;
 
 /// The scalar reference lane: one fp32 and one fp64 FMA chain per step of the
