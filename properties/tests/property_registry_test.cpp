@@ -75,8 +75,8 @@ struct ExpectedRow {
 
 // The driver's current outcome, one row per property, in the column order
 // rhf, uhf, rks, uks, rohf, roks. The refusals are transcribed from the
-// driver's pre-run checks (fukui on a Kohn-Sham parent; ETS-NOCV on a per-spin
-// run and on a functional-naming method) and the input validator's two
+// driver's pre-run checks (ETS-NOCV on a per-spin run and on a
+// functional-naming method) and the input validator's two
 // gradient policies plus the restricted open-shell key policy; the element
 // limits are declared beside the table and checked separately.
 constexpr std::array<ExpectedRow, kPropertyCount> kExpected{{
@@ -125,10 +125,10 @@ constexpr std::array<ExpectedRow, kPropertyCount> kExpected{{
     {PropertyKind::kFukui,
      {RefusalReason::kNone,
       RefusalReason::kNone,
-      RefusalReason::kFukuiKohnShamSpecies,
-      RefusalReason::kFukuiKohnShamSpecies,
       RefusalReason::kNone,
-      RefusalReason::kFukuiKohnShamSpecies}},
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone}},
     {PropertyKind::kNalewajski,
      {RefusalReason::kNone,
       RefusalReason::kNone,
@@ -254,7 +254,6 @@ TEST(PropertyRegistryTest, EveryDeclaredWordIsUnique) {
     std::vector<std::string_view> refusalWords;
 
     for (const RefusalReason reason : {RefusalReason::kNone,
-                                       RefusalReason::kFukuiKohnShamSpecies,
                                        RefusalReason::kEtsNocvClosedShellOnly,
                                        RefusalReason::kEtsNocvHartreeFockOnly,
                                        RefusalReason::kHirshfeldSadTableZLimit,

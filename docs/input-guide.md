@@ -169,9 +169,31 @@ any `[builder]` axis is refused — the two spellings express one request. Its w
 | `integral_family` | string | — | `direct`, `ri_j_link`, `ri_jk` or `qfmm` — where the integrals come from |
 | `storage_tier` | string | — | `lean` or `in_memory` — where that family's working set lives |
 | `execution_backend` | string | — | `cpu`, or `gpu` to run the direct family on the device |
+| `coulomb_half` | string | — | the family whose half adapter supplies the Coulomb half |
+| `exchange_half` | string | — | the family whose half adapter supplies the exchange half |
 
 The three axes are one request, and they are refused together with the deprecated
 `[method] fock_builder` key for that reason.
+
+The two half keys refine the family axis per half, with the same four family
+words. An unwritten half takes the family axis's family, or the size ladder's
+pick when no family axis is written; a half-only request leaves the whole
+selection to the ladder. The role is the key's: `exchange_half = "ri_jk"` asks
+for the full-RI family's exchange half (a density-fitted K), while
+`exchange_half = "ri_j_link"` asks for the RI-J link family's exchange half,
+which is the exact nested direct kernel. A half whose provider cannot supply
+what the other half needs — a Kohn-Sham energy seam with no separate J, a
+per-spin lane with no adapter, no auxiliary basis for a fitted half, the disk
+rung, or the device backend — is refused by name. The owner's example, a direct
+Coulomb half against a density-fitted exchange half, is:
+
+```toml
+[builder]
+coulomb_half = "direct"
+exchange_half = "ri_jk"
+```
+
+The decision is recorded in the result's `fock_plan` block.
 
 A few further axis words exist but cannot be asked for at these keys, and each is refused by name
 rather than quietly resolved to something else. `storage_tier = "disk"` is refused with the key
@@ -378,10 +400,12 @@ written in.
 
 Two analyses are limited by the element table this version carries: `hirshfeld` needs the atomic
 fragments of the SAD guess, which stops at Z = 10, and `nalewajski` needs isolated-atom fragment
-SCFs, which stop at Z = 19. Beyond those, the analysis refuses by name. `fukui` is refused on a
-`rks`, `uks` or `roks` run: the charged species follow the run's own method, so the indices would be
-Kohn-Sham ones, but that path has no reference test yet and the funded property closure adds it.
-`rohf` runs it (the species are restricted open-shell, like the parent).
+SCFs, which stop at Z = 19. Beyond those, the analysis refuses by name.
+
+`fukui` runs on every method word. The N+1 and N-1 species follow the run's own method: on an
+`rhf`, `uhf` or `rohf` parent they are Hartree-Fock species (unrestricted on the closed-shell and
+unrestricted parents, restricted open-shell on `rohf`), and on an `rks`, `uks` or `roks` parent they
+are Kohn-Sham species computed with the run's functional on its grid.
 
 ### `[memory_instrument]`
 

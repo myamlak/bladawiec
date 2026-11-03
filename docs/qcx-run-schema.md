@@ -409,9 +409,9 @@ key rules follow from that one fact and from nothing else:
   differentiates a closed-shell reference and the open-shell response is not
   implemented;
 - `ets_nocv` is closed-shell only, so it is refused on both as it is on the
-  unrestricted legs; the Fukui charged species follow the run's own method, so
-  `rohf` runs it, and the Kohn-Sham Fukui path (`rks`/`uks`/`roks`) is refused
-  by name until its reference test lands (the funded property closure);
+  unrestricted legs; `fukui` runs on both, because its charged species follow
+  the run's own method (restricted open-shell species on `rohf`, and ROKS
+  species built with the run's functional on `roks`);
 - dispersion is method-independent and their default family is `hf` on `rohf`
   and the `[method] functional` name on `roks` (§2.4).
 
@@ -479,7 +479,7 @@ bumped whenever a consumer must notice a change (§7).
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | The schema version; currently 48 (`RunResult::kSchemaVersion`) |
+| `schema_version` | int | The schema version; currently 49 (`RunResult::kSchemaVersion`) |
 | `molecule_units` | string | Schema 28. The unit the run's geometry was **read under** — the RESOLVED `[molecule] units` value, `"angstrom"` or `"bohr"`, never a request left for a consumer to apply. **Always present**, and `"angstrom"` is the value an absent key resolves to (the parser's default is a judgement, and the disclosure rule makes a judgement stateable). It exists so a record is self-describing on the one convention that has produced a wasted hunt twice in this project (2026-08-26, pyscf's Ångström default; 2026-09-15, Bohr numbers in an Ångström input file): a reader holding the JSON alone can now tell at what scale the geometry was read without consulting the input file. It describes the INPUT, not the numbers — the internal geometry is Bohr under either value |
 | `converged` | bool | True when a convergence criterion fired |
 | `iterations` | int | Iterations spent; the budget when not converged |
@@ -1149,6 +1149,52 @@ kLoose, C24 kNormal — each to the number its own run recorded):
 | above + `theta = 0.5` (the angle overridden) | `kProductBall` | `kWidthTheta` | `0.0` | `0.5` | `0` |
 | above + `theta = -1.0` (the degenerate gate) | `kProductBall` | `kWidthTheta` | `0.0` | `0.0` | `0` |
 | `accuracy = "kTight"`, no `theta` (the rung's own gate) | `kProductBall` | `kWidthTheta` | `0.0` | `0.0` | `0` |
+
+### 3.11 `fock_plan` (schema 49)
+
+The Fock-build planner's decision, present exactly when the input wrote
+`[builder] coulomb_half` or `[builder] exchange_half` (§8.6):
+
+```json
+"fock_plan": {
+  "coulomb":  { "role": "coulomb", "provider": "direct", "provider_class": "direct_screened",
+                "kernel": "exact", "accounting": "H+2J" },
+  "exchange": { "role": "exchange", "provider": "ri_jk", "provider_class": "density_fitted",
+                "kernel": "density_fitted", "accounting": "K",
+                "aux_basis": "def2-universal-jkfit" },
+  "same_provider": false,
+  "mixed": true,
+  "constraints": ["auxiliary_basis", "option_scope", "exchange_capability"],
+  "reasoning": "..."
+}
+```
+
+- `provider` is the family word of the provider that supplies the half;
+  `provider_class` is its equivalence class (`direct_screened`, `density_fitted`,
+  `combined`, `fast_multipole`); `kernel` is the half's kernel class (`exact`,
+  `density_fitted`, `fast_multipole`).
+- `accounting` is the provider's NATIVE convention (`H+2J`, `2J`, `H-K`, `K`) —
+  what the family's own builder returns, before the driver's half adapter
+  converts it to the composition contract. The converted output is always the
+  contract's `H+2J`/`H-K`, so this word is what tells the families apart; a
+  reader assembling the Fock applies the adapter's documented conversion (the
+  ri_j_link Coulomb half gains H; the full-RI pair gains H on both halves and
+  its Coulomb half is doubled).
+- `aux_basis` is present only when the half's provider consumes one.
+- `same_provider` is true when one family supplies both halves — one builder,
+  one Create and one shared shell-quartet pass; `mixed` is true only when both
+  halves exist and come from different families (two builders, no shared
+  intermediate). A Coulomb-only plan (a pure Kohn-Sham functional) is neither.
+- `exchange` is **absent** exactly when the run builds no exchange term (a pure
+  Kohn-Sham functional), never zero-filled.
+- `constraints` lists the constraint words the planner evaluated, in check
+  order: `coulomb_matrix` (the Kohn-Sham energy seam's separate J[D]),
+  `per_spin_adapter`, `auxiliary_basis`, `disk_rung`, `device_boundary`,
+  `option_scope` and `exchange_capability`.
+- The block records a DECISION the wiring then executes. A plan the v1 wiring
+  cannot execute — a mixed pair other than direct-with-`ri_j_link`/`ri_jk`, or
+  any mixed plan on a per-spin lane — is refused by name before serialization,
+  so a present block is a block whose providers ran.
 
 ## 4. Units
 
@@ -2152,6 +2198,17 @@ an alias by construction cannot.
   present and the form is `d4`; it is absent for `d3` (one zero-damping
   derivative) and when no correction was requested, so a document outside a
   `d4` gradient is byte-identical under the change.
+- 48 → 49 (the Fock-build planner's decision reaches the record): the
+  `[builder] coulomb_half` and `[builder] exchange_half` input keys (§8.6) and
+  the top-level `fock_plan` output block (§3.11) added together. The block
+  states the provider per half, each provider's equivalence class, kernel and
+  accounting convention, whether one family supplies both halves (and so
+  shares its intermediate), the constraints the planner checked and its one
+  sentence of reasoning. It is present exactly when the input wrote a half
+  key; a run that named no half states its whole selection in `builder_axes`,
+  and the absence is the "no request", never a fabricated plan. A mixed plan
+  is the case the whole-family vocabulary cannot state, and it is why the
+  block exists. Keys added, so the number moves with them.
 
 ## 8. The builder-selection axes (schema 35)
 
@@ -2281,3 +2338,62 @@ and it does not claim one either.
   and silently leave the other unread.
 - **Unknown words** on any axis are refused by name with the accepted list, the
   same posture the deprecated key's refusal already had.
+
+### 8.6 The per-half keys (schema 49): `coulomb_half` and `exchange_half`
+
+The axes above select ONE family for the whole build. Two optional keys refine
+that selection per half:
+
+| key | values | meaning |
+|---|---|---|
+| `[builder] coulomb_half` | `direct` \| `ri_j_link` \| `ri_jk` \| `qfmm` | the family whose half adapter supplies J |
+| `[builder] exchange_half` | the same four words | the family whose half adapter supplies K |
+
+**Why these keys, and why not `[method]`.** The value vocabulary is the family
+axis's own, because a half is a request for one of the existing builders' halves
+and a second provider vocabulary could drift from the families the tree wires.
+The ROLE is carried by the key, so `exchange_half = "ri_jk"` means "the full-RI
+family's exchange half" (occ-RI-K), never the whole-family selection. They live
+in `[builder]` because that block is the selection surface the deprecated
+`[method] fock_builder` key was replaced by; adding a non-deprecated selection
+key beside the deprecated one would recreate the two-spellings problem the axis
+split removed. Writing a half key together with the deprecated key is refused
+by name (one request, one key), exactly as any axis is.
+
+**How a half key composes.** An unwritten half defaults to the resolved
+whole-selection family — the `integral_family` axis when written, else the size
+ladder's pick — so one key can split a default selection without restating it.
+A half-only request leaves the whole-selection slots empty and the ladder keeps
+deciding the unwritten half. `storage_tier = "lean"` remains legal when a direct
+family supplies at least one half; it governs that half's member (the
+restricted lanes' lean member) and nothing else. A family axis naming one family
+beside a half key naming another is a coherent REFINEMENT, not a contradiction:
+the family axis supplies the unwritten half.
+
+**The owner's example.** A direct Coulomb half against a density-fitted
+exchange half is:
+
+```toml
+[builder]
+coulomb_half = "direct"
+exchange_half = "ri_jk"
+```
+
+`ri_jk` is the tree's density-fitted K (occ-RI-K from the full-RI builder).
+`exchange_half = "ri_j_link"` is also accepted and states the RI-J link
+family's own exchange half, which is the EXACT nested direct kernel — the
+record's `fock_plan.exchange.kernel` says `"exact"` there, so the two requests
+are never confused.
+
+**Refusals.** The planner refuses a pair that breaks a constraint, naming the
+constraint and the half: the Kohn-Sham energy seam's separate J[D] (a provider
+that exposes no half), a per-spin lane whose provider has no per-spin adapter,
+a fitted half with no resolvable auxiliary basis, the RI disk rung (whose driver
+route exposes no per-iteration half, and which is one whole-family builder's
+storage route — a mixed plan has no single builder to put on it), the device
+backend (whose builder exposes no half), and — for a mixed plan — the
+whole-builder keys `method.ri_orbit_expansion` and `method.eri_cache_store`,
+which have no single builder to configure. The v1 wiring executes the mixed pair
+only on the restricted lanes (`rhf`, `rks`) and only for `direct` with
+`ri_j_link` or `ri_jk`; every other mixed pair is refused by name rather than
+substituted. The decision is the record's `fock_plan` block (§3.11).

@@ -612,6 +612,48 @@ accuracy = "kNormal"
     EXPECT_NE(report.issues[0].find("def2-universal-jfit"), std::string::npos) << report.issues[0];
 }
 
+TEST(RunInputValidationTest, HalfKeysJudgeTheEffectiveAuxConsumers) {
+    // Schema 49's half keys refine the family axis per half, so the aux rule
+    // follows the EFFECTIVE families. Here the axis names ri_jk but both
+    // halves are written direct: the plan consumes no aux, so a J-only
+    // [basis].aux is inert and the axis's JK rule must not refuse it - that
+    // would be a refusal of a request the plan never makes.
+    const auto inertAux = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "def2-svp"
+aux = "def2-universal-jfit"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[builder]
+integral_family = "ri_jk"
+coulomb_half = "direct"
+exchange_half = "direct"
+)");
+    EXPECT_TRUE(inertAux.IsValid()) << (inertAux.issues.empty() ? "" : inertAux.issues[0]);
+
+    // The mirror: a written ri_jk half IS a JK consumer, even with no family
+    // axis - the half keys reach the rule on their own.
+    const auto jkHalf = Validate(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+[basis]
+orbital = "def2-svp"
+aux = "def2-universal-jfit"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[builder]
+coulomb_half = "direct"
+exchange_half = "ri_jk"
+)");
+    ASSERT_FALSE(jkHalf.IsValid());
+    EXPECT_NE(jkHalf.issues[0].find("requires a JK-optimized auxiliary basis"), std::string::npos)
+        << jkHalf.issues[0];
+}
+
 TEST(RunInputValidationTest, RiJkStaysInertForTheUnrestrictedLeg) {
     // What this cell pins NOW: the aux predicate is scoped to the RHF leg
     // (method.type = "rhf"), so a uhf + ri_jk deck raises no basis.aux issue,

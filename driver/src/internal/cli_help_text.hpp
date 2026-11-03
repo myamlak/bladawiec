@@ -203,6 +203,17 @@ input file keys (a key marked required must be written):
                                     states no requirement; a value the backend
                                     cannot supply is refused, never executed
                                     elsewhere
+    coulomb_half = "direct"         optional; direct | ri_j_link | ri_jk |
+                                    qfmm; the family whose half adapter
+                                    supplies the Coulomb half. Absent = the
+                                    family axis's family, or the size ladder
+                                    when no family axis is written; the role
+                                    is the key's, not the word's
+    exchange_half = "ri_jk"         optional; direct | ri_j_link | ri_jk |
+                                    qfmm; the family whose half adapter
+                                    supplies the exchange half. ri_jk is the
+                                    density-fitted exchange; ri_j_link is
+                                    that family's exact nested direct kernel
 [scf]
     max_iterations = 100            >= 1
     energy_tolerance = 1e-8         > 0; the energy change between two

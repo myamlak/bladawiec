@@ -102,24 +102,25 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .elementRefusal = RefusalReason::kNone,
         .evidence = "BuildEddbBlock; test DriverPinTest.H2oDirectRhfStage72BlocksPins",
     },
-    // Fukui runs the N +- 1 species through the direct-UHF runner, so the
-    // species of a Kohn-Sham parent would be Hartree-Fock densities.
+    // Fukui runs the N +- 1 species through the per-spin runner with the run's
+    // own method word: a Kohn-Sham parent's species are Kohn-Sham densities
+    // built with its functional, not Hartree-Fock ones under a Kohn-Sham
+    // label, so every method kind is supported.
     {
         .kind = PropertyKind::kFukui,
         .name = "fukui",
         .byMethod = {RefusalReason::kNone,
                      RefusalReason::kNone,
-                     RefusalReason::kFukuiKohnShamSpecies,
-                     RefusalReason::kFukuiKohnShamSpecies,
-                     // ROHF is not a Kohn-Sham run: the charged species are
-                     // Hartree-Fock ones, the same physics as the parent.
                      RefusalReason::kNone,
-                     RefusalReason::kFukuiKohnShamSpecies},
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone},
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
         .elementRefusal = RefusalReason::kNone,
         .evidence = "BuildFukuiBlock; tests H2oDirectRhfFukuiSumRules, "
-                    "O2UhfFukuiExercisesTheTripletBranches",
+                    "O2UhfFukuiExercisesTheTripletBranches, H2oRksFukuiSpeciesAreKohnSham, "
+                    "OhDoubletUksFukuiSpeciesAreKohnSham",
     },
     {
         .kind = PropertyKind::kNalewajski,
@@ -324,8 +325,6 @@ std::string_view ToString(RefusalReason reason) noexcept {
     {
     case RefusalReason::kNone:
         return "none";
-    case RefusalReason::kFukuiKohnShamSpecies:
-        return "fukui-kohn-sham-species";
     case RefusalReason::kEtsNocvClosedShellOnly:
         return "ets-nocv-closed-shell-only";
     case RefusalReason::kEtsNocvHartreeFockOnly:

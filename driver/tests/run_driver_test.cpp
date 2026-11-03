@@ -4712,7 +4712,7 @@ accuracy = "kNormal"
 // Positive control (the red half; recorded with this wiring): with
 // ResolveScfPath's two Kohn-Sham cases reverted to kRestricted/kUnrestricted -
 // the exact pre-dispatch, which selected its method by equality - all
-// four legs RUN instead of refusing, every ASSERT_FALSE below fails, and this
+// three legs RUN instead of refusing, every ASSERT_FALSE below fails, and this
 // test is red. Green here is therefore a statement about the path and not
 // about the build.
 TEST(DriverErrorTest, KohnShamRequestsReachTheKohnShamPath) {
@@ -4795,85 +4795,6 @@ accuracy = "kNormal"
     EXPECT_NE(wrongFamily.error().message.find("fock_builder = \"direct\", \"qfmm\", "
                                                "\"ri_j_link\" and \"ri_jk\""),
               std::string::npos);
-
-    // Leg 4 - the fukui guard, which is about the analysis and not the Fock:
-    // the charged species follow the run's own method, so a Kohn-Sham parent
-    // would need the Kohn-Sham Fukui path, which has no reference test yet.
-    // Refused by name, and a Hartree-Fock fall-through runs the analysis
-    // happily - the same silent-substitution shape one layer up.
-    const auto fukui = RunInputText(R"(
-[molecule]
-atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
-[basis]
-orbital = "sto-3g"
-[method]
-type = "rks"
-functional = "slater"
-accuracy = "kNormal"
-[properties]
-fukui = true
-)");
-    ASSERT_FALSE(fukui.has_value());
-    EXPECT_EQ(fukui.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(fukui.error().message.find("properties.fukui is not wired for a Kohn-Sham run"),
-              std::string::npos);
-}
-
-TEST(DriverErrorTest, FukuiOnUksAndRoksNamesTheKohnShamSpeciesReason) {
-    // Leg 4 above pins the `rks` cell of the coverage record's fukui row; the
-    // other two Kohn-Sham words carry the same kFukuiKohnShamSpecies cell and
-    // had no test. The guard is the ONE IsKohnShamPath test the dispatch
-    // reads, so a word that fell out of it would not refuse - it would run the
-    // N +- 1 species on the Kohn-Sham seam with no reference test behind the
-    // indices, which is the silent substitution the guard prevents.
-    // Both legs therefore assert the refusal's sentence, not just its code.
-    const auto uks = RunInputText(R"(
-[molecule]
-atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
-[basis]
-orbital = "sto-3g"
-[method]
-type = "uks"
-functional = "slater"
-accuracy = "kNormal"
-[properties]
-fukui = true
-)");
-    ASSERT_FALSE(uks.has_value());
-    EXPECT_EQ(uks.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(uks.error().message.find("properties.fukui is not wired for a Kohn-Sham run in v1"),
-              std::string::npos)
-        << uks.error().message;
-    EXPECT_NE(uks.error().message.find("the charged species now follow the run's own method"),
-              std::string::npos)
-        << uks.error().message;
-
-    // ROKS is the Kohn-Sham word of the restricted open-shell pair: it names
-    // a functional and integrates on a grid, so its Fukui species follow the
-    // same Kohn-Sham path UKS's would. full_group = false is the lane's own
-    // spelling.
-    const auto roks = RunInputText(R"(
-[molecule]
-atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
-[basis]
-orbital = "sto-3g"
-[method]
-type = "roks"
-functional = "slater"
-accuracy = "kNormal"
-[symmetry]
-full_group = false
-[properties]
-fukui = true
-)");
-    ASSERT_FALSE(roks.has_value());
-    EXPECT_EQ(roks.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(roks.error().message.find("properties.fukui is not wired for a Kohn-Sham run in v1"),
-              std::string::npos)
-        << roks.error().message;
-    EXPECT_NE(roks.error().message.find("the charged species now follow the run's own method"),
-              std::string::npos)
-        << roks.error().message;
 }
 
 TEST(DriverErrorTest, GpuSplitRequestIsRefusedByNameNotRunAsDirect) {
@@ -8437,6 +8358,279 @@ TEST(DriverPinTest, O2UhfFukuiExercisesTheTripletBranches) {
     EXPECT_NEAR(radicalSum, 1.0, 1e-6);
 }
 
+// One driver document's condensed-Fukui vectors plus the neutral parent's
+// Mulliken totals and spin populations, for the Kohn-Sham/Hartree-Fock
+// species comparison below.
+struct FukuiDocument {
+    std::vector<double> nucleophilic;
+    std::vector<double> electrophilic;
+    std::vector<double> radical;
+    std::vector<double> neutralTotal;
+    std::vector<double> neutralSpin;
+};
+
+std::optional<FukuiDocument> ReadFukuiDocument(const std::string& json) {
+    const auto fukuiPos = json.find("\"fukui\"");
+    const auto populationsPos = json.find("\"populations\"");
+
+    if (fukuiPos == std::string::npos || populationsPos == std::string::npos)
+    {
+        return std::nullopt;
+    }
+
+    const auto mullikenPos = json.find("\"mulliken\"", populationsPos);
+
+    if (mullikenPos == std::string::npos)
+    {
+        return std::nullopt;
+    }
+
+    auto nucleophilic = JsonNumberArray(json, "\"nucleophilic\":", fukuiPos);
+    auto electrophilic = JsonNumberArray(json, "\"electrophilic\":", fukuiPos);
+    auto radical = JsonNumberArray(json, "\"radical\":", fukuiPos);
+    auto neutralTotal = JsonNumberArray(json, "\"total\":", mullikenPos);
+    auto neutralSpin = JsonNumberArray(json, "\"spin\":", mullikenPos);
+
+    if (!nucleophilic.has_value() || !electrophilic.has_value() || !radical.has_value() ||
+        !neutralTotal.has_value() || !neutralSpin.has_value())
+    {
+        return std::nullopt;
+    }
+
+    return FukuiDocument{nucleophilic->values,
+                         electrophilic->values,
+                         radical->values,
+                         neutralTotal->values,
+                         neutralSpin->values};
+}
+
+double SquaredNorm(const std::vector<double>& values) {
+    double sum = 0.0;
+
+    for (const double value : values)
+    {
+        sum += value * value;
+    }
+
+    return sum;
+}
+
+// The species population differences q_KS(N +- 1) - q_HF(N +- 1), recovered
+// from two documents' condensed indices and neutral Mulliken totals by the
+// derivation in H2oRksFukuiSpeciesAreKohnSham's comment. Empty when the two
+// documents do not describe the same molecule.
+struct SpeciesDeltas {
+    std::vector<double> anion; ///< q_KS(N + 1) - q_HF(N + 1).
+    std::vector<double> cation; ///< q_KS(N - 1) - q_HF(N - 1).
+};
+
+// The two documents are the Kohn-Sham run and its Hartree-Fock twin, in that
+// fixed order: the first side minus the second is the comparison's sign.
+//
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+std::optional<SpeciesDeltas> RecoverSpeciesDeltas(const FukuiDocument& ks,
+                                                  const FukuiDocument& hf) {
+    if (ks.nucleophilic.size() != hf.nucleophilic.size() ||
+        ks.electrophilic.size() != hf.electrophilic.size() ||
+        ks.neutralTotal.size() != hf.neutralTotal.size() ||
+        ks.nucleophilic.size() != ks.neutralTotal.size() ||
+        ks.electrophilic.size() != ks.nucleophilic.size())
+    {
+        return std::nullopt;
+    }
+
+    SpeciesDeltas deltas;
+    deltas.anion.resize(ks.nucleophilic.size());
+    deltas.cation.resize(ks.nucleophilic.size());
+
+    for (std::size_t i = 0; i < ks.nucleophilic.size(); ++i)
+    {
+        const double neutralDelta = ks.neutralTotal[i] - hf.neutralTotal[i];
+        deltas.anion[i] = (ks.nucleophilic[i] - hf.nucleophilic[i]) + neutralDelta;
+        deltas.cation[i] = neutralDelta - (ks.electrophilic[i] - hf.electrophilic[i]);
+    }
+
+    return deltas;
+}
+
+// The Kohn-Sham Fukui path, end to end: water/STO-3G on an `rks` parent with
+// a shipped functional (slater). The N +- 1 species follow the run's own
+// method word, so they are UKS species built with the run's functional.
+//
+// The defining sum rules are asserted first. The species check below them
+// reads the densities the analysis actually used: the record carries no
+// species energies, so the species' entry is pinned from the observables it
+// does carry - the condensed indices and the neutral Mulliken totals. For one
+// atom,
+//     delta(N + 1) = (f+_KS - f+_HF) + (q_KS(N) - q_HF(N))
+//     delta(N - 1) = (q_KS(N) - q_HF(N)) - (f-_KS - f-_HF)
+// are exactly q_KS(N +- 1) - q_HF(N +- 1), the species population difference
+// between the Kohn-Sham and Hartree-Fock runs. Had the charged species fallen
+// back to the Hartree-Fock seam under the Kohn-Sham parent - the mixing the
+// admission used to refuse - both deltas would be zero to rounding, because
+// the species SCF settings are otherwise identical. A non-zero delta is
+// therefore the observable statement that the functional entered the species.
+// No external reference value is pinned here: a published condensed-Fukui
+// number for this fixture is owed (the identities and the seam comparison are
+// what the tree substantiates today).
+TEST(DriverPinTest, H2oRksFukuiSpeciesAreKohnSham) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "two Fukui analyses (six SCFs): Release-only";
+    }
+
+    // The RHF pin's fixture, one method word away: the same geometry, basis
+    // and SCF settings, so every difference below is the method's.
+    std::string rksToml = kH2oFukuiToml;
+    const std::string rhfMethod = "type = \"rhf\"";
+    const auto methodPos = rksToml.find(rhfMethod);
+    ASSERT_NE(methodPos, std::string::npos);
+    rksToml.replace(methodPos, rhfMethod.size(), "type = \"rks\"\nfunctional = \"slater\"");
+    rksToml += "[scf]\nmax_iterations = 200\n";
+    const std::string hfToml = std::string(kH2oFukuiToml) + "[scf]\nmax_iterations = 200\n";
+
+    auto rks = RunInputText(rksToml.c_str());
+    ASSERT_TRUE(rks.has_value()) << rks.error().message;
+    auto hf = RunInputText(hfToml.c_str());
+    ASSERT_TRUE(hf.has_value()) << hf.error().message;
+
+    EXPECT_NE(rks->find("\"converged\": true"), std::string::npos);
+
+    // The functional entered the parent itself, not just its label.
+    const auto rksTotal = JsonNumber(*rks, "\"total_energy_hartree\"");
+    const auto hfTotal = JsonNumber(*hf, "\"total_energy_hartree\"");
+    ASSERT_TRUE(rksTotal.has_value());
+    ASSERT_TRUE(hfTotal.has_value());
+    EXPECT_GT(std::abs(*rksTotal - *hfTotal), 1e-3);
+
+    const auto rksDocument = ReadFukuiDocument(*rks);
+    const auto hfDocument = ReadFukuiDocument(*hf);
+    ASSERT_TRUE(rksDocument.has_value());
+    ASSERT_TRUE(hfDocument.has_value());
+    ASSERT_EQ(rksDocument->nucleophilic.size(), 3u);
+    ASSERT_EQ(rksDocument->electrophilic.size(), 3u);
+    ASSERT_EQ(rksDocument->radical.size(), 3u);
+    ASSERT_EQ(hfDocument->nucleophilic.size(), 3u);
+    ASSERT_EQ(hfDocument->electrophilic.size(), 3u);
+    ASSERT_EQ(rksDocument->neutralTotal.size(), 3u);
+    ASSERT_EQ(hfDocument->neutralTotal.size(), 3u);
+
+    double nucleophilicSum = 0.0;
+    double electrophilicSum = 0.0;
+    double radicalSum = 0.0;
+
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+        nucleophilicSum += rksDocument->nucleophilic[i];
+        electrophilicSum += rksDocument->electrophilic[i];
+        radicalSum += rksDocument->radical[i];
+        EXPECT_NEAR(rksDocument->radical[i],
+                    0.5 * (rksDocument->nucleophilic[i] + rksDocument->electrophilic[i]),
+                    1e-12);
+    }
+
+    EXPECT_NEAR(nucleophilicSum, 1.0, 1e-6);
+    EXPECT_NEAR(electrophilicSum, 1.0, 1e-6);
+    EXPECT_NEAR(radicalSum, 1.0, 1e-6);
+
+    const auto speciesDeltas = RecoverSpeciesDeltas(*rksDocument, *hfDocument);
+    ASSERT_TRUE(speciesDeltas.has_value());
+    EXPECT_GT(std::sqrt(SquaredNorm(speciesDeltas->anion)), 1e-5)
+        << "the anion species reproduced the Hartree-Fock densities under the rks parent";
+    EXPECT_GT(std::sqrt(SquaredNorm(speciesDeltas->cation)), 1e-5)
+        << "the cation species reproduced the Hartree-Fock densities under the rks parent";
+}
+
+// The spin-resolved Kohn-Sham parent: the OH doublet on `uks` with the same
+// shipped functional. The cation species is the M - 1 = 1 singlet and the
+// anion the M + 1 = 3 triplet, so both charged-spin branches run. Each
+// species conserves its own electron count, so the sum rules hold exactly as
+// on the closed-shell parent, and the doublet's radical index is the
+// pointwise average of the two response vectors. The same delta derivation
+// the rks test uses (with the run's UHF twin as the Hartree-Fock arm) then
+// shows both species densities are the functional's, not Hartree-Fock ones.
+TEST(DriverPinTest, OhDoubletUksFukuiSpeciesAreKohnSham) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "two Fukui analyses (six SCFs): Release-only";
+    }
+
+    const std::string uksToml = R"(
+[molecule]
+charge = 0
+multiplicity = 2
+units = "bohr"
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+[basis]
+orbital = "sto-3g"
+[method]
+type = "uks"
+functional = "slater"
+fock_builder = "direct"
+accuracy = "kTight"
+[scf]
+max_iterations = 200
+[properties]
+fukui = true
+)";
+
+    // The Hartree-Fock twin: one method word away, the same neutral doublet
+    // and the same charged species.
+    const std::string ksMethod = "type = \"uks\"\nfunctional = \"slater\"";
+    std::string uhfToml = uksToml;
+    const auto methodPos = uhfToml.find(ksMethod);
+    ASSERT_NE(methodPos, std::string::npos);
+    uhfToml.replace(methodPos, ksMethod.size(), "type = \"uhf\"");
+
+    auto uks = RunInputText(uksToml.c_str());
+    ASSERT_TRUE(uks.has_value()) << uks.error().message;
+    auto uhf = RunInputText(uhfToml.c_str());
+    ASSERT_TRUE(uhf.has_value()) << uhf.error().message;
+    EXPECT_NE(uks->find("\"converged\": true"), std::string::npos);
+
+    const auto ksDocument = ReadFukuiDocument(*uks);
+    const auto hfDocument = ReadFukuiDocument(*uhf);
+    ASSERT_TRUE(ksDocument.has_value());
+    ASSERT_TRUE(hfDocument.has_value());
+    ASSERT_EQ(ksDocument->nucleophilic.size(), 2u);
+    ASSERT_EQ(ksDocument->electrophilic.size(), 2u);
+    ASSERT_EQ(ksDocument->radical.size(), 2u);
+    ASSERT_EQ(ksDocument->neutralTotal.size(), 2u);
+    ASSERT_EQ(ksDocument->neutralSpin.size(), 2u);
+    ASSERT_EQ(hfDocument->nucleophilic.size(), 2u);
+    ASSERT_EQ(hfDocument->electrophilic.size(), 2u);
+    ASSERT_EQ(hfDocument->neutralTotal.size(), 2u);
+
+    double nucleophilicSum = 0.0;
+    double electrophilicSum = 0.0;
+    double radicalSum = 0.0;
+    double spinSum = 0.0;
+
+    for (std::size_t i = 0; i < 2; ++i)
+    {
+        nucleophilicSum += ksDocument->nucleophilic[i];
+        electrophilicSum += ksDocument->electrophilic[i];
+        radicalSum += ksDocument->radical[i];
+        spinSum += ksDocument->neutralSpin[i];
+        EXPECT_NEAR(ksDocument->radical[i],
+                    0.5 * (ksDocument->nucleophilic[i] + ksDocument->electrophilic[i]),
+                    1e-12);
+    }
+
+    EXPECT_NEAR(nucleophilicSum, 1.0, 1e-6);
+    EXPECT_NEAR(electrophilicSum, 1.0, 1e-6);
+    EXPECT_NEAR(radicalSum, 1.0, 1e-6);
+    // The parent really is the doublet the run declares: one unpaired electron.
+    EXPECT_NEAR(spinSum, 1.0, 1e-6);
+
+    const auto speciesDeltas = RecoverSpeciesDeltas(*ksDocument, *hfDocument);
+    ASSERT_TRUE(speciesDeltas.has_value());
+    EXPECT_GT(std::sqrt(SquaredNorm(speciesDeltas->anion)), 1e-5)
+        << "the anion species reproduced the Hartree-Fock densities under the uks parent";
+    EXPECT_GT(std::sqrt(SquaredNorm(speciesDeltas->cation)), 1e-5)
+        << "the cation species reproduced the Hartree-Fock densities under the uks parent";
+}
+
 TEST(DriverErrorTest, FukuiRejectsUnconvergedSpeciesScf) {
     // The unconverged-budget refusal (no tiny-maxIterations test): the
     // driver runs the charged Fukui species' UHF SCFs itself,
@@ -10598,4 +10792,224 @@ restart_path = "qcx_no_such_checkpoint_for_this_row.h5"
         << "the restart pair was answered by the pairing rule instead of by the read: "
         << restartWithPath.error().message;
 #endif
+}
+
+// The Fock-build planner's ACCEPTANCE cell (schema 49): the owner's example -
+// a direct Coulomb half against a density-fitted exchange half - executed end
+// to end on the Kohn-Sham lane. `ri_jk` is this tree's density-fitted K
+// (occ-RI-K from the full-RI builder); the ri_j_link exchange half is the exact
+// nested direct kernel and is pinned separately by the planner test.
+//
+// The input is the documented spelling exactly: only the two half keys, so the
+// size ladder keeps deciding the whole-selection slots they do not write (at
+// nBasis 2 that is the direct family's lean member, the J half here). The
+// assertions are on the RECORD, because the record is the contract: the
+// providers, their classes, the kernels, the native accounting words, the
+// sharing taken, the checked constraints and the aux the exchange half
+// consumes. A run whose wiring differed from its plan would fail here.
+TEST(DriverRunTest, FockPlanRunsADirectCoulombHalfAgainstARiJkExchangeHalf) {
+    auto input = ParseRunInput(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["H", 0.0, 0.0, 0.0],
+    ["H", 0.74084809526419992, 0.0, 0.0],
+]
+
+[basis]
+orbital = "sto-3g"
+aux = "def2-universal-jkfit"
+
+[method]
+type = "rks"
+functional = "b3lyp"
+accuracy = "kNormal"
+
+[builder]
+coulomb_half = "direct"
+exchange_half = "ri_jk"
+
+[scf]
+use_diis = true
+max_iterations = 200
+)");
+    ASSERT_TRUE(input.has_value()) << input.error().message;
+
+    auto outcome = qcx::driver::RunDriverOutcome(*input);
+    ASSERT_TRUE(outcome.has_value()) << outcome.error().message;
+
+    const auto& plan = outcome->result.fockPlan;
+    ASSERT_TRUE(plan.has_value()) << "the written half keys produced no fock_plan record";
+
+    EXPECT_TRUE(plan->mixed);
+    EXPECT_FALSE(plan->sameProvider);
+    EXPECT_EQ(plan->coulomb.role, "coulomb");
+    EXPECT_EQ(plan->coulomb.provider, "direct");
+    EXPECT_EQ(plan->coulomb.providerClass, "direct_screened");
+    EXPECT_EQ(plan->coulomb.kernel, "exact");
+    EXPECT_EQ(plan->coulomb.accounting, "H+2J");
+    EXPECT_FALSE(plan->coulomb.auxBasis.has_value());
+
+    ASSERT_TRUE(plan->exchange.has_value());
+    EXPECT_EQ(plan->exchange->role, "exchange");
+    EXPECT_EQ(plan->exchange->provider, "ri_jk");
+    EXPECT_EQ(plan->exchange->providerClass, "density_fitted");
+    EXPECT_EQ(plan->exchange->kernel, "density_fitted");
+    EXPECT_EQ(plan->exchange->accounting, "K");
+    ASSERT_TRUE(plan->exchange->auxBasis.has_value());
+    EXPECT_EQ(*plan->exchange->auxBasis, "def2-universal-jkfit");
+
+    // The constraint vocabulary is the planner's, in check order: the
+    // Kohn-Sham seam's J[D] was checked (rks), the fitted half's aux was
+    // checked, the mixed pair's option scope was checked, and the exchange
+    // capability was checked.
+    const auto& constraints = plan->constraints;
+    EXPECT_NE(std::find(constraints.begin(), constraints.end(), "coulomb_matrix"),
+              constraints.end());
+    EXPECT_NE(std::find(constraints.begin(), constraints.end(), "auxiliary_basis"),
+              constraints.end());
+    EXPECT_NE(std::find(constraints.begin(), constraints.end(), "option_scope"), constraints.end());
+    EXPECT_NE(std::find(constraints.begin(), constraints.end(), "exchange_capability"),
+              constraints.end());
+
+    // The same decision reaches the serialized document, so a JSON consumer
+    // reads the plan rather than the whole-family selection.
+    EXPECT_NE(outcome->json.find("\"fock_plan\""), std::string::npos);
+    EXPECT_NE(outcome->json.find("\"provider\": \"ri_jk\""), std::string::npos);
+    EXPECT_NE(outcome->json.find("\"mixed\": true"), std::string::npos);
+
+    // The run itself reached a converged record (a mixed plan that serialized
+    // without walking the SCF would otherwise pass the structural claims).
+    EXPECT_TRUE(outcome->result.converged);
+}
+
+// The record contract's other half: `fock_plan` is present exactly when a half
+// key was written. A same-provider half request states the one family and runs
+// the existing whole-family arm; the run without a half key carries no block.
+TEST(DriverRunTest, FockPlanIsPresentExactlyWhenAHalfKeyWasWritten) {
+    auto sameProvider = ParseRunInput(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["H", 0.0, 0.0, 0.0],
+    ["H", 0.74084809526419992, 0.0, 0.0],
+]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+accuracy = "kNormal"
+
+[builder]
+coulomb_half = "direct"
+exchange_half = "direct"
+)");
+    ASSERT_TRUE(sameProvider.has_value()) << sameProvider.error().message;
+
+    auto planned = qcx::driver::RunDriverOutcome(*sameProvider);
+    ASSERT_TRUE(planned.has_value()) << planned.error().message;
+    ASSERT_TRUE(planned->result.fockPlan.has_value());
+    EXPECT_TRUE(planned->result.fockPlan->sameProvider);
+    EXPECT_FALSE(planned->result.fockPlan->mixed);
+    ASSERT_TRUE(planned->result.fockPlan->exchange.has_value());
+    EXPECT_EQ(planned->result.fockPlan->exchange->provider, "direct");
+    EXPECT_EQ(planned->result.fockPlan->exchange->accounting, "H-K");
+
+    auto plainInput = ParseRunInput(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["H", 0.0, 0.0, 0.0],
+    ["H", 0.74084809526419992, 0.0, 0.0],
+]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+
+[scf]
+use_diis = true
+)");
+    ASSERT_TRUE(plainInput.has_value()) << plainInput.error().message;
+
+    auto plain = qcx::driver::RunDriverOutcome(*plainInput);
+    ASSERT_TRUE(plain.has_value()) << plain.error().message;
+    EXPECT_FALSE(plain->result.fockPlan.has_value())
+        << "a run that wrote no half key fabricated a fock_plan";
+    EXPECT_EQ(plain->json.find("fock_plan"), std::string::npos);
+}
+
+// The refusal cells, by name: the mixed pair the v1 wiring does not implement,
+// the per-spin lane, and the pure functional that cannot consume an exchange
+// half. Each is a named kUnimplemented refusal, never a substitution.
+TEST(DriverErrorTest, FockPlanRefusesTheUnwiredHalfRequestsByName) {
+    // (1) A mixed pair other than direct + ri_j_link/ri_jk.
+    const auto unsupportedPair = RunInputText(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.74084809526419992, 0.0, 0.0]]
+[basis]
+orbital = "sto-3g"
+aux = "def2-universal-jfit"
+[method]
+type = "rhf"
+accuracy = "kNormal"
+[builder]
+coulomb_half = "ri_j_link"
+exchange_half = "direct"
+)");
+    ASSERT_FALSE(unsupportedPair.has_value());
+    EXPECT_EQ(unsupportedPair.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(unsupportedPair.error().message.find("mixed-half composition"), std::string::npos)
+        << unsupportedPair.error().message;
+    EXPECT_NE(unsupportedPair.error().message.find("ri_j_link"), std::string::npos);
+    EXPECT_NE(unsupportedPair.error().message.find("ri_jk"), std::string::npos);
+
+    // (2) Any mixed plan on a per-spin lane.
+    const auto perSpin = RunInputText(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.74084809526419992, 0.0, 0.0]]
+[basis]
+orbital = "sto-3g"
+aux = "def2-universal-jkfit"
+[method]
+type = "uhf"
+accuracy = "kNormal"
+[builder]
+coulomb_half = "direct"
+exchange_half = "ri_jk"
+)");
+    ASSERT_FALSE(perSpin.has_value());
+    EXPECT_EQ(perSpin.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(perSpin.error().message.find("restricted lanes (rhf, rks)"), std::string::npos)
+        << perSpin.error().message;
+
+    // (3) A pure Kohn-Sham functional cannot consume a requested exchange half.
+    const auto pureFunctional = RunInputText(R"(
+[molecule]
+atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.74084809526419992, 0.0, 0.0]]
+[basis]
+orbital = "sto-3g"
+aux = "def2-universal-jkfit"
+[method]
+type = "rks"
+functional = "slater"
+accuracy = "kNormal"
+[builder]
+exchange_half = "ri_jk"
+)");
+    ASSERT_FALSE(pureFunctional.has_value());
+    EXPECT_EQ(pureFunctional.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(pureFunctional.error().message.find("builds no exchange term"), std::string::npos)
+        << pureFunctional.error().message;
 }

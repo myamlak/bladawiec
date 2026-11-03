@@ -18,6 +18,7 @@
 #include "qcx/backend/topology_profile.hpp"
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/driver/basis_counts.hpp"
+#include "qcx/driver/fock_planner.hpp"
 #include "qcx/driver/process_caps.hpp"
 #include "qcx/driver/selection_heuristic.hpp"
 #include "qcx/driver/selection_resolution.hpp"
@@ -1926,26 +1927,6 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
          input.diagnostics.forceDiskRi))
     {
         return std::unexpected(Err(qcx::ErrorCode::kUnimplemented, RiJLinkDiskRungRefusalText()));
-    }
-
-    // The condensed-Fukui response runs the N +- 1 species through the
-    // per-spin runner (BuildFukuiBlock), and since the restricted open-shell
-    // change that runner follows the PARENT'S method word: the species of a
-    // rohf parent are ROHF, and those of a Kohn-Sham parent would be built on
-    // the Kohn-Sham seam with the run's own functional. The old mixing reason
-    // ("Hartree-Fock species under a Kohn-Sham parent") no longer describes
-    // the mechanism. What remains is a coverage gap, not a physics claim: the
-    // Kohn-Sham Fukui path has no reference of its own in v1, and the funded
-    // property closure is what adds it. Refused by name in that state rather
-    // than shipped untested, and the refusal says so.
-    if (isKs && input.properties.fukui)
-    {
-        return std::unexpected(
-            Err(qcx::ErrorCode::kUnimplemented,
-                "properties.fukui is not wired for a Kohn-Sham run in v1: the charged "
-                "species now follow the run's own method, so the indices would be "
-                "Kohn-Sham ones, but that path has no reference test yet - the property "
-                "closure funds it; run fukui on an rhf, uhf or rohf parent"));
     }
 
     // The per-family MECHANISM keys, refused by name on a family that has no
@@ -6236,11 +6217,13 @@ qcx::Result<std::optional<qcx::io::RunNalewajski>> BuildNalewajskiBlock(
 }
 
 // The opt-in condensed-Fukui block: the response needs the N + 1 and N - 1
-// species at the same geometry and basis (fukui.hpp), run here with the
-// direct-UHF path at the S +- 1/2 multiplicities: the cation drops a half
-// spin (a singlet's cation is a doublet), the anion gains one. The charged
-// species inherit the run's guess, so the SAD fragment inputs are the
-// caller-built ones when the guess asks for SAD.
+// species at the same geometry and basis (fukui.hpp), run through the per-spin
+// runner with the run's OWN method word: an rhf/uhf/rohf parent's species are
+// Hartree-Fock ones, and an rks/uks/roks parent's are Kohn-Sham ones built
+// with the run's functional on its grid. The multiplicities are S +- 1/2: the
+// cation drops a half spin (a singlet's cation is a doublet), the anion gains
+// one. The charged species inherit the run's guess, so the SAD fragment inputs
+// are the caller-built ones when the guess asks for SAD.
 qcx::Result<std::optional<qcx::io::RunFukui>> BuildFukuiBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
@@ -8355,6 +8338,365 @@ qcx::Result<double> CheckPreGateSetupAdmission(const qcx::io::RunInput& input,
     return *reserveBytes;
 }
 
+// Wires the restricted lanes' MIXED-half plan: the Coulomb half from the
+// direct family and the exchange half from a density-fitted family, composed
+// from the two providers' existing half adapters.
+//
+// The accounting is stated once here, because it is the one place a wrong
+// sign or a stray core Hamiltonian would be invisible in a plausible Fock:
+//
+//   F(D) = (H + 2 J_direct(rho)) + (H - K_fitted(rho)) - H
+//        = H + 2 J_direct(rho) - K_fitted(rho),      rho = D/2,
+//
+// the direct half being `MakeDirectKsHalf`/`MakeLeanKsHalf` and the exchange
+// half `MakeRiFullKsHalf(kExchange)` (occ-RI-K, bare K) or
+// `MakeRiJLinkKsHalf(kExchange)` (exact nested direct K). The composition
+// subtracts the ONE duplicate core Hamiltonian; a second subtraction or none
+// moves the Fock by a whole H and the energy by Tr[D H].
+//
+// The Kohn-Sham lane does not use this lambda: MakeRksSeam already halves the
+// density and owns the same conversion for its three callbacks, so the halves
+// are handed to it directly.
+//
+// The PLAN has already refused the option keys this route cannot carry
+// (method.ri_orbit_expansion, method.eri_cache_store, a half on the device)
+// and the per-spin lanes: this function is reached only by a restricted plan
+// its caller admitted, and its own checks restate the two providers it wires
+// so a programmatic caller cannot reach it with another pair.
+//
+// \param input The parsed input (the accuracy preset, the cache budget and the
+// auxiliary names are read here).
+// \param workspaceReserveBytes The cap-minus-base reserve, as the other arms.
+// \param plan The planner's mixed decision.
+// \param leanMember True when the direct family's lean member supplies the
+// Coulomb half.
+// \param molecule The run's molecule.
+// \param basis The orbital basis.
+// \param coreTensor H = T + V.
+// \param root The basis data directory.
+// \param deviceComputeProfile The run's probe, for the certified lane.
+// \param certifiedLaneRequest The resolved certified-lane request.
+// \param statsSink The trace stream, or null.
+// \param boundAccum The certified-bound collector, or null.
+// \returns The wired builder, or an Error.
+qcx::Result<WiredFockBuilder> WireMixedHalfRestrictedFockBuilder(
+    const qcx::io::RunInput& input,
+    std::size_t workspaceReserveBytes,
+    const qcx::driver::FockBuildPlan& plan,
+    bool leanMember,
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basis,
+    const CpuTensor2& coreTensor,
+    const std::filesystem::path& root,
+    const qcx::backend::GpuComputeProfile& deviceComputeProfile,
+    std::optional<bool> certifiedLaneRequest,
+    ScfCallStatsStream* statsSink,
+    CertifiedBoundAccumulator* boundAccum) {
+    // The two providers this arm wires, restated so a caller that reached it
+    // with another pair is refused by name rather than built as a mix nobody
+    // implemented.
+    if (!plan.mixed || !plan.exchange.has_value())
+    {
+        return std::unexpected(
+            Err(qcx::ErrorCode::kInvalidArgument,
+                "the mixed-half wiring was reached with a plan that is not mixed: the caller "
+                "must dispatch a whole-provider plan to the whole-family arm"));
+    }
+
+    if (plan.coulomb.provider != "direct" ||
+        (plan.exchange->provider != "ri_j_link" && plan.exchange->provider != "ri_jk"))
+    {
+        return std::unexpected(
+            Err(qcx::ErrorCode::kUnimplemented,
+                "the mixed-half composition is wired for a direct Coulomb half against an "
+                "ri_j_link or ri_jk exchange half: this plan joins \"" +
+                    plan.coulomb.provider + "\" and \"" + plan.exchange->provider +
+                    "\", so it is refused rather than built by the wrong adapters"));
+    }
+
+    const auto scfPath = ResolveScfPath(input.method.method);
+
+    if (!scfPath.has_value())
+    {
+        return std::unexpected(scfPath.error());
+    }
+
+    const bool isKs = IsKohnShamPath(*scfPath);
+
+    // The closed-shell occupied count the full-RI exchange half factors its
+    // density block from. RHF/RKS are the only methods admitted here.
+    const std::size_t rhfOccupied = static_cast<std::size_t>(molecule.ElectronCount() / 2);
+
+    const Eigen::MatrixXd coreHamiltonian = ToMatrix(coreTensor);
+
+    // ONE workspace budget for both Creates, reservation order J then K: the
+    // halves are two builders under one cap, and a second budget would let
+    // each reserve the whole grant (the composed-QFMM builder's own rule).
+    std::unique_ptr<qcx::memory::WorkspaceBudget> workspaceBudget;
+
+    if (input.resources.memoryCapGiB > 0.0)
+    {
+        auto budget = qcx::memory::WorkspaceBudget::Create(
+            WorkspaceGrantBytes(input.resources.memoryCapGiB, workspaceReserveBytes));
+
+        if (!budget.has_value())
+        {
+            return std::unexpected(budget.error());
+        }
+
+        workspaceBudget = std::make_unique<qcx::memory::WorkspaceBudget>(std::move(*budget));
+    }
+
+    // The Coulomb half. The lean member and the machinery member each expose a
+    // J-only mode; neither is a fused builder, so the half is the builder's
+    // own result at the spatial density.
+    qcx::driver::internal::HalfFockFn coulombHalf;
+    std::optional<qcx::integrals::FockModeInfo> coulombModeInfo;
+
+    if (leanMember)
+    {
+        qcx::integrals::LeanFockBuildOptions leanOptions;
+        leanOptions.accuracy = input.method.accuracy;
+        leanOptions.memoryCapGiB = input.resources.memoryCapGiB;
+        leanOptions.buildCoulombOnly = true;
+
+        auto reduction = qcx::scf::BuildSymmetryReduction(molecule, basis);
+
+        if (!reduction.has_value() && reduction.error().code != qcx::ErrorCode::kUnimplemented)
+        {
+            return std::unexpected(reduction.error());
+        }
+
+        if (reduction.has_value() && reduction->groupOrder > 1)
+        {
+            leanOptions.symmetryReduction = &*reduction;
+            leanOptions.symmetryOrbitExpansion = true;
+            leanOptions.symmetryStrongForm = true;
+        }
+
+        auto builder =
+            qcx::integrals::LeanDirectFockBuilder::Create(molecule, basis, coreTensor, leanOptions);
+
+        if (!builder.has_value())
+        {
+            return std::unexpected(builder.error());
+        }
+
+        coulombHalf = MakeLeanKsHalf(*builder, statsSink, 0);
+    } else
+    {
+        qcx::integrals::FockBuildOptions directOptions;
+        directOptions.accuracy = input.method.accuracy;
+        directOptions.deviceComputeProfile = deviceComputeProfile;
+        directOptions.useCertifiedMixedPrecision = certifiedLaneRequest;
+        directOptions.enforceCertifiedBoundBudget = input.method.enforceCertifiedBound;
+        directOptions.workspaceBudget = workspaceBudget.get();
+
+        if (input.method.eriCacheBytes.has_value())
+        {
+            directOptions.maxCacheBytes = *input.method.eriCacheBytes;
+        }
+
+        auto reduction = qcx::scf::BuildSymmetryReduction(molecule, basis);
+
+        if (!reduction.has_value() && reduction.error().code != qcx::ErrorCode::kUnimplemented)
+        {
+            return std::unexpected(reduction.error());
+        }
+
+        if (reduction.has_value() && reduction->groupOrder > 1)
+        {
+            directOptions.symmetryReduction = &*reduction;
+            directOptions.symmetryStrongForm = true;
+        }
+
+        directOptions.buildCoulombOnly = true;
+
+        auto builder =
+            qcx::integrals::DirectJkFockBuilder::Create(molecule, basis, coreTensor, directOptions);
+
+        if (!builder.has_value())
+        {
+            if (workspaceBudget != nullptr)
+            {
+                return std::unexpected(
+                    Err(builder.error().code,
+                        builder.error().message + qcx::driver::DirectReinstatementClause()));
+            }
+
+            return std::unexpected(builder.error());
+        }
+
+        coulombHalf = MakeDirectKsHalf(*builder, statsSink, 0, boundAccum);
+        coulombModeInfo = builder->ModeInfo();
+    }
+
+    // The exchange half, from the fitted family the plan names.
+    qcx::driver::internal::HalfFockFn exchangeHalf;
+    std::optional<qcx::integrals::FockModeInfo> exchangeModeInfo;
+    std::optional<qcx::integrals::RiFullFockModeInfo> riJkModeInfo;
+    std::optional<qcx::integrals::RiJkFockBuilder> riJkBuilder;
+
+    if (plan.exchange->provider == "ri_jk")
+    {
+        // The full-RI exchange: occ-RI-K from the metric-transformed 3-center
+        // tensor, with the builder's own JK-optimized auxiliary rule (a J-only
+        // fit is the ~10x error class the predicate exists to refuse).
+        auto auxName = AuxNameInEffect(input, qcx::io::BuilderKind::kRiJk);
+        const std::string resolvedAux = auxName.has_value() ? *auxName : std::string{};
+
+        if (!resolvedAux.empty() && !qcx::integrals::IsJkOptimizedAux(resolvedAux))
+        {
+            return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                                       qcx::integrals::JkOptimizedAuxRefusal(resolvedAux)));
+        }
+
+        if (resolvedAux.empty())
+        {
+            return std::unexpected(
+                Err(qcx::ErrorCode::kInvalidArgument,
+                    "the mixed-half plan's ri_jk exchange half needs its JK-fit auxiliary "
+                    "basis, and none could be resolved; specify [basis].aux explicitly"));
+        }
+
+        auto auxBasis = qcx::basisset::ParseNwchemDirectoryFiltered((root / resolvedAux).string(),
+                                                                    UniqueAtomicNumbers(molecule));
+
+        if (!auxBasis.has_value())
+        {
+            return std::unexpected(auxBasis.error());
+        }
+
+        qcx::integrals::RiEngineOptions riOptions;
+        riOptions.accuracy = input.method.accuracy;
+        riOptions.workspaceBudget = workspaceBudget.get();
+
+        auto builder = qcx::integrals::RiFullFockBuilder::Create(
+            molecule, basis, *auxBasis, coreTensor, riOptions);
+
+        if (!builder.has_value())
+        {
+            return std::unexpected(builder.error());
+        }
+
+        // ONE cache for the pair the builder computes in one traversal: only
+        // the exchange half is asked for here, so the cache is not a speedup
+        // on this arm, but the adapter's contract requires one and the entry
+        // keeps a repeated density from rebuilding the pair.
+        const auto pairCache = std::make_shared<RiFullKsPairCache>();
+        exchangeHalf = MakeRiFullKsHalf(
+            *builder, coreHamiltonian, RiFullKsHalf::kExchange, rhfOccupied, pairCache, statsSink);
+        riJkModeInfo = builder->ModeInfo();
+    } else
+    {
+        // The RI-J link's exchange half: the exact nested direct kernel. Its
+        // builder's Coulomb tensor is NOT consumed by this arm, and the plan
+        // record states the provider so the cost is not mistaken for a J build.
+        auto auxName = AuxNameInEffect(input, qcx::io::BuilderKind::kRiJLink);
+
+        if (!auxName.has_value())
+        {
+            return std::unexpected(auxName.error());
+        }
+
+        if (auxName->empty())
+        {
+            return std::unexpected(
+                Err(qcx::ErrorCode::kInvalidArgument,
+                    "the mixed-half plan's ri_j_link exchange half needs the family's "
+                    "auxiliary basis, and none could be resolved; specify [basis].aux "
+                    "explicitly"));
+        }
+
+        auto auxBasis = qcx::basisset::ParseNwchemDirectoryFiltered((root / *auxName).string(),
+                                                                    UniqueAtomicNumbers(molecule));
+
+        if (!auxBasis.has_value())
+        {
+            return std::unexpected(auxBasis.error());
+        }
+
+        qcx::integrals::RiEngineOptions riOptions;
+        riOptions.accuracy = input.method.accuracy;
+        riOptions.workspaceBudget = workspaceBudget.get();
+
+        auto builder = qcx::integrals::RiJkFockBuilder::Create(
+            molecule, basis, *auxBasis, coreTensor, riOptions);
+
+        if (!builder.has_value())
+        {
+            return std::unexpected(builder.error());
+        }
+
+        exchangeHalf = MakeRiJLinkKsHalf(
+            *builder, coreHamiltonian, RiJLinkKsHalf::kExchange, statsSink, rhfOccupied);
+        exchangeModeInfo = builder->ExchangeModeInfo();
+        // The run-record term counters read this copy; its State is shared
+        // with the seam lambda's own copy.
+        riJkBuilder = *builder;
+    }
+
+    qcx::scf::FockBuilderFn fock;
+    std::optional<qcx::scf::CoulombFn> coulomb;
+    std::optional<qcx::scf::EnergyContributionFn> contribution;
+
+    if (isKs)
+    {
+        auto ksContext = ResolveKsContext(input, molecule, basis);
+
+        if (!ksContext.has_value())
+        {
+            return std::unexpected(ksContext.error());
+        }
+
+        auto seam = qcx::driver::internal::MakeRksSeam(coulombHalf,
+                                                       exchangeHalf,
+                                                       coreHamiltonian,
+                                                       ksContext->functional.exchangeFraction,
+                                                       ksContext->evaluator);
+
+        if (!seam.has_value())
+        {
+            return std::unexpected(seam.error());
+        }
+
+        fock = std::move(seam->fock);
+        coulomb = std::move(seam->coulomb);
+        contribution = std::move(seam->contribution);
+    } else
+    {
+        fock = [coulombHalf, exchangeHalf, coreHamiltonian](
+                   const Eigen::MatrixXd& density) -> qcx::Result<Eigen::MatrixXd> {
+            const Eigen::MatrixXd rho = 0.5 * density;
+            auto coulombPart = coulombHalf(rho);
+
+            if (!coulombPart.has_value())
+            {
+                return std::unexpected(coulombPart.error());
+            }
+
+            auto exchangePart = exchangeHalf(rho);
+
+            if (!exchangePart.has_value())
+            {
+                return std::unexpected(exchangePart.error());
+            }
+
+            return *coulombPart + *exchangePart - coreHamiltonian;
+        };
+    }
+
+    WiredFockBuilder wired{std::move(fock)};
+    wired.coulomb = std::move(coulomb);
+    wired.contribution = std::move(contribution);
+    wired.workspaceBudget = std::move(workspaceBudget);
+    wired.modeInfo = coulombModeInfo;
+    wired.exchangeModeInfo = exchangeModeInfo;
+    wired.riJkModeInfo = riJkModeInfo;
+    wired.riJkBuilder = std::move(riJkBuilder);
+    return wired;
+}
+
 // Wires the RHF Fock builder per the input's builder selection: the
 // QFMM, GPU (CUDA build only - the plain build fails loudly instead of
 // falling through to the direct builder, the silent-substitution failure
@@ -8393,7 +8735,27 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
     // filled here where the direct family's options are assembled, read by
     // the caller once the SCF has run. The `statsSink`/`boundAccum` pattern
     // beside it - a collector the run owns and the wiring writes.
-    EriStoreWiring* eriStore = nullptr) {
+    EriStoreWiring* eriStore = nullptr,
+    // The Fock-build planner's decision, when the input wrote a half key. A
+    // mixed plan is wired by its own arm before the whole-family dispatch;
+    // a same-provider plan simply names the family the branches below build.
+    const qcx::driver::FockBuildPlan* halfPlan = nullptr) {
+    if (halfPlan != nullptr && halfPlan->mixed)
+    {
+        return WireMixedHalfRestrictedFockBuilder(input,
+                                                  workspaceReserveBytes,
+                                                  *halfPlan,
+                                                  leanMember,
+                                                  molecule,
+                                                  basis,
+                                                  coreTensor,
+                                                  root,
+                                                  deviceComputeProfile,
+                                                  certifiedLaneRequest,
+                                                  statsSink,
+                                                  boundAccum);
+    }
+
     qcx::integrals::FockBuildOptions directOptions;
     directOptions.accuracy = input.method.accuracy;
     // The run's device compute profile: without it the machinery
@@ -10269,6 +10631,188 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         }
     }
 
+    // The Fock-build plan (schema 49): the [builder] half keys are refined into
+    // a provider per half, the constraint vocabulary is checked in one place,
+    // and the wiring kind below is the plan's own Coulomb provider. The plan
+    // is built BEFORE the compute-profile and pre-gate sites because those
+    // read `selection`, and a half request that changes the family must reach
+    // them as the family that will actually run.
+    //
+    // A mixed plan changes what "the resolved builder" means: the whole-family
+    // selection record still names one family, so the record gains the
+    // `fock_plan` block instead of pretending one family built two halves.
+    // The execution policy is deliberately narrower than the planner: the
+    // planner decides what a provider pair CAN build; this block decides what
+    // the v1 wiring DOES build, and refuses the rest by name rather than
+    // substituting a whole-family build for the request.
+    std::optional<qcx::driver::FockBuildPlan> fockPlan;
+    // The builder kind whose auxiliary basis is in effect for the disclosure
+    // and checkpoint fingerprint: the exchange provider's kind on a mixed
+    // plan (the direct half needs no aux), else the resolved kind.
+    std::optional<qcx::io::BuilderKind> auxConsumerKind;
+
+    if (input.builder.coulombHalf.has_value() || input.builder.exchangeHalf.has_value())
+    {
+        const qcx::io::BuilderAxes resolvedAxes =
+            qcx::io::AxesOfBuilder(selection->kind, selection->leanMember);
+        const qcx::io::IntegralFamily resolvedFamily = resolvedAxes.integralFamily;
+
+        const auto kindOfFamily = [](qcx::io::IntegralFamily family) {
+            switch (family)
+            {
+            case qcx::io::IntegralFamily::kDirect:
+                return qcx::io::BuilderKind::kDirect;
+
+            case qcx::io::IntegralFamily::kRiJLink:
+                return qcx::io::BuilderKind::kRiJLink;
+
+            case qcx::io::IntegralFamily::kRiJk:
+                return qcx::io::BuilderKind::kRiJk;
+
+            case qcx::io::IntegralFamily::kQfmm:
+                return qcx::io::BuilderKind::kQfmm;
+            }
+
+            return qcx::io::BuilderKind::kDirect;
+        };
+
+        const auto kindOfProvider = [](const std::string& provider) {
+            if (provider == "ri_j_link")
+            {
+                return qcx::io::BuilderKind::kRiJLink;
+            }
+
+            if (provider == "ri_jk")
+            {
+                return qcx::io::BuilderKind::kRiJk;
+            }
+
+            if (provider == "qfmm")
+            {
+                return qcx::io::BuilderKind::kQfmm;
+            }
+
+            return qcx::io::BuilderKind::kDirect;
+        };
+
+        const auto resolveAux =
+            [&input, &kindOfFamily](qcx::io::IntegralFamily family) -> std::optional<std::string> {
+            auto name = AuxNameInEffect(input, kindOfFamily(family));
+
+            if (!name.has_value() || name->empty())
+            {
+                return std::nullopt;
+            }
+
+            return *name;
+        };
+
+        const bool ksLane = resolutionPath.has_value() && IsKohnShamPath(*resolutionPath);
+        // The lean member can be requested by the deprecated word (leanDirect)
+        // or by the tier axis. The tier is read here because a half plan may
+        // keep the direct family in the build while the family axis names
+        // another one, and the parser deliberately leaves leanDirect unset then
+        // (a family word plus that flag is the programmatic-caller conflict
+        // ValidateCombination refuses).
+        const bool leanRequested =
+            !(input.method.enforceCertifiedBound && !perSpinLegs) &&
+            (input.method.leanDirect || input.builder.storageTier == qcx::io::StorageTier::kLean);
+
+        qcx::driver::FockPlanRequest request;
+        request.coulombFamily = input.builder.coulombHalf.value_or(resolvedFamily);
+        request.kohnSham = ksLane;
+        request.perSpin = perSpinLegs;
+        request.diskRungRequested = input.diagnostics.forceDiskRi ||
+                                    input.method.riTensorMode == qcx::io::RiTensorMode::kDisk;
+        request.orbitExpansionRequested = input.method.riOrbitExpansion.value_or(false);
+        request.eriStoreRequested = !input.method.eriCacheStore.empty();
+        request.backend = input.builder.executionBackend.value_or(
+            GpuFamily(selection->kind) ? qcx::io::ExecutionBackend::kGpu
+                                       : qcx::io::ExecutionBackend::kCpu);
+        request.leanMemberRequested = leanRequested;
+
+        const bool ksExchangeRequired = !ksLane || !IsNonHybridKohnSham(input);
+        request.exchangeRequired = ksExchangeRequired;
+
+        if (input.builder.exchangeHalf.has_value())
+        {
+            request.exchangeFamily = input.builder.exchangeHalf;
+        } else if (ksExchangeRequired)
+        { request.exchangeFamily = resolvedFamily; }
+
+        request.coulombAuxBasis = resolveAux(*request.coulombFamily);
+
+        if (request.exchangeFamily.has_value())
+        {
+            request.exchangeAuxBasis = resolveAux(*request.exchangeFamily);
+        }
+
+        auto planned = qcx::driver::PlanFockBuild(request);
+
+        if (!planned.has_value())
+        {
+            return refuse(planned.error());
+        }
+
+        fockPlan = std::move(*planned);
+
+        if (fockPlan->mixed)
+        {
+            // The v1 mixed-half wiring: the restricted lanes, a direct Coulomb
+            // half against an ri_j_link or ri_jk exchange half. Everything
+            // else is a named limitation of the wiring, never a substitution.
+            if (perSpinLegs)
+            {
+                return refuse(
+                    Err(qcx::ErrorCode::kUnimplemented,
+                        "builder.coulomb_half = \"" + fockPlan->coulomb.provider +
+                            "\" with builder.exchange_half = \"" +
+                            (fockPlan->exchange.has_value() ? fockPlan->exchange->provider
+                                                            : std::string("none")) +
+                            "\" is a mixed-half plan, and the mixed composition is wired on the "
+                            "restricted lanes (rhf, rks) only: the per-spin assembly has no mixed "
+                            "half adapter. Run one family for both halves, or use rhf/rks"));
+            }
+
+            if (fockPlan->coulomb.provider != "direct" || !fockPlan->exchange.has_value() ||
+                (fockPlan->exchange->provider != "ri_j_link" &&
+                 fockPlan->exchange->provider != "ri_jk"))
+            {
+                return refuse(
+                    Err(qcx::ErrorCode::kUnimplemented,
+                        "the mixed-half composition is wired for a direct Coulomb half against an "
+                        "ri_j_link or ri_jk exchange half: this plan joins \"" +
+                            fockPlan->coulomb.provider + "\" and \"" +
+                            (fockPlan->exchange.has_value() ? fockPlan->exchange->provider
+                                                            : std::string("none")) +
+                            "\", so the run is refused rather than built by the wrong adapters"));
+            }
+
+            // The wiring kind is the Coulomb provider; the record's plan block
+            // carries the exchange half, which the whole-family vocabulary
+            // cannot state. The member choice stays the resolution's own (the
+            // ladder's lean default at nBasis <= 1000 included), raised by an
+            // explicit lean request.
+            selection->kind = qcx::io::BuilderKind::kDirect;
+            selection->leanMember = selection->leanMember || leanRequested;
+            auxConsumerKind = kindOfProvider(fockPlan->exchange->provider);
+        } else
+        {
+            // Both halves from one family: the existing whole-family arm runs
+            // unchanged, and the half keys have simply stated that family.
+            selection->kind = kindOfProvider(fockPlan->coulomb.provider);
+            selection->leanMember = selection->kind == qcx::io::BuilderKind::kDirect &&
+                                    (selection->leanMember || leanRequested);
+        }
+
+        // The whole-selection reasoning is rewritten rather than left as the
+        // ladder's: the builder the run wires is now the plan's, and a
+        // reasoning that still described the ladder's pick would be the
+        // request/outcome disagreement the record exists to prevent.
+        selection->reasoning +=
+            "; the [builder] half keys decide the build: " + fockPlan->reasoning;
+    }
+
     // The COMPUTE TARGET's profile . Both probes were taken at
     // the run boundary above; WHICH one counts is decided here, by the family
     // the run actually wired, and it is decided once. A device number reaching
@@ -10309,9 +10853,14 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     // still never-under) charge.
     std::optional<qcx::basisset::BasisSet> preGateAuxBasis;
 
-    if (qcx::io::BuilderConsumesAux(selection->kind))
+    // A mixed plan's auxiliary basis belongs to its exchange provider (the
+    // direct Coulomb half needs none), so the kind whose sweep is charged is
+    // the plan's, not the wiring kind's.
+    const qcx::io::BuilderKind preGateAuxKind = auxConsumerKind.value_or(selection->kind);
+
+    if (auxConsumerKind.has_value() || qcx::io::BuilderConsumesAux(selection->kind))
     {
-        auto preGateAuxName = AuxNameInEffect(input, selection->kind);
+        auto preGateAuxName = AuxNameInEffect(input, preGateAuxKind);
 
         if (preGateAuxName.has_value() && !preGateAuxName->empty())
         {
@@ -10718,7 +11267,8 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     const char* const requestedBy =
         input.builder.legacyFockBuilderWord.has_value() ? "fock_builder"
         : (input.builder.integralFamily.has_value() || input.builder.storageTier.has_value() ||
-           input.builder.executionBackend.has_value())
+           input.builder.executionBackend.has_value() || input.builder.coulombHalf.has_value() ||
+           input.builder.exchangeHalf.has_value())
             ? "axes"
             : "ladder";
 
@@ -10738,6 +11288,37 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
             ? std::optional<std::string>(qcx::io::DeviceSelectorText(*input.builder.device))
             : std::nullopt};
 
+    // The Fock-build planner's decision (schema 49): present exactly when the
+    // input wrote a half key. The plan's words are copied verbatim - the
+    // planner is the one producer, and a record that re-derived them here
+    // could name a provider the wiring did not build.
+    if (fockPlan.has_value())
+    {
+        qcx::io::RunFockPlan planRecord;
+        planRecord.coulomb = qcx::io::RunFockHalfPlan{fockPlan->coulomb.role,
+                                                      fockPlan->coulomb.provider,
+                                                      fockPlan->coulomb.providerClass,
+                                                      fockPlan->coulomb.kernel,
+                                                      fockPlan->coulomb.accounting,
+                                                      fockPlan->coulomb.auxBasis};
+
+        if (fockPlan->exchange.has_value())
+        {
+            planRecord.exchange = qcx::io::RunFockHalfPlan{fockPlan->exchange->role,
+                                                           fockPlan->exchange->provider,
+                                                           fockPlan->exchange->providerClass,
+                                                           fockPlan->exchange->kernel,
+                                                           fockPlan->exchange->accounting,
+                                                           fockPlan->exchange->auxBasis};
+        }
+
+        planRecord.sameProvider = fockPlan->sameProvider;
+        planRecord.mixed = fockPlan->mixed;
+        planRecord.constraints = fockPlan->constraintsChecked;
+        planRecord.reasoning = fockPlan->reasoning;
+        result.fockPlan = std::move(planRecord);
+    }
+
     // The correction evaluated right after the molecule was built (schema
     // 41): present exactly when the input wrote a [dispersion] block, and its
     // energy is what FillScfResult adds to the total once the SCF converges.
@@ -10752,7 +11333,8 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     // (AuxNoticeInEffect, beside the name rule the checkpoint fingerprint binds)
     // rather than recomputed here, so the notice cannot describe a selection the
     // wiring did not make.
-    const std::optional<std::string> auxNotice = AuxNoticeInEffect(input, selection->kind);
+    const std::optional<std::string> auxNotice =
+        AuxNoticeInEffect(input, auxConsumerKind.value_or(selection->kind));
 
     // The exchange-approximation disclosure . An ri_jk run's exchange
     // half is contracted through the auxiliary fit, so its energy is a DIFFERENT
@@ -10768,9 +11350,17 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
     // what approximated it, which is the disclosure quietly dropped - and the
     // wiring would refuse the same request moments later anyway, so nothing that
     // could have run is lost by refusing at the record.
-    if (selection->kind == qcx::io::BuilderKind::kRiJk)
+    //
+    // A MIXED plan's exchange half is the same question: when the plan's K
+    // provider is ri_jk the result class is the fit's, and the disclosure must
+    // ride even though the wiring kind is the direct Coulomb half.
+    const bool fittedExchange = selection->kind == qcx::io::BuilderKind::kRiJk ||
+                                (fockPlan.has_value() && fockPlan->exchange.has_value() &&
+                                 fockPlan->exchange->provider == "ri_jk");
+
+    if (fittedExchange)
     {
-        auto auxInEffect = AuxNameInEffect(input, selection->kind);
+        auto auxInEffect = AuxNameInEffect(input, qcx::io::BuilderKind::kRiJk);
 
         if (!auxInEffect.has_value())
         {
@@ -10822,7 +11412,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         // than left to be reconstructed from the absence of a fitted-kernel
         // member name. No measured-error member hangs here: the fitted
         // exchange's error is not an error of this run's.
-        auto auxInEffect = AuxNameInEffect(input, selection->kind);
+        auto auxInEffect = AuxNameInEffect(input, auxConsumerKind.value_or(selection->kind));
 
         if (!auxInEffect.has_value())
         {
@@ -11311,7 +11901,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
 
         if (input.guess == qcx::io::GuessKind::kRestart)
         {
-            auto auxName = AuxNameInEffect(input, selection->kind);
+            auto auxName = AuxNameInEffect(input, auxConsumerKind.value_or(selection->kind));
 
             if (!auxName.has_value())
             {
@@ -11383,7 +11973,8 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                                         selection->leanMember,
                                         &statsStream,
                                         &boundAccum,
-                                        &eriStore);
+                                        &eriStore,
+                                        fockPlan.has_value() ? &*fockPlan : nullptr);
 
         if (!wired.has_value())
         {
@@ -11498,7 +12089,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         // replicate this run's configuration.
         if (!input.scf.checkpointFile.empty() && (!scf->converged || input.scf.checkpointConverged))
         {
-            auto auxName = AuxNameInEffect(input, selection->kind);
+            auto auxName = AuxNameInEffect(input, auxConsumerKind.value_or(selection->kind));
 
             if (!auxName.has_value())
             {

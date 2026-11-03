@@ -715,9 +715,10 @@ struct RunPropertiesInput {
     bool eddb = false;
     /// The condensed Fukui indices [Parr1984]: the driver runs the N + 1
     /// (anion) and N - 1 (cation) species at the same geometry and basis
-    /// with the direct-UHF path - the only UHF wiring in v1 - at the
-    /// S +- 1/2 multiplicities (cation: M - 1 when M > 1, else 2; anion:
-    /// M + 1), sharing the input's guess and SCF settings.
+    /// through the per-spin runner with the run's own method word (a
+    /// Kohn-Sham parent's species are Kohn-Sham ones, built with its
+    /// functional) at the S +- 1/2 multiplicities (cation: M - 1 when M > 1,
+    /// else 2; anion: M + 1), sharing the input's guess and SCF settings.
     bool fukui = false;
     /// The Nalewajski-Mrozek bond orders [Nalewajski1996]; the isolated-
     /// atom fragment SCFs limit the analysis to elements with Z <= 19
@@ -1096,6 +1097,11 @@ std::string_view ToString(ExecutionBackend backend) noexcept;
 /// tier on the device - which is exactly what the deprecated
 /// `fock_builder = "gpu"` word meant.
 ///
+/// Two of the fields are not AXES: `coulombHalf` and `exchangeHalf` refine the
+/// FAMILY axis per half (a half is a request for one of the existing builders'
+/// halves), and an unwritten half takes the family axis's answer. They are
+/// documented on their own fields.
+///
 /// ONE REQUEST, ONE KEY. The axes and the deprecated key must not both be
 /// written: the parser refuses the pair by name (two keys naming one
 /// mechanism), rather than picking a winner or silently checking agreement. The
@@ -1139,6 +1145,34 @@ struct RunBuilderInput {
     /// it absent by construction, which is why `explicit_builder` remains the
     /// member that answers "was a builder named at all".
     std::optional<std::string> legacyFockBuilderWord;
+    /// `[builder] coulomb_half`: the FAMILY whose half adapter supplies the
+    /// Coulomb half of the Fock matrix. Absent = the resolved whole-selection
+    /// family (the `integral_family` axis when written, else the size ladder's
+    /// own pick). The value vocabulary is the family axis's own
+    /// (IntegralFamily), because a half is a request for one of the existing
+    /// builders' halves - not a new provider vocabulary that could drift from
+    /// the families the tree wires.
+    ///
+    /// **Why a half key is a REFINEMENT and not a second selection.** The
+    /// family axis answers "which family builds this run"; this key answers
+    /// "which family builds this half", and the two compose: an unwritten half
+    /// defaults to the family axis (or the ladder), so one key can split a
+    /// default selection without restating it. Writing both the deprecated
+    /// `[method] fock_builder` key and a half key is refused by name (one
+    /// request, one key), the rule the axes already carry.
+    ///
+    /// The key names the half, never a mechanism: `ri_jk` at
+    /// `exchange_half` means "the exchange half of the full-RI family"
+    /// (occ-RI-K), and `ri_j_link` at the same key means that family's own
+    /// exchange half (the exact nested direct kernel). The role is carried by
+    /// the key so neither word can be read as the whole-family selection.
+    std::optional<IntegralFamily> coulombHalf;
+    /// `[builder] exchange_half`: the FAMILY whose half adapter supplies the
+    /// exchange half; see `coulombHalf` above for the vocabulary, the
+    /// defaulting rule and the one-request rule. On a run that needs no
+    /// exchange (a pure Kohn-Sham functional), a written exchange half is
+    /// still a request and the planner refuses it rather than dropping it.
+    std::optional<IntegralFamily> exchangeHalf;
 };
 
 /// The full run description, parsed from one TOML file.
