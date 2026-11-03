@@ -5,6 +5,15 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Imported targets created by find_package in a module's directory are visible
+# only in that directory and below. The composed shared target collects the
+# modules' link dependencies at the ROOT, where OpenMP::OpenMP_CXX,
+# Boost::graph and the BLAS vendor targets would otherwise be out of scope
+# (the first configure of the shared preset failed on exactly that). Global
+# visibility changes where the found targets are visible, never which package
+# is found or how it is used.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
+
 option(QCX_BUILD_TESTS "Build tests" ON)
 option(QCX_ASAN "Enable AddressSanitizer (MSVC only; Clang/GCC builds use their own flags)" OFF)
 
@@ -863,13 +872,14 @@ add_subdirectory(driver)
 #
 # The modules are OBJECT libraries in this mode, and qcx is built from their
 # objects: the image has no source of its own. OBJECT composition, not
-# whole-archive linking, is what makes the image's exports visible to MSVC's
-# auto-export: WINDOWS_EXPORT_ALL_SYMBOLS generates the .def from the
-# target's OWN object files, and archive members pulled in by /WHOLEARCHIVE
-# are not object files of the target (measured 2026-11-02: the whole-archive
-# composition produced qcx.dll with ZERO exports and every consumer failed
-# LNK2019). An object library's objects become the shared target's objects,
-# so they are what auto-export scans.
+# whole-archive linking, is what lets the export list see the API: the .def is
+# built from the target's OWN object files, and archive members pulled in by
+# /WHOLEARCHIVE are not object files of the target (measured 2026-11-02: the
+# whole-archive composition produced qcx.dll with ZERO exports and every
+# consumer failed LNK2019). An object library's objects become the shared
+# target's objects, so they are what the export scan reads. On MSVC the scan
+# writes a filtered list rather than CMake's auto-export - see the block at
+# the end of this section.
 #
 # Usage requirements are propagated explicitly because the modules reach qcx
 # as objects, not as linked libraries: their public include directories,
@@ -1005,9 +1015,57 @@ if (QCX_BUILD_SHARED)
     qcx_apply_asan_runtime(qcx)
 
     if (MSVC)
-        # The image ships no hand-maintained export list; CMake generates the
-        # .def from the target's object files.
-        set_target_properties(qcx PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+        # The export list is GENERATED from the image's own objects, filtered
+        # to the first-party qcx:: symbols. CMake's auto-export was measured on
+        # this tree (2026-11-03): 68,096 names, 36,453 of them vendored Eigen
+        # inline-template instantiations, and the link died with LNK1189 (the
+        # import library's 65,535-member limit). A consumer compiles the
+        # vendored instantiations from the headers, so they are not API; the
+        # qcx:: set is. tools/gen_qcx_def.cmake parses `link -dump -symbols`
+        # over the object list, and the list is regenerated on every build, so
+        # it cannot drift from the code.
+        set_target_properties(qcx PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+
+        # The scan covers the module objects only. The nested per-class MD
+        # objects are template instantiations of internal helpers; nothing a
+        # consumer links against is defined only there, and scanning them
+        # tripled the scan time (three minutes against one) for 1,183 more
+        # internal names.
+        set(_qcxObjectList "")
+        set(_qcxExportObjectDeps "")
+        foreach(_module IN LISTS _qcxComposedModules)
+            string(APPEND _qcxObjectList
+                "$<JOIN:$<TARGET_OBJECTS:${_module}>,
+>
+")
+            list(APPEND _qcxExportObjectDeps "$<TARGET_OBJECTS:${_module}>")
+        endforeach()
+
+        # The object paths carry the configuration, so the list, the .def and
+        # the /DEF argument are per configuration.
+        file(GENERATE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/qcx_objects_$<CONFIG>.txt"
+            CONTENT "${_qcxObjectList}")
+
+        # The .def is regenerated only when an object it scans changes, so an
+        # up-to-date relink does not pay the scan.
+        set(_qcxExportDef "${CMAKE_CURRENT_BINARY_DIR}/qcx_exports_$<CONFIG>.def")
+        add_custom_command(
+            OUTPUT "${_qcxExportDef}"
+            COMMAND ${CMAKE_COMMAND}
+                -DQCX_LINKER=${CMAKE_LINKER}
+                -DQCX_OBJECT_LIST=${CMAKE_CURRENT_BINARY_DIR}/qcx_objects_$<CONFIG>.txt
+                -DQCX_DEF_OUT=${_qcxExportDef}
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_qcx_def.cmake"
+            DEPENDS
+                ${_qcxExportObjectDeps}
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_qcx_def.cmake"
+            COMMENT "Generating the composed library's export list"
+            VERBATIM)
+        add_custom_target(qcx_exports DEPENDS "${_qcxExportDef}")
+        add_dependencies(qcx qcx_exports)
+        target_link_options(qcx PRIVATE
+            "/DEF:${CMAKE_CURRENT_BINARY_DIR}/qcx_exports_$<CONFIG>.def")
     endif()
 endif()
 

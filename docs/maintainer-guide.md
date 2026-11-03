@@ -50,8 +50,14 @@ The shared mode is one library per platform. The first-party modules are static
 archives in the shipped configuration; with `QCX_BUILD_SHARED` each module target is an
 OBJECT library and a single `qcx` shared library is composed from their objects, and
 every first-party executable links that one library. Object composition, not
-whole-archive linking, is what lets MSVC's auto-export see the API: the generated
-`.def` is built from the shared target's own object files. One image is the mechanism,
+whole-archive linking, is what lets the export scan see the API: the `.def` is built
+from the shared target's own object files. On MSVC the scan is not CMake's
+auto-export, because that emits every vendored inline-template instantiation and this
+tree's import library then exceeds the 65,535-member limit (LNK1189; measured
+2026-11-03, 68,096 names, 36,453 of them Eigen's). `tools/gen_qcx_def.cmake` writes a
+filtered list of the first-party `qcx::` symbols from `link -dump -symbols`, and the
+MSVC shared build compiles the modules without a precompiled header (the ELF shared
+build keeps it and uses the default visibility). One image is the mechanism,
 not a packaging choice: the tree keeps process-wide mutable
 state and thread-local storage in headers (the allocation instrument's switches and
 counters, the CPU scheduler's ceiling), and a shared library per module gives every
