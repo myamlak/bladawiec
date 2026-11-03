@@ -6,7 +6,7 @@
 cmake_policy(SET CMP0167 NEW)
 find_package(Boost CONFIG REQUIRED COMPONENTS graph)
 
-add_library(qcx-molecule
+add_library(qcx-molecule ${QCX_MODULE_LIBRARY_TYPE}
   src/molecule.cpp
   src/mass_properties.cpp
   src/connectivity.cpp
@@ -37,7 +37,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     # C60/nanotube fixtures live in qcx-test-fixtures (tests/), shared with
     # the symmetry corpus; the target is defined later but plain-name links
     # resolve lazily.
-    target_link_libraries(qcx-molecule-tests PRIVATE qcx-molecule qcx-test-fixtures gtest gtest_main)
+    target_link_libraries(qcx-molecule-tests PRIVATE ${QCX_LINK_molecule} qcx-test-fixtures gtest gtest_main)
     target_precompile_headers(qcx-molecule-tests PRIVATE
         <gtest/gtest.h>
         <qcx/molecule/molecule.hpp>

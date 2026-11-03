@@ -1,4 +1,4 @@
-add_library(qcx-response
+add_library(qcx-response ${QCX_MODULE_LIBRARY_TYPE}
   src/response_operator.cpp
   src/response_solver.cpp
   src/response_gradient.cpp
@@ -39,7 +39,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     # this: test-only edges, and ones the DAG permits (response follows grid and
     # scf in the module order).
     target_link_libraries(qcx-response-tests PRIVATE
-        qcx-response qcx-scf qcx-integrals qcx-grid gtest gtest_main qcx-test-fixtures)
+        ${QCX_LINK_response} ${QCX_LINK_scf} ${QCX_LINK_integrals} ${QCX_LINK_grid} gtest gtest_main qcx-test-fixtures)
     target_precompile_headers(qcx-response-tests PRIVATE
         <gtest/gtest.h>
         <qcx/response/response_solver.hpp>)

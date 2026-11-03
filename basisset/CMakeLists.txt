@@ -1,4 +1,4 @@
-add_library(qcx-basisset
+add_library(qcx-basisset ${QCX_MODULE_LIBRARY_TYPE}
   src/basis_set.cpp
 )
 target_include_directories(qcx-basisset PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -43,8 +43,10 @@ else()
 endif()
 
 if (QCX_BUILD_TESTS AND TARGET gtest)
-    add_executable(qcx-basisset-tests tests/basis_set_test.cpp)
-    target_link_libraries(qcx-basisset-tests PRIVATE qcx-basisset gtest gtest_main)
+    add_executable(qcx-basisset-tests
+        tests/basis_set_test.cpp
+        tests/ecp_corpus_test.cpp)
+    target_link_libraries(qcx-basisset-tests PRIVATE ${QCX_LINK_basisset} gtest gtest_main)
     # The corpus walk reads the vendored data directly from the source tree.
     target_compile_definitions(qcx-basisset-tests PRIVATE
         QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")

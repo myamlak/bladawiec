@@ -1,4 +1,4 @@
-add_library(qcx-linalg
+add_library(qcx-linalg ${QCX_MODULE_LIBRARY_TYPE}
   src/dense_ops.cpp
   src/iterative_eigensolver.cpp
   src/sparse_solver.cpp
@@ -100,7 +100,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
       tests/sparse_solver_test.cpp
       tests/batched_ops_test.cpp
     )
-    target_link_libraries(qcx-linalg-tests PRIVATE qcx-linalg gtest gtest_main)
+    target_link_libraries(qcx-linalg-tests PRIVATE ${QCX_LINK_linalg} gtest gtest_main)
     target_precompile_headers(qcx-linalg-tests PRIVATE
         <gtest/gtest.h>
         <qcx/linalg/dense_ops.hpp>)

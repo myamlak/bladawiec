@@ -8,7 +8,7 @@
 # are grid's, and io (which carries the parsed request in RunInput) and the
 # driver come after it. The module depends on neither io nor scf - an input
 # parser fills the request type and the driver resolves and evaluates it.
-add_library(qcx-dispersion
+add_library(qcx-dispersion ${QCX_MODULE_LIBRARY_TYPE}
   src/dispersion.cpp
 )
 target_include_directories(qcx-dispersion PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -28,7 +28,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/dispersion_test.cpp
         tests/dispersion_gradient_test.cpp)
     target_link_libraries(qcx-dispersion-tests PRIVATE
-        qcx-dispersion gtest gtest_main)
+        ${QCX_LINK_dispersion} gtest gtest_main)
 
     qcx_apply_asan_runtime(qcx-dispersion-tests)
     qcx_apply_fast_test_mode(qcx-dispersion-tests)

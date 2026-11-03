@@ -8,7 +8,7 @@
 # response state and dispersion term, and io for the run's method word and
 # the [properties] keys the coverage declarations name. Sits after io in the
 # module DAG (check_dag.py).
-add_library(qcx-properties
+add_library(qcx-properties ${QCX_MODULE_LIBRARY_TYPE}
   src/populations.cpp
   src/multipoles.cpp
   src/fukui.cpp
@@ -66,7 +66,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/gradient_test.cpp
         tests/wavefunction_view_test.cpp
         tests/property_registry_test.cpp)
-    target_link_libraries(qcx-properties-tests PRIVATE qcx-properties qcx-integrals qcx-scf qcx-response qcx-dispersion qcx-grid qcx-test-fixtures gtest gtest_main)
+    target_link_libraries(qcx-properties-tests PRIVATE ${QCX_LINK_properties} ${QCX_LINK_integrals} ${QCX_LINK_scf} ${QCX_LINK_response} ${QCX_LINK_dispersion} ${QCX_LINK_grid} qcx-test-fixtures gtest gtest_main)
 
     qcx_apply_asan_runtime(qcx-properties-tests)
     qcx_apply_blas_runtime(qcx-properties-tests)

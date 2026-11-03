@@ -1,4 +1,4 @@
-add_library(qcx-io
+add_library(qcx-io ${QCX_MODULE_LIBRARY_TYPE}
   src/parse_input.cpp
   src/result_json.cpp
   src/result_report.cpp
@@ -50,7 +50,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/exchange_error_test.cpp
         tests/molden_export_test.cpp
         tests/selection_coefficients_test.cpp)
-    target_link_libraries(qcx-io-tests PRIVATE qcx-io qcx-molecule qcx-basisset gtest gtest_main)
+    target_link_libraries(qcx-io-tests PRIVATE ${QCX_LINK_io} ${QCX_LINK_molecule} ${QCX_LINK_basisset} gtest gtest_main)
 
     qcx_apply_asan_runtime(qcx-io-tests)
     qcx_apply_blas_runtime(qcx-io-tests)

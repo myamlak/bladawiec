@@ -64,6 +64,12 @@ SANCTIONED_MACROS = frozenset({
     # per-file target features are legal derives its answer from the same two
     # macros, so the flag set and these guards cannot drift apart.
     "QcxArchX86_64",
+    # The instruction-set tier beside it: 1 when the translation unit was
+    # compiled at the shipped AVX2 + FMA tier, 0 at the x86-64 baseline and
+    # elsewhere, derived from the same compiler macros the Boys library reads
+    # (boys/isa_tiers.hpp). Same reason as QcxArchX86_64: a public header's
+    # define the build system and the bodies must agree on.
+    "QcxIsaAvx2Fma",
     # The slice C shim's public status contract (boys_c.h): C consumers
     # expect all-caps status macros, so the four BOYS_* tokens are the
     # header's own naming convention, not project snake_case.

@@ -109,7 +109,7 @@ endif()
 # called on - and a consumer can only link what this list compiles. Leaving a
 # unit out does not remove the option, it removes the ability to reach it, and
 # it arrives at the linker as an undefined symbol rather than as an error here.
-add_library(qcx-integrals
+add_library(qcx-integrals ${QCX_MODULE_LIBRARY_TYPE}
   ${_qcxBoysExt}/src/boys.cpp
   ${_qcxBoysExt}/src/boys_c.cpp
   ${_qcxBoysExt}/src/boys_orders_simd.cpp
@@ -291,6 +291,15 @@ set(_qcxMdShards 1)
 function(qcx_add_md_class_shard shard)
     set(_target qcx-md-class-shard-${shard})
     add_library(${_target} OBJECT ${ARGN})
+    if (QCX_BUILD_SHARED)
+        # The composed qcx target takes these objects directly: TARGET_OBJECTS
+        # on the parent object library does not recurse into an object library
+        # added through target_sources() (measured on CMake 4.4). The root
+        # CMakeLists also reads this property to disable PCH on MSVC, whose
+        # auto-export cannot parse the PCH bookkeeping symbol.
+        set_property(GLOBAL APPEND PROPERTY QCX_SHARED_NESTED_OBJECT_LIBRARIES
+            ${_target})
+    endif()
     target_include_directories(${_target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -350,7 +359,13 @@ foreach(_shard RANGE 0 7)
         list(APPEND _qcxMdClassObjects $<TARGET_OBJECTS:qcx-md-class-shard-${_shard}>)
     endif()
 endforeach()
-target_sources(qcx-integrals PRIVATE ${_qcxMdClassObjects})
+# Static: the archive holds the per-class objects. Shared: the composed qcx
+# target takes them directly (qcx_add_md_class_shard registers them), so they
+# are not folded into the parent object library as well - that would duplicate
+# them in any CMake version whose TARGET_OBJECTS recurses.
+if (NOT QCX_BUILD_SHARED)
+    target_sources(qcx-integrals PRIVATE ${_qcxMdClassObjects})
+endif()
 
 if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-integrals-tests
@@ -363,6 +378,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/aux_basis_test.cpp
         tests/one_electron_test.cpp
         tests/one_electron_gradient_test.cpp
+        tests/ecp_test.cpp
         tests/two_electron_test.cpp
         tests/eri_gradient_test.cpp
         tests/md_tables_test.cpp
@@ -409,7 +425,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/qfmm_lmult_test.cpp
         tests/qfmm_fock_build_test.cpp
         tests/qfmm_hf_build_test.cpp)
-    target_link_libraries(qcx-integrals-tests PRIVATE qcx-integrals qcx-linalg gtest gtest_main qcx-test-fixtures)
+    target_link_libraries(qcx-integrals-tests PRIVATE ${QCX_LINK_integrals} ${QCX_LINK_linalg} gtest gtest_main qcx-test-fixtures)
     # qcx-linalg is PRIVATE on qcx-integrals but its headers are required
     # at compile time here: screening_test.cpp reaches md_transform.hpp's
     # qcx/linalg/batched_ops.hpp through internal/fock_screen.hpp (the same

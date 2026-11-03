@@ -1,4 +1,4 @@
-add_library(qcx-core
+add_library(qcx-core ${QCX_MODULE_LIBRARY_TYPE}
   src/error.cpp
   src/logging.cpp
 )
@@ -17,7 +17,7 @@ target_precompile_headers(qcx-core PRIVATE
 
 if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-core-tests tests/error_test.cpp)
-    target_link_libraries(qcx-core-tests PRIVATE qcx-core gtest gtest_main)
+    target_link_libraries(qcx-core-tests PRIVATE ${QCX_LINK_core} gtest gtest_main)
     target_precompile_headers(qcx-core-tests PRIVATE
         <gtest/gtest.h>
         <qcx/error.hpp>)

@@ -4,7 +4,7 @@
 # result. Module-DAG position: io -> properties -> driver (check_dag.py) -
 # driver is the last link, the one module allowed to compose everything.
 
-add_library(qcx-driver
+add_library(qcx-driver ${QCX_MODULE_LIBRARY_TYPE}
   src/run_driver.cpp
   src/process_caps.cpp
   src/accuracy_class_report.cpp
@@ -47,7 +47,7 @@ add_executable(qcx-driver-run
   src/main.cpp
 )
 target_compile_features(qcx-driver-run PRIVATE cxx_std_23)
-target_link_libraries(qcx-driver-run PRIVATE qcx-driver qcx-io)
+target_link_libraries(qcx-driver-run PRIVATE ${QCX_LINK_driver} ${QCX_LINK_io})
 target_precompile_headers(qcx-driver-run PRIVATE
     <qcx/driver/run_driver.hpp>
     <qcx/io/parse_input.hpp>)
@@ -87,6 +87,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/selection_heuristic_test.cpp
         tests/selection_resolution_test.cpp
         tests/selection_reporting_test.cpp
+        tests/fock_planner_test.cpp
         tests/ks_composition_test.cpp
         tests/ks_gradient_test.cpp
         tests/ks_tau_test.cpp
@@ -96,7 +97,8 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/eri_cache_record_test.cpp
         tests/run_input_help_test.cpp
         tests/dispersion_input_test.cpp
-        tests/total_gradient_test.cpp)
+        tests/total_gradient_test.cpp
+        tests/ecp_run_test.cpp)
     # src PRIVATE: ks_composition_test.cpp includes the driver-internal
     # composition header (src/internal/ks_composition.hpp) to pin its
     # arithmetic against halves whose numbers are written down in the test.
@@ -115,14 +117,14 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     # claim is about the JSON TEXT a consumer reads, not only the C++ record,
     # and qcx-io keeps nlohmann PRIVATE, so the target is named here.
     target_link_libraries(qcx-driver-tests PRIVATE
-        qcx-driver qcx-grid qcx-test-fixtures json gtest gtest_main)
+        ${QCX_LINK_driver} ${QCX_LINK_grid} qcx-test-fixtures json gtest gtest_main)
 
     if (QCX_ENABLE_IO)
         # QcxHasStorage comes in through qcx-driver (PUBLIC), but the
         # definition alone links nothing: the cases that call the checkpoint
         # reader and writer directly need the module's own target, whose
         # PUBLIC include directory is what the guarded include resolves to.
-        target_link_libraries(qcx-driver-tests PRIVATE qcx-storage)
+        target_link_libraries(qcx-driver-tests PRIVATE ${QCX_LINK_storage})
     endif()
 
     if (QCX_ENABLE_CUDA)
@@ -137,7 +139,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-driver-cap-child
         tests/cap_child.cpp)
     target_compile_features(qcx-driver-cap-child PRIVATE cxx_std_23)
-    target_link_libraries(qcx-driver-cap-child PRIVATE qcx-driver)
+    target_link_libraries(qcx-driver-cap-child PRIVATE ${QCX_LINK_driver})
     qcx_apply_blas_runtime(qcx-driver-cap-child)
     target_precompile_headers(qcx-driver-cap-child PRIVATE
         <qcx/driver/run_driver.hpp>)

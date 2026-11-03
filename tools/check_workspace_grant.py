@@ -42,7 +42,10 @@ from pathlib import Path
 TARGET = Path("driver/src/run_driver.cpp")
 
 # The number of budget sites the tree is expected to carry. See (2) above.
-COUNT = 8
+# Nine since the mixed-half wiring (WireMixedHalfRestrictedFockBuilder): its
+# one budget is shared by the two half builders, each reservation taken from
+# the same WorkspaceGrantBytes expression as the whole-family arms.
+COUNT = 9
 
 # The one expression a budget site may be handed: the shared grant.
 REQUIRED = "WorkspaceGrantBytes("

@@ -14,7 +14,7 @@ add_library(qcx-test-fixtures STATIC
 )
 target_include_directories(qcx-test-fixtures PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
 target_compile_features(qcx-test-fixtures PUBLIC cxx_std_23)
-target_link_libraries(qcx-test-fixtures PUBLIC qcx-molecule qcx-basisset)
+target_link_libraries(qcx-test-fixtures PUBLIC ${QCX_LINK_molecule} ${QCX_LINK_basisset})
 # The corpus-parsing fixtures (h2o_ccpvdz) read data/basis through this
 # define; the storage tests' QcxStorageDataDir analog lives on their own
 # target (storage/CMakeLists.txt).
@@ -43,7 +43,7 @@ add_test(NAME smoke COMMAND qcx-smoke-test)
 # CRTP + variant dispatch pressure test: the base drives the iteration shape
 # and the variant picks the backend, with no virtuals anywhere.
 add_executable(qcx-dispatch-prototype-test dispatch_prototype_test.cpp)
-target_link_libraries(qcx-dispatch-prototype-test PRIVATE GTest::gtest_main qcx-backend)
+target_link_libraries(qcx-dispatch-prototype-test PRIVATE GTest::gtest_main ${QCX_LINK_backend})
 target_precompile_headers(qcx-dispatch-prototype-test PRIVATE
     <gtest/gtest.h>
     <qcx/backend/cpu_backend.hpp>)
@@ -55,7 +55,7 @@ add_test(NAME dispatch-prototype COMMAND qcx-dispatch-prototype-test)
 # SparsityPolicy prototype: the CSR primitive serving a LinK-style
 # neighbor list and a QFMM-style tree.
 add_executable(qcx-sparsity-pattern-test sparsity_pattern_test.cpp)
-target_link_libraries(qcx-sparsity-pattern-test PRIVATE GTest::gtest_main qcx-memory qcx-test-fixtures)
+target_link_libraries(qcx-sparsity-pattern-test PRIVATE GTest::gtest_main ${QCX_LINK_memory} qcx-test-fixtures)
 target_precompile_headers(qcx-sparsity-pattern-test PRIVATE
     <gtest/gtest.h>
     <qcx/memory/sparsity_pattern.hpp>)
