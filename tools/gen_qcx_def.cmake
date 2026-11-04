@@ -9,9 +9,10 @@
 # are the same kind of instantiation from the other vendored headers; the
 # import library then exceeds MSVC's 65,535-member limit and the link dies with
 # LNK1189. Those instantiations are not a consumer's API - a consumer compiles
-# its own copy from the headers - so the export list carries the first-party
-# `qcx::` symbols only. The list is regenerated from the target's own objects
-# on every build, so it cannot drift from the code.
+# its own copy from the headers - so the export list carries the `qcx::` API and
+# the `boys::` kernel symbols its public header exposes, and nothing else. The
+# list is regenerated from the target's own objects on every build, so it cannot
+# drift from the code.
 #
 # The symbol dump is written to a file and filtered natively by file(STRINGS):
 # the per-class MD objects carry tens of thousands of sections each, and a
@@ -56,8 +57,10 @@ foreach(_qcxObject IN LISTS _qcxObjects)
 
     set(_qcxName "${CMAKE_MATCH_1}")
 
-    # First-party symbols only: the mangled form carries the namespace token.
-    if (NOT _qcxName MATCHES "qcx@")
+    # The qcx API and the boys kernel its public header carries: the mangled
+    # form carries the namespace token. The vendored template instantiations
+    # and the other external libraries stay out.
+    if (NOT _qcxName MATCHES "qcx@|@boys@")
       continue()
     endif()
 
