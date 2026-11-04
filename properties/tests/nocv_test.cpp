@@ -311,13 +311,15 @@ const qcx::scf::UhfOptions kNocvFragmentOptions = [] {
 // A comparison between TWO independently converged decompositions carries both
 // sides' stopping landings, so its floor is the fragment gate twice over. The
 // Kohn-Sham/Hartree-Fock limit test converges both sides below its asserted
-// bands instead of widening them: the fragments are STO-3G atoms, and the
-// ladder's tight rung (1e-10 energy over a 1e-8 density leg) costs a handful
-// of iterations.
+// bands instead of widening them: the fragments are STO-3G atoms, and a
+// 1e-10 energy over a 1e-9 density leg costs a handful of iterations. The
+// operating tight rung's 1e-8 density leg left a 2.33e-6 electrostatic
+// difference, above the 2e-6 cross-path band; 1e-9 lands below it, and the
+// density leg stays above the retired 1e-10/1e-10 gate.
 const qcx::scf::UhfOptions kNocvTightFragmentOptions = [] {
     qcx::scf::UhfOptions options;
     options.energyTolerance = 1e-10;
-    options.densityTolerance = 1e-8;
+    options.densityTolerance = 1e-9;
     options.maxIterations = 300;
     return options;
 }();
