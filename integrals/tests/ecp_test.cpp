@@ -605,11 +605,12 @@ Eigen::MatrixXd InverseGram(const std::vector<Polynomial>& basis) {
     return gram.inverse();
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- the kernel is symmetric.
-double ProjectorKernel(const std::vector<Polynomial>& basis,
-                       const Eigen::MatrixXd& inverseGram,
-                       const Vec3& left,
-                       const Vec3& right) {
+double ProjectorKernel(
+    const std::vector<Polynomial>& basis,
+    const Eigen::MatrixXd& inverseGram,
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- the kernel is symmetric.
+    const Vec3& left,
+    const Vec3& right) {
     Eigen::VectorXd valuesLeft(static_cast<Eigen::Index>(basis.size()));
     Eigen::VectorXd valuesRight(static_cast<Eigen::Index>(basis.size()));
 
@@ -623,6 +624,7 @@ double ProjectorKernel(const std::vector<Polynomial>& basis,
     return valuesLeft.dot(inverseGram * valuesRight);
 }
 
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- degree and argument.
 double Legendre(int degree, double x) {
     if (degree == 0)
     {

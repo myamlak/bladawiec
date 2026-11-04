@@ -122,7 +122,7 @@ int TemporaryValenceElectronCount(const Molecule& molecule, const BasisSet& basi
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters) -- charge and multiplicity.
 qcx::Result<Molecule> MakeMolecule(std::vector<Atom> atoms,
-                                   std::vector<std::vector<double>> coordinates,
+                                   const std::vector<std::vector<double>>& coordinates,
                                    int charge,
                                    int multiplicity) {
     return Molecule::Create(std::move(atoms), MakeCoordinates(coordinates), charge, multiplicity);
