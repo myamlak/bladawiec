@@ -9,15 +9,29 @@
 
 namespace qcx::backend {
 
+#if defined(_WIN32) && defined(QCX_SHARED_CONSUMER)
+/// The library image's team-size ceiling storage. A consumer's inline
+/// OmpThreadCeiling reaches it through this entry: a function-local static
+/// inside an inline function is one copy per image, so an executable's
+/// copy would never be the one the library's parallel code reads.
+/// \returns The ceiling (0 = no ceiling).
+int& OmpThreadCeilingInImage() noexcept;
+#endif
+
 /// The process-wide OpenMP team-size ceiling (the run input's thread_cap;
 /// 0 = no ceiling). Internal state - write via SetOmpThreadCeiling, read
 /// via DefaultOmpTeamSize. Set once at run start, before any parallel
 /// work: every parallel primitive reads the value at its own start, so a
 /// late write would race with in-flight regions.
-inline int& OmpThreadCeiling() {
+/// \returns The ceiling (0 = no ceiling).
+inline int& OmpThreadCeiling() noexcept {
+#if defined(_WIN32) && defined(QCX_SHARED_CONSUMER)
+    return OmpThreadCeilingInImage();
+#else
     static int ceiling = 0;
 
     return ceiling;
+#endif
 }
 
 /// The process-wide OpenMP team size, computed once from DefaultTeamSize /
