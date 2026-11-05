@@ -267,6 +267,18 @@ qcx::Error EnableError(std::string message) {
 
 } // namespace
 
+// The consumer boundary of the tag-scope chain. Inside the library the
+// header-inline accessors read the image's thread_local directly; a consumer
+// cannot import a thread_local, so these exported wrappers carry the call
+// into the image, where the same inline accessors serve it.
+AllocationTagScope* ActiveAttributionScopeInImage() noexcept {
+    return ActiveAttributionScope();
+}
+
+void SetActiveAttributionScopeInImage(AllocationTagScope* scope) noexcept {
+    SetActiveAttributionScope(scope);
+}
+
 const char* AllocationTagName(AllocationTag tag) noexcept {
     switch (tag)
     {

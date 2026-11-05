@@ -931,6 +931,14 @@ if (QCX_BUILD_SHARED)
         target_sources(qcx PRIVATE "$<TARGET_OBJECTS:${_objectLibrary}>")
     endforeach()
 
+    # Consumers compile the public headers with the imported state
+    # declarations: a header-inline variable is one copy per image under
+    # MSVC, so an executable's copy would never see the library's. The
+    # image's own objects do not receive the definition and define the state.
+    if (MSVC)
+        target_compile_definitions(qcx INTERFACE QCX_SHARED_CONSUMER=1)
+    endif()
+
     if (MSVC)
         foreach(_module IN LISTS _qcxComposedModules)
             set_target_properties(${_module}

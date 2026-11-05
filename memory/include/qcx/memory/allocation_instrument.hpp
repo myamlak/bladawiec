@@ -99,6 +99,15 @@
 #include <string>
 #include <string_view>
 
+// The shared-library consumer boundary. In the composed shared build the
+// instrument's state lives once, in qcx.dll. A header-inline variable is one
+// copy per image under MSVC, so a consumer's translation units would read
+// their own zeroed copy while the library accounted allocations in the image.
+// Consumers therefore see the imported declarations; the image's own objects
+// compile without the define and define the state. The thread-local scope
+// chain cannot be imported at all, so it crosses the boundary through the
+// exported accessors below.
+
 namespace qcx::memory {
 
 /// The attribution family tags.
@@ -197,6 +206,26 @@ struct alignas(64) TagAttributionCounters {
     std::atomic<std::uint64_t> count{0};
 };
 
+#if defined(_WIN32) && defined(QCX_SHARED_CONSUMER)
+/// The fixed preallocated stats block: static storage, never heap - the
+/// hooks' only state. Reset (zeroed) by every AllocationInstrumentEnable.
+extern __declspec(dllimport) std::array<TagAttributionCounters, kAllocationTagCount>
+    gAttributionStats;
+
+/// The global live request bytes over all tags (wrapper traffic only).
+extern __declspec(dllimport) std::atomic<std::uint64_t> gAttributionGlobalCurrentBytes;
+
+/// The global request high-water over all tags.
+extern __declspec(dllimport) std::atomic<std::uint64_t> gAttributionGlobalPeakBytes;
+
+/// The instrument's enabled flag (relaxed; the wrapper fast path reads it).
+extern __declspec(dllimport) std::atomic<bool> gAttributionEnabled;
+
+/// Set by the allocation fast path whenever the global request high-water
+/// rises; cleared by the watchdog after the snapshot row. A lost set (a
+/// snapshot already in flight) only delays the row by at most one interval.
+extern __declspec(dllimport) std::atomic<bool> gAttributionHighWaterEvent;
+#else
 /// The fixed preallocated stats block: static storage, never heap - the
 /// hooks' only state. Reset (zeroed) by every AllocationInstrumentEnable.
 inline std::array<TagAttributionCounters, kAllocationTagCount> gAttributionStats{};
@@ -214,6 +243,7 @@ inline std::atomic<bool> gAttributionEnabled{false};
 /// rises; cleared by the watchdog after the snapshot row. A lost set (a
 /// snapshot already in flight) only delays the row by at most one interval.
 inline std::atomic<bool> gAttributionHighWaterEvent{false};
+#endif
 
 /// The tag the calling thread's allocations attribute to right now
 /// (kUnclassified with no scope active - wrapper traffic with no scope, which
@@ -247,9 +277,46 @@ private:
     AllocationTag _tag;
 };
 
+#if defined(_WIN32) && defined(QCX_SHARED_CONSUMER)
+/// The calling thread's live tag-scope chain head, in the library image. A
+/// thread_local cannot be imported, so a consumer's scope RAII reaches the
+/// library's chain through this entry.
+/// \returns The innermost live scope; nullptr when no scope is live.
+AllocationTagScope* ActiveAttributionScopeInImage() noexcept;
+
+/// Sets the calling thread's live tag-scope chain head in the library image.
+/// \param scope The innermost live scope; nullptr closes the chain.
+void SetActiveAttributionScopeInImage(AllocationTagScope* scope) noexcept;
+
+/// The calling thread's live tag-scope chain head.
+/// \returns The innermost live scope; nullptr when no scope is live.
+inline AllocationTagScope* ActiveAttributionScope() noexcept {
+    return ActiveAttributionScopeInImage();
+}
+
+/// Sets the calling thread's live tag-scope chain head (scope RAII internal).
+/// \param scope The innermost live scope; nullptr closes the chain.
+inline void SetActiveAttributionScope(AllocationTagScope* scope) noexcept {
+    SetActiveAttributionScopeInImage(scope);
+}
+#else
 /// The thread-local scope chain (inline variable so the header-inline hot
-/// paths and the scope RAII share one pointer).
+/// paths and the scope RAII share one pointer; one copy per image, which the
+/// library's own image is).
 inline thread_local AllocationTagScope* gAttributionActiveScope = nullptr;
+
+/// The calling thread's live tag-scope chain head.
+/// \returns The innermost live scope; nullptr when no scope is live.
+inline AllocationTagScope* ActiveAttributionScope() noexcept {
+    return gAttributionActiveScope;
+}
+
+/// Sets the calling thread's live tag-scope chain head (scope RAII internal).
+/// \param scope The innermost live scope; nullptr closes the chain.
+inline void SetActiveAttributionScope(AllocationTagScope* scope) noexcept {
+    gAttributionActiveScope = scope;
+}
+#endif
 
 /// The run metadata carried into the trace header. Filled by whoever enables
 /// the instrument for a run; the measured fields are the rows'.
@@ -696,18 +763,18 @@ inline bool AllocationInstrumentEnabled() noexcept {
 /// The tag the calling thread's allocations attribute to right now.
 /// \returns The active tag; kUnclassified when no scope is live.
 inline AllocationTag ActiveAllocationTag() noexcept {
-    const AllocationTagScope* scope = gAttributionActiveScope;
+    const AllocationTagScope* scope = ActiveAttributionScope();
 
     return scope != nullptr ? scope->Tag() : AllocationTag::kUnclassified;
 }
 
 inline AllocationTagScope::AllocationTagScope(AllocationTag tag) noexcept :
-    _previous(gAttributionActiveScope), _tag(tag) {
-    gAttributionActiveScope = this;
+    _previous(ActiveAttributionScope()), _tag(tag) {
+    SetActiveAttributionScope(this);
 }
 
 inline AllocationTagScope::~AllocationTagScope() noexcept {
-    gAttributionActiveScope = _previous;
+    SetActiveAttributionScope(_previous);
 }
 
 /// The header-inline accounting of one allocation under \p tag: current and
