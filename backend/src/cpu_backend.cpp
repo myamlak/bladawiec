@@ -11,6 +11,13 @@
 
 namespace qcx::backend {
 
+// The consumer boundary of the team-size ceiling: inside the library the
+// header-inline storage serves every caller directly; a consumer's inline
+// OmpThreadCeiling reaches the image's storage through this wrapper.
+int& OmpThreadCeilingInImage() noexcept {
+    return OmpThreadCeiling();
+}
+
 void BoundOmpRuntimeThreads(int team) noexcept {
     if (team > 0)
     {
