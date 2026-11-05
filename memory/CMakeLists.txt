@@ -1,4 +1,4 @@
-add_library(qcx-memory
+add_library(qcx-memory ${QCX_MODULE_LIBRARY_TYPE}
   src/allocation_instrument.cpp
   src/device_buffer.cpp
   src/first_touch.cpp
@@ -23,7 +23,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
       tests/device_workspace_budget_test.cpp
       tests/first_touch_test.cpp
     )
-    target_link_libraries(qcx-memory-tests PRIVATE qcx-memory qcx-backend gtest gtest_main)
+    target_link_libraries(qcx-memory-tests PRIVATE ${QCX_LINK_memory} ${QCX_LINK_backend} gtest gtest_main)
     target_precompile_headers(qcx-memory-tests PRIVATE
         <gtest/gtest.h>
         <qcx/memory/tensor.hpp>

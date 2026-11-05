@@ -51,11 +51,6 @@ enum class PropertyKind : std::uint8_t {
 /// \ingroup qcx-properties
 enum class RefusalReason : std::uint8_t {
     kNone, ///< Supported: the driver runs the property on this method kind.
-    /// Fukui on a Kohn-Sham run. The N +- 1 species run through the
-    /// direct-UHF runner, so their densities would be Hartree-Fock ones
-    /// under a Kohn-Sham parent - the indices would mix two physics under one
-    /// label (`"properties.fukui is not wired for a Kohn-Sham run in v1"`).
-    kFukuiKohnShamSpecies,
     /// ETS-NOCV on an unrestricted run. The per-spin resolution assumes the
     /// closed-shell D_sigma = D/2, so a molecular density with two different
     /// spin channels would feed it the wrong ones (`"the ETS-NOCV analysis is

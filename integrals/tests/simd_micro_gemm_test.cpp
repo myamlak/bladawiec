@@ -102,7 +102,7 @@ const std::size_t kShapes[][3] = {
 TEST(SimdMicroGemmTest, SimdMatchesScalarWhenAvailable) {
     if (!HasAvx2Fma())
     {
-        GTEST_SKIP() << "no AVX2+FMA on this machine";
+        GTEST_SKIP() << "no AVX2+FMA tier in this build";
     }
 
     std::mt19937_64 rng(20260817);
@@ -163,7 +163,7 @@ TEST(SimdMicroGemmTest, SimdMatchesScalarWhenAvailable) {
 TEST(SimdMicroGemmTest, SimdDiffersFromScalarOnlyInTheSignOfZero) {
     if (!HasAvx2Fma())
     {
-        GTEST_SKIP() << "no AVX2+FMA on this machine";
+        GTEST_SKIP() << "no AVX2+FMA tier in this build";
     }
 
     const std::size_t shapes[][3] = {{6, 1, 1}, {6, 1, 3}, {5, 2, 2}, {7, 3, 2}, {4, 4, 2}};
@@ -291,9 +291,13 @@ TEST(SimdMicroGemmTest, GateReadsTheArchitecturalFmaBit) {
         GTEST_SKIP() << "the CPU has the bits but the OS has not enabled the AVX state";
     }
 
-    EXPECT_TRUE(HasAvx2Fma())
-        << "the CPU reports FMA (01H:ECX.12) but the AVX2 tier's gate says no";
-    EXPECT_TRUE(CpuHasAvx2Fma());
+    // The dispatch gate is the tier AND the runtime predicate. The pin is the
+    // runtime half; on a baseline build the dispatch gate must answer false
+    // even though the CPU here does report FMA.
+    EXPECT_EQ(HasAvx2Fma(), QcxIsaAvx2Fma != 0)
+        << "the dispatch gate disagrees with the tier this build was compiled at";
+    EXPECT_TRUE(CpuHasAvx2Fma())
+        << "the CPU reports FMA (01H:ECX.12) but the runtime predicate says no";
 }
 #endif // QcxArchX86_64
 

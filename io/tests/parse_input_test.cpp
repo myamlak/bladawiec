@@ -2790,6 +2790,51 @@ TEST(ParseInputTest, UnRunnableAxisCombinationsAreRefusedByName) {
     EXPECT_EQ(leanGpu.error().code, qcx::ErrorCode::kInvalidArgument);
 }
 
+// The per-half keys refine the family axis: their values are the family
+// vocabulary's own, a half-only request leaves the whole-selection slots empty
+// (the size ladder keeps deciding the unwritten half), and an unknown word is
+// refused AT ITS OWN KEY with that key's accepted list - never through the
+// family axis's message.
+TEST(ParseInputTest, TheHalfKeysRefineTheFamilyAxisPerHalf) {
+    const auto split = ParseRunInput(BuilderSelectionToml(
+        "", "[builder]\ncoulomb_half = \"direct\"\nexchange_half = \"ri_jk\"\n"));
+    ASSERT_TRUE(split.has_value()) << split.error().message;
+    ASSERT_TRUE(split->builder.coulombHalf.has_value());
+    EXPECT_EQ(*split->builder.coulombHalf, qcx::io::IntegralFamily::kDirect);
+    ASSERT_TRUE(split->builder.exchangeHalf.has_value());
+    EXPECT_EQ(*split->builder.exchangeHalf, qcx::io::IntegralFamily::kRiJk);
+    EXPECT_FALSE(split->method.builder.has_value())
+        << "a half-only request names no whole selection";
+    EXPECT_FALSE(split->builder.integralFamily.has_value());
+
+    const auto unknown =
+        ParseRunInput(BuilderSelectionToml("", "[builder]\nexchange_half = \"ri_j\"\n"));
+    ASSERT_FALSE(unknown.has_value());
+    EXPECT_EQ(unknown.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(unknown.error().message.find("builder.exchange_half"), std::string::npos)
+        << "message: " << unknown.error().message;
+    EXPECT_NE(unknown.error().message.find("direct | ri_j_link | ri_jk | qfmm"), std::string::npos)
+        << "message: " << unknown.error().message;
+}
+
+// The lean tier is the direct family's member, so it is legal exactly when a
+// direct family supplies a half of the plan - a non-direct family axis beside a
+// direct half is a coherent request, and a family axis with no direct half is
+// the same refusal the wholly-family spelling gets.
+TEST(ParseInputTest, TheLeanTierIsLegalWhenADirectHalfIsInThePlan) {
+    const auto directHalf = ParseRunInput(
+        BuilderSelectionToml("",
+                             "[builder]\nintegral_family = \"ri_jk\"\ncoulomb_half = \"direct\"\n"
+                             "storage_tier = \"lean\"\n"));
+    ASSERT_TRUE(directHalf.has_value()) << directHalf.error().message;
+    EXPECT_EQ(directHalf->builder.storageTier, qcx::io::StorageTier::kLean);
+
+    const auto noDirectHalf = ParseRunInput(BuilderSelectionToml(
+        "", "[builder]\nintegral_family = \"ri_jk\"\nstorage_tier = \"lean\"\n"));
+    ASSERT_FALSE(noDirectHalf.has_value());
+    EXPECT_EQ(noDirectHalf.error().code, qcx::ErrorCode::kInvalidArgument);
+}
+
 // An unknown word on any axis is refused by name WITH the accepted list, so the
 // axis keys are not a hole a typo can fall through.
 TEST(ParseInputTest, AnUnknownAxisWordIsRefusedWithTheAcceptedList) {

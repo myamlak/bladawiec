@@ -1,4 +1,4 @@
-add_library(qcx-symmetry
+add_library(qcx-symmetry ${QCX_MODULE_LIBRARY_TYPE}
   src/detection.cpp
   src/salc.cpp
 )
@@ -18,7 +18,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
       tests/salc_test.cpp
       tests/full_group_tables_test.cpp
     )
-    target_link_libraries(qcx-symmetry-tests PRIVATE qcx-symmetry qcx-test-fixtures qcx-linalg gtest gtest_main)
+    target_link_libraries(qcx-symmetry-tests PRIVATE ${QCX_LINK_symmetry} qcx-test-fixtures ${QCX_LINK_linalg} gtest gtest_main)
 
     qcx_apply_asan_runtime(qcx-symmetry-tests)
     qcx_apply_blas_runtime(qcx-symmetry-tests)

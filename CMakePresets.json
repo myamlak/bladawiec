@@ -43,6 +43,26 @@
       "binaryDir": "${sourceDir}/build/windows-msvc-pf"
     },
     {
+      "name": "windows-msvc-shared",
+      "displayName": "Windows MSVC, one composed shared library (local-only)",
+      "description": "The link-mode axis with one image per platform: QCX_BUILD_SHARED turns every qcx-<module> into an OBJECT library and composes ONE qcx.dll from their objects, so the header-defined process-wide state lives in a single image; the modules' public interfaces and external dependencies propagate through that target and MSVC auto-export supplies the .def from the target's own objects. The MSVC shared build compiles the modules without a precompiled header (auto-export cannot parse the PCH bookkeeping symbol). All first-party executables and qcx.dll land in build/windows-msvc-shared/bin/<config> so a test binary finds the DLL beside it. The static windows-msvc preset is the shipped configuration; this one exists for the wall-time comparison instrument (tools/bench/link_mode_comparison.py) and is never a CI leg.",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-shared",
+      "cacheVariables": {
+        "QCX_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-baseline",
+      "displayName": "Windows MSVC, x86-64 baseline (compile-only)",
+      "description": "windows-msvc with QCX_ISA=baseline: every first-party translation unit compiles at the x86-64 baseline, with no /arch:AVX2 anywhere in the tree. A portability configuration for machines without AVX2 and for checking the portable paths; the shipped configuration is unchanged. Price and limits: the QCX_ISA row in docs/maintainer-guide.md. Check the flags a configured tree emits with tools/check_isa_flags.py.",
+      "inherits": "windows-msvc",
+      "binaryDir": "${sourceDir}/build/windows-msvc-baseline",
+      "cacheVariables": {
+        "QCX_ISA": "baseline"
+      }
+    },
+    {
       "name": "wsl-gcc",
       "displayName": "Linux GCC (CI; shipped integral ceiling, see ci.yml)",
       "description": "Debug parity configuration. It names no QCX_INTEGRALS_LMAX, so the configure takes the 6 that integrals/CMakeLists.txt ships (154 instantiated MD classes) - the bound the engine supports, and the only class matrix CI builds since the owner's 2026-10-20 ruling. It used to pin 2 (24 classes). AN EXISTING build/wsl-gcc TREE KEEPS THE OLD VALUE: the cache entry is set without FORCE, so a tree that already holds 2 goes on holding it; delete it or edit CMakeCache.txt rather than assume this preset moved it. The Debug selection skips the two footprint cases through the same fast-mode gate every other heavy numerical case uses; Release at 6 runs them, and the measurements are on the windows-msvc Configure note in ci.yml.",
@@ -76,6 +96,16 @@
       }
     },
     {
+      "name": "wsl-gcc-baseline",
+      "displayName": "Linux GCC, x86-64 baseline (compile-only)",
+      "description": "wsl-gcc with QCX_ISA=baseline: every first-party translation unit compiles at the x86-64 baseline, with no -mavx2/-mfma/-mf16c anywhere in the tree. -ffp-contract=off stays, because the published arithmetic is the two-rounding one at either tier. That pin is the whole flag difference from wsl-gcc. It inherits wsl-gcc's full integral ceiling and Debug selection; read that preset's description for what those mean.",
+      "inherits": "wsl-gcc",
+      "binaryDir": "${sourceDir}/build/wsl-gcc-baseline",
+      "cacheVariables": {
+        "QCX_ISA": "baseline"
+      }
+    },
+    {
       "name": "wsl-clang-release",
       "displayName": "Linux Clang Release (CI; shipped integral ceiling, see ci.yml)",
       "description": "Same ceiling and same cost as wsl-gcc-release - read that preset's description; the numbers are not repeated here because a second copy is a second thing to keep true. This one names no QCX_INTEGRALS_LMAX either, so the configure takes the shipped 6.",
@@ -88,8 +118,8 @@
     },
     {
       "name": "wsl-gcc-shared",
-      "displayName": "Linux GCC Debug, shared first-party libraries (local-only)",
-      "description": "The wsl-gcc configuration with QCX_BUILD_SHARED=ON: qcx-<module> become libqcx-<module>.so with PIC and ELF default visibility, every vendored tree stays static. All first-party executables and shared libraries land in build/wsl-gcc-shared/bin. Local-only, like every shared preset - the static presets are the shipped configurations.",
+      "displayName": "Linux GCC Debug, one composed shared library (local-only)",
+      "description": "The wsl-gcc configuration with QCX_BUILD_SHARED=ON: every qcx-<module> becomes an OBJECT library and ONE libqcx.so is composed from their objects, with PIC and ELF default visibility; every vendored tree stays static. All first-party executables and libqcx.so land in build/wsl-gcc-shared/bin. Local-only, like every shared preset - the static presets are the shipped configurations.",
       "inherits": "wsl-gcc",
       "binaryDir": "${sourceDir}/build/wsl-gcc-shared",
       "cacheVariables": {
@@ -98,7 +128,7 @@
     },
     {
       "name": "wsl-gcc-shared-release",
-      "displayName": "Linux GCC Release, shared first-party libraries (local-only)",
+      "displayName": "Linux GCC Release, one composed shared library (local-only)",
       "description": "The wsl-gcc-release configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared's description; only the build type differs. This is the configuration the wall-time comparison takes its shared arm from.",
       "inherits": "wsl-gcc-release",
       "binaryDir": "${sourceDir}/build/wsl-gcc-shared-release",
@@ -108,7 +138,7 @@
     },
     {
       "name": "wsl-clang-shared",
-      "displayName": "Linux Clang Debug, shared first-party libraries (local-only)",
+      "displayName": "Linux Clang Debug, one composed shared library (local-only)",
       "description": "The wsl-clang configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared's description; only the compiler differs.",
       "inherits": "wsl-clang",
       "binaryDir": "${sourceDir}/build/wsl-clang-shared",
@@ -118,7 +148,7 @@
     },
     {
       "name": "wsl-clang-shared-release",
-      "displayName": "Linux Clang Release, shared first-party libraries (local-only)",
+      "displayName": "Linux Clang Release, one composed shared library (local-only)",
       "description": "The wsl-clang-release configuration with QCX_BUILD_SHARED=ON - read wsl-gcc-shared-release's description; only the compiler differs.",
       "inherits": "wsl-clang-release",
       "binaryDir": "${sourceDir}/build/wsl-clang-shared-release",
@@ -138,6 +168,18 @@
       "name": "windows-msvc-release",
       "displayName": "Windows MSVC Release",
       "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-msvc-shared-debug",
+      "displayName": "Windows MSVC shared Debug",
+      "configurePreset": "windows-msvc-shared",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-msvc-shared-release",
+      "displayName": "Windows MSVC shared Release",
+      "configurePreset": "windows-msvc-shared",
       "configuration": "Release"
     }
   ]

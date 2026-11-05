@@ -1751,6 +1751,71 @@ struct RunBuilderAxes {
     std::optional<std::string> device;
 };
 
+/// One half of the Fock-build plan (schema 49): the provider that supplies it
+/// and the words a reader needs to size the result class.
+/// \ingroup qcx-io
+struct RunFockHalfPlan {
+    /// The half this record describes: "coulomb" | "exchange".
+    std::string role;
+    /// The family word of the provider that supplies the half.
+    std::string provider;
+    /// The provider's equivalence class: "direct_screened" | "density_fitted" |
+    /// "combined" | "fast_multipole". A mixed plan's halves may belong to
+    /// different classes; substitution between them is never silent, and this
+    /// word is what makes the difference visible.
+    std::string providerClass;
+    /// The half's kernel: "exact" | "density_fitted" | "fast_multipole".
+    std::string kernel;
+    /// The provider's NATIVE accounting convention - what the family's own
+    /// builder returns, before the driver's half adapter converts it to the
+    /// composition contract: "H+2J" | "2J" | "H-K" | "K". The converted output
+    /// is always the contract's H+2J / H-K, so this word is what tells the
+    /// families apart; a reader assembling the Fock applies the adapter's
+    /// documented conversion (the ri_j_link Coulomb half gains H, the full-RI
+    /// pair gains H on both halves and the Coulomb one is doubled).
+    std::string accounting;
+    /// The auxiliary basis the half's provider Create consumes; absent when
+    /// the half needs none.
+    std::optional<std::string> auxBasis;
+};
+
+/// The Fock-build planner's decision (schema 49), serialized as "fock_plan":
+/// the provider the engine chose for each half, the sharing between them, and
+/// the constraints it checked.
+///
+/// **Present exactly when the input wrote a half key** (`[builder]
+/// coulomb_half` or `[builder] exchange_half`): a run that named no half has
+/// its whole selection stated by `builder_axes`, and an absent block is the
+/// schema-19 "no request" - never a fabricated plan. A mixed plan - two
+/// providers, no shared intermediate - is the reason the block exists: the
+/// whole-family vocabulary cannot state it, and the builder_axes block would
+/// name one family while the Fock was assembled from two.
+///
+/// **The exchange member is absent** exactly when the run builds no exchange
+/// term (a pure Kohn-Sham functional, c_HF = 0), never zero-filled.
+/// \ingroup qcx-io
+struct RunFockPlan {
+    /// The Coulomb half: always present, because every Fock has one.
+    RunFockHalfPlan coulomb;
+    /// The exchange half; absent when the run builds no exchange term.
+    std::optional<RunFockHalfPlan> exchange;
+    /// True when one family supplies both halves (one builder, one Create and
+    /// one shared shell-quartet pass).
+    bool sameProvider = true;
+    /// True when both halves exist and come from different providers (separate
+    /// builders, no shared intermediate). A Coulomb-only plan is neither
+    /// same-provider nor mixed.
+    bool mixed = false;
+    /// The constraints the planner evaluated, in check order:
+    /// "coulomb_matrix" | "per_spin_adapter" | "auxiliary_basis" |
+    /// "disk_rung" | "device_boundary" | "option_scope" |
+    /// "exchange_capability".
+    std::vector<std::string> constraints;
+    /// The planner's one-sentence reasoning: the request, the provider per
+    /// half, and whether an intermediate was shared.
+    std::string reasoning;
+};
+
 /// The dispersion correction a run applied (schema 41), serialized as
 /// "dispersion": the form, where its parameters came from, the values they
 /// resolved to, and the energy the correction contributed to
@@ -2016,7 +2081,18 @@ struct RunResult {
     /// frozen-charge one and this member names it. A key added, so the number
     /// moved with it. The member is absent for `d3` (one zero-damping
     /// derivative, no variants) and when no correction was requested.
-    static constexpr int kSchemaVersion = 48;
+    ///
+    /// Schema 49 ADDS the top-level `fock_plan` block (RunFockPlan): the
+    /// Fock-build planner's decision - the provider per half, each provider's
+    /// equivalence class, kernel and accounting, the sharing taken, and the
+    /// constraints the planner checked. It is present exactly when the input
+    /// wrote one of the two half keys (`[builder] coulomb_half` /
+    /// `[builder] exchange_half`), because a run that named no half has its
+    /// whole selection stated by `builder_axes` already; the half request is
+    /// what a consumer must notice, and the block's absence is the
+    /// "no request" the null-honesty rule requires. Keys added, so the number
+    /// moved with them.
+    static constexpr int kSchemaVersion = 49;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.
@@ -2269,6 +2345,15 @@ struct RunResult {
     /// to fill it. Appended last so the aggregate's earlier fields keep their
     /// positions.
     RunBuilderAxes builderAxes;
+
+    /// The Fock-build planner's decision (schema 49, RunFockPlan), serialized
+    /// as "fock_plan". Present exactly when the input wrote `[builder]
+    /// coulomb_half` or `[builder] exchange_half`; absent otherwise (a run
+    /// that named no half states its whole selection in `builder_axes`, and
+    /// an absent block is the "no request", never a fabricated plan). Appended
+    /// after builderAxes so the aggregate's earlier fields keep their
+    /// positions.
+    std::optional<RunFockPlan> fockPlan;
 
     /// The dispersion correction this run applied (schema 41,
     /// RunDispersion), serialized as "dispersion". Present exactly when the

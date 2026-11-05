@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <highfive/H5DataSet.hpp>
 #include <highfive/H5DataSpace.hpp>
+#include <highfive/H5File.hpp>
 
 namespace qcx::storage {
 

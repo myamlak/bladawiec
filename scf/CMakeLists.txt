@@ -1,4 +1,4 @@
-add_library(qcx-scf
+add_library(qcx-scf ${QCX_MODULE_LIBRARY_TYPE}
   src/rhf.cpp
   src/density_energy.cpp
   src/uhf.cpp
@@ -67,7 +67,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     # drift - qcx-scf itself does not link grid, and the module DAG permits
     # this edge (grid is rank 7, scf is rank 9, so scf may link anything
     # earlier). A test target only; the library's dependencies are unchanged.
-    target_link_libraries(qcx-scf-tests PRIVATE qcx-scf qcx-integrals qcx-symmetry qcx-grid gtest gtest_main qcx-test-fixtures)
+    target_link_libraries(qcx-scf-tests PRIVATE ${QCX_LINK_scf} ${QCX_LINK_integrals} ${QCX_LINK_symmetry} ${QCX_LINK_grid} gtest gtest_main qcx-test-fixtures)
     # The internal step functions (scf_common.hpp, symmetry_blocks.hpp) are
     # exercised by the tests directly.
     target_include_directories(qcx-scf-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/internal)

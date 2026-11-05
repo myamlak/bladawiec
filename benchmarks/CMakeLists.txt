@@ -38,7 +38,7 @@ qcx_apply_blas_runtime(qcx-bench-boys)
 # unsorted stream the engine actually faces (the sorted lanes live in
 # qcx-bench-boys). Plain main() with --self-check; the
 # AVX2 intrinsic TU mirrors the boys_simd.cpp compile pattern (PCH skipped).
-if (QCX_ARCH_X86_64)
+if (QCX_ARCH_X86_64 AND QCX_ISA STREQUAL "avx2")
     add_executable(qcx-bench-boys-unsorted-simd boys_unsorted_simd_benchmark.cpp)
     target_include_directories(qcx-bench-boys-unsorted-simd PRIVATE
         ${CMAKE_SOURCE_DIR}/external/boys/include)
@@ -60,7 +60,7 @@ else()
     # The lane measures the mixed per-vector kernel, so there is no portable
     # version of it to build: the target is reported and skipped rather than
     # compiled into something that would time a different kernel.
-    message(STATUS "qcx-bench-boys-unsorted-simd: non-x86-64 target - its AVX2 lane is not built")
+    message(STATUS "qcx-bench-boys-unsorted-simd: no AVX2 tier in this configuration - its lane is not built")
 endif()
 
 # The option-count probe: the fp64 evaluation options' work, counted from the
@@ -109,7 +109,7 @@ endif()
 # the AVX2 TU above, and the same single-TU pattern.
 # QCX_ARCH_X86_64 joins the cache-variable gate: the flag is what activates
 # libint2's vector path, so a target without the feature has none to compare.
-if (QCX_BENCH_LIBINT2_DIR AND QCX_ARCH_X86_64)
+if (QCX_BENCH_LIBINT2_DIR AND QCX_ARCH_X86_64 AND QCX_ISA STREQUAL "avx2")
     add_executable(qcx-bench-boys-libint2 boys_libint2_benchmark.cpp)
     target_include_directories(qcx-bench-boys-libint2 PRIVATE
         ${QCX_BENCH_LIBINT2_DIR}/include)
@@ -641,3 +641,12 @@ target_link_libraries(qcx-bench-xc-hessian-tier PRIVATE
     qcx-grid qcx-basisset qcx-molecule)
 target_precompile_headers(qcx-bench-xc-hessian-tier PRIVATE
     <qcx/grid/xc_grid_engine.hpp>)
+
+# Shared mode: every benchmark links the composed qcx image instead of the
+# module archives, so the timing instrument measures the image the mode
+# ships. The rewrite is central because the targets' link lines are otherwise
+# untouched; qcx_link_or_modules() is a no-op in the static configuration.
+if (QCX_BUILD_SHARED)
+    get_property(_qcxBenchmarkTargets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    qcx_link_or_modules(${_qcxBenchmarkTargets})
+endif()

@@ -18,6 +18,7 @@
 #include "qcx/io/result_json.hpp"
 
 #include <gtest/gtest.h>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -38,7 +39,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsFortyEight) {
+TEST(ResultJsonTest, SchemaVersionIsFortyNine) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -205,7 +206,12 @@ TEST(ResultJsonTest, SchemaVersionIsFortyEight) {
     // The member is absent for `d3` (one zero-damping derivative) and when no
     // correction was requested, so an A/B document outside a `d4` gradient is
     // byte-identical under the change.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 48);
+    //
+    // v48 -> v49: the top-level `fock_plan` block (RunFockPlan): the
+    // planner's provider per half, the sharing taken and the constraints
+    // checked, present exactly when the input wrote `[builder] coulomb_half`
+    // or `[builder] exchange_half`.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 49);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -1012,6 +1018,66 @@ TEST(ResultJsonTest, SelectionBlockAbsentWhenUnset) {
     qcx::io::RunResult result;
     const std::string json = qcx::io::SerializeRunResultJson(result);
     EXPECT_EQ(json.find("selection"), std::string::npos);
+}
+
+TEST(ResultJsonTest, FockPlanBlockIsEmittedWhenAHalfWasRequested) {
+    // Schema 49: the planner's decision, present exactly when the input wrote
+    // a half key. Each half carries the provider, its class, the kernel and
+    // the NATIVE accounting word, plus the aux only when the provider consumes
+    // one - so a mixed plan's result class is readable from the document.
+    qcx::io::RunResult result;
+    qcx::io::RunFockPlan plan;
+    plan.coulomb = qcx::io::RunFockHalfPlan{
+        "coulomb", "direct", "direct_screened", "exact", "H+2J", std::nullopt};
+    plan.exchange = qcx::io::RunFockHalfPlan{
+        "exchange", "ri_jk", "density_fitted", "density_fitted", "K", "def2-universal-jkfit"};
+    plan.sameProvider = false;
+    plan.mixed = true;
+    plan.constraints = {"auxiliary_basis", "option_scope", "exchange_capability"};
+    plan.reasoning = "builder.coulomb_half = \"direct\", builder.exchange_half = \"ri_jk\"";
+    result.fockPlan = plan;
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(json.find("\"fock_plan\""), std::string::npos);
+    EXPECT_NE(json.find("\"provider\": \"direct\""), std::string::npos);
+    EXPECT_NE(json.find("\"provider\": \"ri_jk\""), std::string::npos);
+    EXPECT_NE(json.find("\"provider_class\": \"density_fitted\""), std::string::npos);
+    EXPECT_NE(json.find("\"kernel\": \"exact\""), std::string::npos);
+    EXPECT_NE(json.find("\"accounting\": \"H+2J\""), std::string::npos);
+    EXPECT_NE(json.find("\"accounting\": \"K\""), std::string::npos);
+    EXPECT_NE(json.find("\"aux_basis\": \"def2-universal-jkfit\""), std::string::npos);
+    EXPECT_NE(json.find("\"same_provider\": false"), std::string::npos);
+    EXPECT_NE(json.find("\"mixed\": true"), std::string::npos);
+    EXPECT_NE(json.find("\"constraints\""), std::string::npos);
+    EXPECT_NE(json.find("\"reasoning\""), std::string::npos);
+}
+
+TEST(ResultJsonTest, FockPlanBlockIsAbsentWhenNoHalfWasRequested) {
+    // The "no request" rule: a run that named no half states its whole
+    // selection in `builder_axes`, and the absent block is never a fabricated
+    // plan.
+    qcx::io::RunResult result;
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(json.find("fock_plan"), std::string::npos);
+}
+
+TEST(ResultJsonTest, FockPlanCoulombOnlyBlockCarriesNoExchangeMember) {
+    // A pure Kohn-Sham functional builds no exchange term: the member is
+    // absent, never a zero-filled half.
+    qcx::io::RunResult result;
+    qcx::io::RunFockPlan plan;
+    plan.coulomb = qcx::io::RunFockHalfPlan{
+        "coulomb", "direct", "direct_screened", "exact", "H+2J", std::nullopt};
+    plan.sameProvider = false;
+    plan.mixed = false;
+    plan.constraints = {"coulomb_matrix", "auxiliary_basis", "exchange_capability"};
+    result.fockPlan = plan;
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(json.find("\"fock_plan\""), std::string::npos);
+    EXPECT_EQ(json.find("\"exchange\""), std::string::npos);
+    EXPECT_NE(json.find("\"mixed\": false"), std::string::npos);
+    EXPECT_NE(json.find("\"same_provider\": false"), std::string::npos);
 }
 
 TEST(ResultJsonTest, SelectionBuilderMemberNamesTheMemberBesideTheFamilyWord) {

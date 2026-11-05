@@ -978,6 +978,46 @@ std::string SerializeRunResultJson(const RunResult& result) {
         document["builder_axes"] = std::move(axesBlock);
     }
 
+    // The Fock-build planner's decision (schema 49). Present exactly when the
+    // input wrote a half key; a run whose whole selection the axes above
+    // already state carries no block, and the absence is the "no request" the
+    // null-honesty rule requires. The provider words are the plan's own - the
+    // planner's vocabulary is shared with the input through the family axis -
+    // and the accounting word is what keeps a mixed plan's assembled Fock
+    // checkable from the document alone.
+    if (result.fockPlan.has_value())
+    {
+        const auto& plan = *result.fockPlan;
+
+        const auto halfBlock = [](const RunFockHalfPlan& half) {
+            nlohmann::json block{{"role", half.role},
+                                 {"provider", half.provider},
+                                 {"provider_class", half.providerClass},
+                                 {"kernel", half.kernel},
+                                 {"accounting", half.accounting}};
+
+            if (half.auxBasis.has_value())
+            {
+                block["aux_basis"] = *half.auxBasis;
+            }
+
+            return block;
+        };
+
+        nlohmann::json planBlock{{"coulomb", halfBlock(plan.coulomb)},
+                                 {"same_provider", plan.sameProvider},
+                                 {"mixed", plan.mixed},
+                                 {"constraints", plan.constraints},
+                                 {"reasoning", plan.reasoning}};
+
+        if (plan.exchange.has_value())
+        {
+            planBlock["exchange"] = halfBlock(*plan.exchange);
+        }
+
+        document["fock_plan"] = std::move(planBlock);
+    }
+
     MarkNonFiniteNumbers(document);
     return document.dump(2);
 }

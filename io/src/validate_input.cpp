@@ -624,10 +624,48 @@ ValidationReport ValidateInput(const RunInput& input) {
     // tests/validate_input_test.cpp pins the boundary from the outside"). The
     // widening is therefore not a new rule, it is the sentence above being
     // applied - and the pin moved with it, as it said it would.
+    // The EFFECTIVE families the run asks its aux of. Schema 49's half keys
+    // REFINE the family axis per half, so the axis's aux rule applies only to
+    // the halves it still supplies: a plan whose written halves are both
+    // direct consumes no aux even when the axis names an RI family, and
+    // judging the axis alone would validate - and could refuse - an inert aux
+    // name the plan never reads (the refusal-names-a-family-that-never-runs
+    // defect class). The axis is added for each half a key leaves unwritten,
+    // and a written half is added directly. The set is a superset of what the
+    // plan can consume, never a subset: the one fact it cannot know is the
+    // size ladder's pick for a half nobody wrote, and a no-key run's ladder
+    // tier is not this rule's business either.
+    std::vector<IntegralFamily> auxFamilies;
+
+    const std::optional<IntegralFamily> axisFamily =
+        input.method.builder.has_value()
+            ? std::optional<IntegralFamily>(
+                  AxesOfBuilder(*input.method.builder, input.method.leanDirect).integralFamily)
+            : std::nullopt;
+    const bool axisSuppliesAHalf =
+        !input.builder.coulombHalf.has_value() || !input.builder.exchangeHalf.has_value();
+
+    if (axisFamily.has_value() && axisSuppliesAHalf)
+    {
+        auxFamilies.push_back(*axisFamily);
+    }
+
+    if (input.builder.coulombHalf.has_value())
+    {
+        auxFamilies.push_back(*input.builder.coulombHalf);
+    }
+
+    if (input.builder.exchangeHalf.has_value())
+    {
+        auxFamilies.push_back(*input.builder.exchangeHalf);
+    }
+
+    const auto isAuxConsumingFamily = [](IntegralFamily family) {
+        return family == IntegralFamily::kRiJLink || family == IntegralFamily::kRiJk;
+    };
+
     const bool usesAux = input.method.method == MethodType::kRhf &&
-                         input.method.builder.has_value() &&
-                         (*input.method.builder == BuilderKind::kRiJLink ||
-                          *input.method.builder == BuilderKind::kRiJk);
+                         std::any_of(auxFamilies.begin(), auxFamilies.end(), isAuxConsumingFamily);
     // The full-RI exchange request carries a second rule the ri_j_link one
     // does not: the rule refuses it when the aux IN EFFECT is not a
     // JK-optimized fit, because occ-RI-K contracts the exchange through the
@@ -635,7 +673,13 @@ ValidationReport ValidateInput(const RunInput& input) {
     // class. The predicate is over the resolved NAME (integrals
     // IsJkOptimizedAux), not over the orbital prefix and not over the kind
     // asked for - see that function for why both alternatives were ruled out.
-    const bool isJkRequest = usesAux && *input.method.builder == BuilderKind::kRiJk;
+    // A half-key plan asking for BOTH an ri_j_link half and an ri_jk half is
+    // in the same class as the whole-family ri_jk request: one of its halves
+    // contracts through the JK fit.
+    const bool isJkRequest =
+        usesAux && std::any_of(auxFamilies.begin(), auxFamilies.end(), [](IntegralFamily family) {
+            return family == IntegralFamily::kRiJk;
+        });
 
     if (usesAux)
     {

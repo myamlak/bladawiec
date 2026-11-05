@@ -1,76 +1,89 @@
 cmake_minimum_required(VERSION 3.27)
-project(qcx VERSION 0.8.0 LANGUAGES CXX)
+project(qcx VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Imported targets created by find_package in a module's directory are visible
+# only in that directory and below. The composed shared target collects the
+# modules' link dependencies at the ROOT, where OpenMP::OpenMP_CXX,
+# Boost::graph and the BLAS vendor targets would otherwise be out of scope
+# (the first configure of the shared preset failed on exactly that). Global
+# visibility changes where the found targets are visible, never which package
+# is found or how it is used.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
+
 option(QCX_BUILD_TESTS "Build tests" ON)
 option(QCX_ASAN "Enable AddressSanitizer (MSVC only; Clang/GCC builds use their own flags)" OFF)
 
 # ===========================================================================
-# THE LINK MODE OF THE FIRST-PARTY LIBRARIES
+# THE LINK MODE OF THE PROGRAM
 # ===========================================================================
 #
 # OFF is the shipped configuration and what every preset and CI build: each
-# qcx-<module> is a static archive. ON makes them shared libraries by setting
-# BUILD_SHARED_LIBS, which is the only switch the module CMakeLists leave to
-# the standard variable. The option defines no compile definition and edits no
-# source, so no per-call cost can follow from the option itself; a shared
-# build does carry the ELF/dynamic-loader indirection the comparison
-# instrument exists to price, and that indirection is what the instrument
-# measures. What it does change, per platform, is stated where each term is
-# set below.
+# qcx-<module> is a static archive and every first-party executable links the
+# archives it needs. ON composes ONE `qcx` shared library (qcx.dll /
+# libqcx.so) from the same module sources, and every first-party executable -
+# the module tests, the driver and the benchmarks - links that one library.
+# The module targets are OBJECT libraries in that mode (the shipped STATIC
+# archives otherwise): their objects are the image's content, and objects are
+# the only content MSVC's auto-export can see. The static configuration's
+# targets and link lines are untouched.
+#
+# WHY ONE IMAGE. The tree keeps process-wide mutable state and thread-local
+# storage in headers - the allocation instrument's switches and counters
+# (memory/include/qcx/memory/allocation_instrument.hpp) and the CPU
+# scheduler's process-wide settings (backend/include/qcx/backend/
+# cpu_backend.hpp). A shared library per module gives every module its own
+# copy of that state, so a writer in one module and a reader in another
+# disagree: the MSVC measurement that retired that shape (2026-11-02) exported
+# gAttributionEnabled from qcx-memory.dll while a driver run with
+# [memory_instrument] enabled reported zeroes in every column. Composing every
+# module's objects into one image puts that state in exactly one place, and
+# the composed target is the tree's only SHARED target. What the mode changes
+# per platform is stated where each term is set below and on the composed
+# target itself.
 option(QCX_BUILD_SHARED
-    "Build the first-party qcx libraries as shared libraries (vendored trees stay static)"
+    "Compose one qcx shared library from the first-party module objects (vendored trees stay static)"
     OFF)
 
 if (BUILD_SHARED_LIBS AND NOT QCX_BUILD_SHARED)
-    # BUILD_SHARED_LIBS alone would make the modules shared without the PIC,
-    # export and runtime-deployment terms below - a configuration that links
-    # on one platform and fails on the next. Refuse it rather than build it.
+    # BUILD_SHARED_LIBS alone would make the vendored trees and the modules
+    # shared without the PIC, export and runtime-deployment terms below - a
+    # configuration that links on one platform and fails on the next. Refuse
+    # it rather than build it.
     message(FATAL_ERROR
         "BUILD_SHARED_LIBS is ON but QCX_BUILD_SHARED is OFF. Configure with "
-        "-DQCX_BUILD_SHARED=ON: that option sets BUILD_SHARED_LIBS and the "
-        "per-platform terms that a working shared build needs.")
+        "-DQCX_BUILD_SHARED=ON: that option sets the per-platform terms a "
+        "working shared build needs.")
+endif()
+
+# The type of every first-party module target, chosen once so the module
+# CMakeLists keep one add_library() call in both configurations. The shipped
+# configuration keeps the STATIC archive it has always been; the shared one
+# makes the module an OBJECT library whose objects compose qcx.
+if (QCX_BUILD_SHARED)
+    set(QCX_MODULE_LIBRARY_TYPE OBJECT)
+else()
+    set(QCX_MODULE_LIBRARY_TYPE STATIC)
 endif()
 
 if (QCX_BUILD_SHARED)
-    set(BUILD_SHARED_LIBS ON)
+    # The vendored trees must stay archives; the composed target states its
+    # SHARED type explicitly below, so this variable is not how the mode is
+    # expressed. The first-party modules are OBJECT libraries in this mode
+    # (QCX_MODULE_LIBRARY_TYPE below), not archives.
+    set(BUILD_SHARED_LIBS OFF)
 
-    # PIC for every STATIC archive that ends up inside a shared library: the
-    # vendored spdlog (qcx-core links it PUBLIC), excgrid (qcx-grid), any
-    # static Boost/HDF5 that find_package returns, and the per-class OBJECT
-    # libraries whose objects qcx-integrals takes through target_sources().
-    # The variable initializes the target property, so it must precede the
-    # first target in the tree.
+    # PIC for every STATIC archive that ends up inside the composed library -
+    # the vendored spdlog (qcx-core links it PUBLIC), excgrid (qcx-grid), any
+    # static Boost/HDF5 that find_package returns - and for the module OBJECT
+    # libraries whose objects are the image. The variable initializes the
+    # target property, so it must precede the first target in the tree.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-    if (MSVC)
-        # REFUSED, and the reason is a defect this mode would ship: an inline
-        # variable defined in a header gets ONE copy per DLL on MSVC. The tree
-        # keeps mutable instrumentation state that way - the allocation
-        # instrument's switches and per-tag counters
-        # (memory/include/qcx/memory/allocation_instrument.hpp) and the CPU
-        # scheduler's process-wide settings (backend/include/qcx/backend/
-        # cpu_scheduler.hpp) - and the driver's thread ceiling writes one
-        # copy while the library reads another. Measured on the shared build:
-        # `dumpbin /exports qcx-memory.dll` exports
-        # gAttributionEnabled and the per-tag arrays, and a driver run with
-        # [memory_instrument] enabled reported zeroes in every column. A
-        # shared MSVC build therefore changes program semantics, and an
-        # import/export macro on the mutable data would put an indirection on
-        # the allocation and Fock hot paths - the runtime-effectiveness rule
-        # forbids paying that silently. The route to the MSVC arm is an
-        # out-of-line instrument state with an explicit API, priced as its own
-        # change; until then the shared mode is the ELF one.
-        message(FATAL_ERROR
-            "QCX_BUILD_SHARED is not available on MSVC: header-defined mutable "
-            "inline variables are duplicated per DLL, so the memory instrument "
-            "and the CPU scheduler would run with per-module copies (measured; "
-            "see the comment above). Use the ELF shared presets (wsl-gcc-shared, "
-            "wsl-clang-shared) for the link-mode comparison.")
-    else()
+    if (NOT MSVC)
         # ELF: default visibility is the choice, not an omission. The public
         # API is C++ headers with inline and template content and no promised
         # ABI; a version script would need a hand-maintained list of every
@@ -81,12 +94,12 @@ if (QCX_BUILD_SHARED)
         set(CMAKE_VISIBILITY_INLINES_HIDDEN OFF)
     endif()
 
-    # ONE RUNTIME DIRECTORY for every first-party executable and shared
-    # library. Windows has no build-tree rpath: a test binary in
-    # <module>/Release must find the module DLLs, and test discovery runs the
-    # binary at build time. A single bin directory is what makes that true for
-    # every target at once instead of a per-target copy rule. The
-    # multi-configuration generators append their configuration below this.
+    # ONE RUNTIME DIRECTORY for every first-party executable and for the
+    # composed library. Windows has no build-tree rpath: a test binary must
+    # find qcx.dll beside it, and test discovery runs the binary at build
+    # time. A single bin directory is what makes that true for every target at
+    # once instead of a per-target copy rule. The multi-configuration
+    # generators append their configuration below this.
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -144,10 +157,11 @@ option(QCX_BUILD_BENCHMARKS "Build benchmarks (local-only; CI never enables it)"
 # the CPUID feature probe, and the AVX2 measurement lane of the host
 # compute-profile probe. The probe is asked ONCE here, and the modules that own
 # those translation units use the answer to decide which per-file target
-# features are legal to set. The sources answer the same question from the
-# compiler's own architecture macros (QcxArchX86_64, defined by
-# qcx/backend/cpu_features.hpp), so a TU reached with different flags still
-# compiles the same code.
+# features are legal to set. The sources answer the architecture question from
+# the compiler's own macros (QcxArchX86_64, defined by
+# qcx/backend/cpu_features.hpp), and the tier question from the tier they were
+# compiled at (QcxIsaAvx2Fma, same header), so the flags and the source guards
+# cannot drift apart.
 #
 # -DQCX_ARCH_X86_64=ON|OFF overrides the probe. That exists to compile the
 # non-x86-64 branches on an x86-64 host, which is how they are checked without
@@ -274,7 +288,7 @@ function(qcx_add_large_tests module)
     add_executable(qcx-${module}-large-tests ${ARG_UNPARSED_ARGUMENTS})
     target_compile_features(qcx-${module}-large-tests PRIVATE cxx_std_23)
     target_link_libraries(qcx-${module}-large-tests PRIVATE
-        qcx-${module} ${ARG_LINK} gtest gtest_main qcx-test-fixtures)
+        ${QCX_LINK_${module}} ${ARG_LINK} gtest gtest_main qcx-test-fixtures)
 
     if (ARG_INCLUDES)
         target_include_directories(qcx-${module}-large-tests PRIVATE ${ARG_INCLUDES})
@@ -599,11 +613,13 @@ if (QCX_ENABLE_IO)
 endif()
 
 # THE VENDORED TREES STAY STATIC IN BOTH LINK MODES. scoping BUILD_SHARED_LIBS
-# OFF here and restoring it after excgrid covers the whole vendored block:
-# spdlog's own switch ORs the standard variable (SPDLOG_BUILD_SHARED OFF alone
-# is not enough), and gtest, Google Benchmark and excgrid all follow it. Their
-# static archives still get PIC from the shared-mode block at the top of this
-# file, which is what a shared qcx-core (spdlog) and qcx-grid (excgrid) need.
+# OFF here covers the whole vendored block (the first-party modules do not
+# follow it - QCX_MODULE_LIBRARY_TYPE states their type): spdlog's own switch
+# ORs the standard variable (SPDLOG_BUILD_SHARED OFF alone is not enough), and
+# gtest, Google Benchmark and excgrid all follow it. Their static archives
+# still get PIC from the shared-mode block at the top of this file, which is
+# what the composed qcx library needs (spdlog through qcx-core, excgrid
+# through qcx-grid).
 if (QCX_BUILD_SHARED)
     set(BUILD_SHARED_LIBS OFF)
 endif()
@@ -666,12 +682,12 @@ endif()
 add_subdirectory(${EXCGRID_ROOT} external/excgrid)
 
 # THE VENDORED TREES END HERE: every add_subdirectory() below this line is
-# first-party, and that ordering IS the mechanism of the block below.
+# first-party.
 
-# The vendored block is over; first-party targets take the requested link mode.
-if (QCX_BUILD_SHARED)
-    set(BUILD_SHARED_LIBS ON)
-endif()
+# BUILD_SHARED_LIBS stays OFF below this line: the first-party module targets
+# state their type themselves (STATIC or OBJECT, QCX_MODULE_LIBRARY_TYPE), and
+# the shared mode is the one explicitly SHARED composed target added after the
+# last module.
 
 # First-party warning level (2026-09-17). Every qcx target - the modules, their
 # tests, the driver and the benchmarks - compiles at /W4. This is a MEASUREMENT
@@ -698,36 +714,50 @@ if (MSVC)
 endif()
 
 # ===========================================================================
-# THE PROGRAM'S INSTRUCTION-SET TIER: AVX2 + FMA (owner ruling 2026-10-17)
+# THE PROGRAM'S INSTRUCTION-SET TIER: AVX2 + FMA, OR THE x86-64 BASELINE
 # ===========================================================================
 #
-# Every first-party translation unit is compiled at the AVX2 + FMA tier. That
-# is a deployment requirement of the program, not a hint: the Boys kernel is
-# header-defined, so every unit that includes the library's headers compiles
-# its own copy of the arithmetic, and the library refuses at start-up a program
-# whose units were compiled at different tiers (boys/isa_tiers.hpp). A tier
-# stated per file is therefore not available - the measured proof is
-# fock_contract_simd.cpp, a Fock-contraction unit that reaches the library's
-# headers through this tree's own eri_batch.hpp and used to announce the vector
-# tier by itself.
+# QCX_ISA selects the flag set every first-party translation unit is compiled
+# at. `avx2` is the default and the shipped configuration: the AVX2 + FMA tier
+# (owner ruling 2026-10-17). `baseline` is the x86-64 baseline, for a machine
+# that has no AVX2 and for checking that the portable paths still build. Either
+# value is ONE program-wide answer: the Boys kernel is header-defined, so every
+# unit that includes the library's headers compiles its own copy of the
+# arithmetic, and the library refuses at start-up a program whose units were
+# compiled at different tiers (boys/isa_tiers.hpp). A tier stated per file is
+# therefore not available - the measured proof is fock_contract_simd.cpp, a
+# Fock-contraction unit that reaches the library's headers through this tree's
+# own eri_batch.hpp and used to announce the vector tier by itself.
 #
 # The tier is stated on the directory, once, after the vendored trees and
 # before every first-party subdirectory, so every module, class object, test,
 # benchmark and the driver inherits it, and a target added later cannot miss
-# it.
+# it. The per-file SIMD translation units state no tier of their own: their
+# CMake guards read QCX_ISA too, and their sources read the tier the flags
+# produced (QcxIsaAvx2Fma, qcx/backend/cpu_features.hpp), so a baseline
+# configure carries no /arch:AVX2 and no -mavx2/-mfma/-mf16c anywhere in the
+# first-party tree.
 #
 # The contraction pin is not separable from the tier. On GCC and Clang -mfma
 # is also a licence to fuse a bare `a * b + c` into one rounding, which the
 # x86-64 baseline does not give them; the library's published bits are the
-# two-rounding arithmetic. So the pin goes program-wide with the tier, and the
+# two-rounding arithmetic at either tier. So the pin goes program-wide, and the
 # SIMD units' bit-identity with their scalar twins (simd_micro_gemm_test.cpp's
 # memcmp) depends on it. MSVC never contracts under its default /fp:precise,
-# which this tree never overrides with /fp:fast.
+# which this tree never overrides with /fp:fast, so the baseline adds nothing
+# there.
 #
 # The CUDA host pass needs the same tier: nvcc hands -Xcompiler flags to the
 # host compiler, and a CUDA unit left at the scalar tier is the same mixed
 # program the tier guard refuses.
-if (QCX_ARCH_X86_64)
+set(QCX_ISA "avx2" CACHE STRING
+    "Instruction-set tier of every first-party translation unit: avx2 (the shipped AVX2 + FMA build) or baseline (the x86-64 baseline)")
+set_property(CACHE QCX_ISA PROPERTY STRINGS avx2 baseline)
+if (NOT QCX_ISA STREQUAL "avx2" AND NOT QCX_ISA STREQUAL "baseline")
+    message(FATAL_ERROR "QCX_ISA must be 'avx2' or 'baseline', got '${QCX_ISA}'")
+endif()
+
+if (QCX_ARCH_X86_64 AND QCX_ISA STREQUAL "avx2")
     if (MSVC)
         # /arch:AVX2 enables the AVX2, FMA and F16C instruction sets.
         add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>)
@@ -739,6 +769,15 @@ if (QCX_ARCH_X86_64)
         add_compile_options(
             $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-mavx2,-mfma,-mf16c,-ffp-contract=off>)
     endif()
+elseif (QCX_ARCH_X86_64)
+    # The x86-64 baseline: no tier flags at all. GCC and Clang still need the
+    # contraction pin, because the source arithmetic is the two-rounding one at
+    # either tier; MSVC's /fp:precise default already gives it, and nothing is
+    # added. nvcc's host pass gets the same pin.
+    if (NOT MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
+        add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-ffp-contract=off>)
+    endif()
 else()
     # No AVX2 tier exists here. FMA is baseline on arm64, so the compiler is
     # free to fuse a bare product-plus-add there; the pin keeps the same source
@@ -747,6 +786,60 @@ else()
         add_compile_options(-ffp-contract=off)
     endif()
 endif()
+
+# ===========================================================================
+# THE FIRST-PARTY LINK NAMES
+# ===========================================================================
+#
+# QCX_LINK_<module> is the target a first-party executable links for that
+# module: the module's own static archive in the shipped configuration, the
+# composed qcx library in the shared one. The module CMakeLists name it in
+# their test link lines, so the static lines stay exactly what they were and
+# the shared build is the same source with the variable's value changed. The
+# composed target itself is added after the last module below; CMake resolves
+# a target name at generate time, so these earlier references are not errors.
+set(QCX_FIRST_PARTY_MODULES
+    core backend memory linalg molecule symmetry basisset grid dispersion
+    integrals scf response storage io properties driver)
+foreach(_qcxModule IN LISTS QCX_FIRST_PARTY_MODULES)
+    if (QCX_BUILD_SHARED)
+        set(QCX_LINK_${_qcxModule} qcx)
+    else()
+        set(QCX_LINK_${_qcxModule} qcx-${_qcxModule})
+    endif()
+endforeach()
+
+# qcx_link_or_modules(<target>...)
+#
+# Shared mode only: rewrite each executable's link line so a first-party
+# qcx-<module> archive name becomes the composed qcx library. The module tests
+# and the driver name QCX_LINK_<module> directly; this exists for the
+# benchmarks, whose long link lines are otherwise unchanged. It is a no-op in
+# the static configuration - the static link lines are exactly as written.
+function(qcx_link_or_modules)
+    if (NOT QCX_BUILD_SHARED)
+        return()
+    endif()
+
+    foreach(_target IN LISTS ARGN)
+        get_target_property(_libs ${_target} LINK_LIBRARIES)
+        if (NOT _libs)
+            continue()
+        endif()
+
+        set(_rewritten)
+        foreach(_entry IN LISTS _libs)
+            set(_mapped "${_entry}")
+            foreach(_module IN LISTS QCX_FIRST_PARTY_MODULES)
+                if (_entry STREQUAL "qcx-${_module}")
+                    set(_mapped "qcx")
+                endif()
+            endforeach()
+            list(APPEND _rewritten "${_mapped}")
+        endforeach()
+        set_property(TARGET ${_target} PROPERTY LINK_LIBRARIES "${_rewritten}")
+    endforeach()
+endfunction()
 
 add_subdirectory(core)
 add_subdirectory(backend)
@@ -772,6 +865,209 @@ add_subdirectory(io)
 # still reads as a claim about the DAG, and the claim would be false.
 add_subdirectory(properties)
 add_subdirectory(driver)
+
+# ===========================================================================
+# THE COMPOSED SHARED LIBRARY (QCX_BUILD_SHARED)
+# ===========================================================================
+#
+# The modules are OBJECT libraries in this mode, and qcx is built from their
+# objects: the image has no source of its own. OBJECT composition, not
+# whole-archive linking, is what lets the export list see the API: the .def is
+# built from the target's OWN object files, and archive members pulled in by
+# /WHOLEARCHIVE are not object files of the target (measured 2026-11-02: the
+# whole-archive composition produced qcx.dll with ZERO exports and every
+# consumer failed LNK2019). An object library's objects become the shared
+# target's objects, so they are what the export scan reads. On MSVC the scan
+# writes a filtered list rather than CMake's auto-export - see the block at
+# the end of this section.
+#
+# Usage requirements are propagated explicitly because the modules reach qcx
+# as objects, not as linked libraries: their public include directories,
+# public compile definitions (QcxHasVendorBlas, QcxHasStorage,
+# QcxIntegralsLMax, ...), and the external dependencies their public
+# interfaces name (Eigen, spdlog, Boost, OpenMP, BLAS, excgrid). External
+# dependencies the modules link PRIVATE (spectra, amgcl, tomlplusplus, json,
+# highfive/HDF5, the CUDA lanes) are the image's PRIVATE links: the objects
+# need their symbols at link time, and a consumer of qcx does not name them.
+# Entries that are themselves composed modules are dropped - those objects are
+# already inside qcx; $<LINK_ONLY:...> interface entries are the PRIVATE links
+# just described and are carried through LINK_LIBRARIES instead.
+#
+# MSVC auto-export and PCH cannot share a target: the generated .def receives
+# the scrambled PCH bookkeeping symbol as a bare `__` entry and the link dies
+# with LNK2001/LNK1120 (measured in the same scratch). The targets whose
+# objects enter the image therefore compile without a PCH in this
+# configuration. ELF keeps its PCH: the ELF link needs no export list.
+#
+# The per-class MD engines are OBJECT libraries nested in qcx-integrals
+# through target_sources(), and $<TARGET_OBJECTS:qcx-integrals> does not
+# recurse into them (measured on CMake 4.4). integrals/CMakeLists.txt
+# registers them in QCX_SHARED_NESTED_OBJECT_LIBRARIES; they are added here
+# beside the module objects and take the same no-PCH rule on MSVC.
+#
+# The CUDA lanes are NOT composed: their libraries stay STATIC and link the
+# CPU modules as objects, which is no longer a valid object dependency now
+# that the modules are OBJECT libraries. Shared + CUDA is therefore
+# unverified; composing the CUDA lanes too (or a generated .def) is the route
+# if that combination is wanted.
+if (QCX_BUILD_SHARED)
+    set(_qcxComposedModules
+        qcx-core qcx-backend qcx-memory qcx-linalg qcx-molecule
+        qcx-symmetry qcx-basisset qcx-grid qcx-dispersion qcx-integrals
+        qcx-scf qcx-response)
+    if (TARGET qcx-storage)
+        list(APPEND _qcxComposedModules qcx-storage)
+    endif()
+    list(APPEND _qcxComposedModules qcx-io qcx-properties qcx-driver)
+
+    get_property(_qcxNestedObjectLibraries GLOBAL
+        PROPERTY QCX_SHARED_NESTED_OBJECT_LIBRARIES)
+
+    add_library(qcx SHARED)
+    foreach(_module IN LISTS _qcxComposedModules)
+        target_sources(qcx PRIVATE "$<TARGET_OBJECTS:${_module}>")
+    endforeach()
+    foreach(_objectLibrary IN LISTS _qcxNestedObjectLibraries)
+        target_sources(qcx PRIVATE "$<TARGET_OBJECTS:${_objectLibrary}>")
+    endforeach()
+
+    if (MSVC)
+        foreach(_module IN LISTS _qcxComposedModules)
+            set_target_properties(${_module}
+                PROPERTIES DISABLE_PRECOMPILE_HEADERS ON)
+        endforeach()
+        foreach(_objectLibrary IN LISTS _qcxNestedObjectLibraries)
+            set_target_properties(${_objectLibrary}
+                PROPERTIES DISABLE_PRECOMPILE_HEADERS ON)
+        endforeach()
+    endif()
+
+    set(_qcxPublicDeps "")
+    set(_qcxPrivateDeps "")
+    foreach(_module IN LISTS _qcxComposedModules)
+        get_target_property(_incs ${_module} INTERFACE_INCLUDE_DIRECTORIES)
+        if (_incs)
+            target_include_directories(qcx INTERFACE ${_incs})
+        endif()
+
+        get_target_property(_defs ${_module} INTERFACE_COMPILE_DEFINITIONS)
+        if (_defs)
+            target_compile_definitions(qcx INTERFACE ${_defs})
+        endif()
+
+        get_target_property(_ifaceDeps ${_module} INTERFACE_LINK_LIBRARIES)
+        if (_ifaceDeps)
+            foreach(_dep IN LISTS _ifaceDeps)
+                if (_dep MATCHES "^[$]<LINK_ONLY:")
+                    continue()
+                endif()
+                if (_dep IN_LIST _qcxComposedModules)
+                    continue()
+                endif()
+                list(APPEND _qcxPublicDeps "${_dep}")
+            endforeach()
+        endif()
+
+        get_target_property(_linkDeps ${_module} LINK_LIBRARIES)
+        if (_linkDeps)
+            foreach(_dep IN LISTS _linkDeps)
+                if (_dep IN_LIST _qcxComposedModules)
+                    continue()
+                endif()
+                list(APPEND _qcxPrivateDeps "${_dep}")
+            endforeach()
+        endif()
+    endforeach()
+
+    # highfive is qcx-storage's PRIVATE HDF5 seam, so it reaches the module's
+    # interface only as a $<LINK_ONLY:...> entry and is not carried by the
+    # public copy above. The tests and the driver reach HDF5-backed headers
+    # through qcx, so the seam propagates explicitly when the module is built.
+    # It joins the public list before the private/external split, so it is not
+    # also linked PRIVATE.
+    if (QCX_ENABLE_IO)
+        list(APPEND _qcxPublicDeps highfive)
+    endif()
+
+    if (_qcxPublicDeps)
+        list(REMOVE_DUPLICATES _qcxPublicDeps)
+        target_link_libraries(qcx PUBLIC ${_qcxPublicDeps})
+    endif()
+    if (_qcxPrivateDeps)
+        list(REMOVE_DUPLICATES _qcxPrivateDeps)
+        set(_qcxPrivateOnly "")
+        foreach(_dep IN LISTS _qcxPrivateDeps)
+            if (NOT "${_dep}" IN_LIST _qcxPublicDeps)
+                list(APPEND _qcxPrivateOnly "${_dep}")
+            endif()
+        endforeach()
+        if (_qcxPrivateOnly)
+            target_link_libraries(qcx PRIVATE ${_qcxPrivateOnly})
+        endif()
+    endif()
+
+    # The MKL runtime and the ASan runtime deploy next to this target's file
+    # directory - the same bin/<config> every shared-mode executable lives in,
+    # so one deployment covers every consumer, including the qcx-core tests
+    # that call no BLAS routine themselves but load qcx, whose import table
+    # names MKL.
+    qcx_apply_blas_runtime(qcx)
+    qcx_apply_asan_runtime(qcx)
+
+    if (MSVC)
+        # The export list is GENERATED from the image's own objects, filtered
+        # to the first-party qcx:: symbols. CMake's auto-export was measured on
+        # this tree (2026-11-03): 68,096 names, 36,453 of them vendored Eigen
+        # inline-template instantiations, and the link died with LNK1189 (the
+        # import library's 65,535-member limit). A consumer compiles the
+        # vendored instantiations from the headers, so they are not API; the
+        # qcx:: set is. tools/gen_qcx_def.cmake parses `link -dump -symbols`
+        # over the object list, and the list is regenerated on every build, so
+        # it cannot drift from the code.
+        set_target_properties(qcx PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+
+        # The scan covers the module objects only. The nested per-class MD
+        # objects are template instantiations of internal helpers; nothing a
+        # consumer links against is defined only there, and scanning them
+        # tripled the scan time (three minutes against one) for 1,183 more
+        # internal names.
+        set(_qcxObjectList "")
+        set(_qcxExportObjectDeps "")
+        foreach(_module IN LISTS _qcxComposedModules)
+            string(APPEND _qcxObjectList
+                "$<JOIN:$<TARGET_OBJECTS:${_module}>,
+>
+")
+            list(APPEND _qcxExportObjectDeps "$<TARGET_OBJECTS:${_module}>")
+        endforeach()
+
+        # The object paths carry the configuration, so the list, the .def and
+        # the /DEF argument are per configuration.
+        file(GENERATE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/qcx_objects_$<CONFIG>.txt"
+            CONTENT "${_qcxObjectList}")
+
+        # The .def is regenerated only when an object it scans changes, so an
+        # up-to-date relink does not pay the scan.
+        set(_qcxExportDef "${CMAKE_CURRENT_BINARY_DIR}/qcx_exports_$<CONFIG>.def")
+        add_custom_command(
+            OUTPUT "${_qcxExportDef}"
+            COMMAND ${CMAKE_COMMAND}
+                -DQCX_LINKER=${CMAKE_LINKER}
+                -DQCX_OBJECT_LIST=${CMAKE_CURRENT_BINARY_DIR}/qcx_objects_$<CONFIG>.txt
+                -DQCX_DEF_OUT=${_qcxExportDef}
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_qcx_def.cmake"
+            DEPENDS
+                ${_qcxExportObjectDeps}
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_qcx_def.cmake"
+            COMMENT "Generating the composed library's export list"
+            VERBATIM)
+        add_custom_target(qcx_exports DEPENDS "${_qcxExportDef}")
+        add_dependencies(qcx qcx_exports)
+        target_link_options(qcx PRIVATE
+            "/DEF:${CMAKE_CURRENT_BINARY_DIR}/qcx_exports_$<CONFIG>.def")
+    endif()
+endif()
 
 # tests/ also hosts the shared test fixtures; benchmarks consume those, so
 # the directory is added when either consumer exists.

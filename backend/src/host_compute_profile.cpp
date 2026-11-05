@@ -114,7 +114,11 @@ FmaLaneReading MeasureFmaLaneScalar() noexcept {
 } // namespace internal
 
 HostComputeProfile DetectHostComputeProfile() noexcept {
-    const bool simd = CpuHasAvx2Fma();
+    // The SIMD lane is selected only when this build carries it (QcxIsaAvx2Fma,
+    // false at the x86-64 baseline) AND the machine may execute it. A runtime
+    // check alone would select the scalar fallback inside the SIMD TU on a
+    // baseline build and label it a measured vector lane.
+    const bool simd = QcxIsaAvx2Fma != 0 && CpuHasAvx2Fma();
     const internal::FmaLaneReading reading =
         simd ? internal::MeasureFmaLaneAvx2() : internal::MeasureFmaLaneScalar();
 

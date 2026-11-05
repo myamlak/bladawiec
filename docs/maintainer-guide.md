@@ -13,9 +13,11 @@ Boost and HDF5 come from a vcpkg tree, which the `windows-msvc` preset points at
 
 Every first-party translation unit is compiled at the AVX2 + FMA tier (`/arch:AVX2`, or
 `-mavx2 -mfma -mf16c -ffp-contract=off` with GCC and Clang), stated once in the root
-`CMakeLists.txt`. The tier and the fp16 seam are program-wide because the Boys library — whose
-kernel is header-defined — refuses at start-up a program whose translation units disagree about
-either.
+`CMakeLists.txt`. `QCX_ISA=baseline` selects the x86-64 baseline instead (the `-baseline`
+presets): no tier flag anywhere in the tree, and the same contraction pin on GCC and Clang. The
+default and the shipped configuration are unchanged. Either value is one program-wide tier
+because the Boys library — whose kernel is header-defined — refuses at start-up a program whose
+translation units disagree about the tier or the fp16 seam.
 
 ```powershell
 git clone --recurse-submodules <repository-url>
@@ -36,19 +38,36 @@ matches CI:
 | `windows-msvc-asan` | AddressSanitizer, MSVC only |
 | `windows-msvc-cuda` | the CUDA backend, local-only — CI never builds it |
 | `windows-msvc-a3c`, `windows-msvc-pf` | the narrower local configurations |
+| `windows-msvc-shared` | Windows with one composed `qcx.dll`, local-only |
+| `windows-msvc-shared-debug`, `windows-msvc-shared-release` | the two build presets over the shared configuration |
+| `windows-msvc-baseline`, `wsl-gcc-baseline` | the x86-64 baseline tier (`QCX_ISA=baseline`), compile-only; the shipped configuration and its presets are unchanged |
 | `wsl-gcc`, `wsl-clang` | the GCC and Clang parity configurations, Debug |
 | `wsl-gcc-release`, `wsl-clang-release` | the same configurations in Release |
-| `wsl-gcc-shared`, `wsl-clang-shared` | the same configurations with the first-party libraries linked shared, local-only |
+| `wsl-gcc-shared`, `wsl-clang-shared` | the same configurations with one composed `libqcx.so`, local-only |
 | `wsl-gcc-shared-release`, `wsl-clang-shared-release` | the shared configurations in Release, for the link-mode comparison |
 
-The shared mode is ELF-only. On MSVC it is refused at configure, by name: a
-header-defined mutable inline variable gets one copy per DLL there, so the memory
-instrument's switches and counters and the CPU scheduler's process-wide settings would
-run with per-module copies (the driver's thread ceiling would set one copy while the
-library read another). An import/export macro on that state would put an indirection on
-the allocation and Fock hot paths, which the runtime-effectiveness rule forbids. The
-Windows shared arm waits for an out-of-line instrument state; until then measure the
-link mode under WSL.
+The shared mode is one library per platform. The first-party modules are static
+archives in the shipped configuration; with `QCX_BUILD_SHARED` each module target is an
+OBJECT library and a single `qcx` shared library is composed from their objects, and
+every first-party executable links that one library. Object composition, not
+whole-archive linking, is what lets the export scan see the API: the `.def` is built
+from the shared target's own object files. On MSVC the scan is not CMake's
+auto-export, because that emits every vendored inline-template instantiation and this
+tree's import library then exceeds the 65,535-member limit (LNK1189; measured
+2026-11-03, 68,096 names, 36,453 of them Eigen's). `tools/gen_qcx_def.cmake` writes a
+filtered list of the first-party `qcx::` symbols from `link -dump -symbols`, and the
+MSVC shared build compiles the modules without a precompiled header (the ELF shared
+build keeps it and uses the default visibility). One image is the mechanism,
+not a packaging choice: the tree keeps process-wide mutable
+state and thread-local storage in headers (the allocation instrument's switches and
+counters, the CPU scheduler's ceiling), and a shared library per module gives every
+module its own copy, so a writer in one module and a reader in another disagree. The
+composed image is the tree's only shared target; the vendored trees stay static, and the
+CUDA lane libraries stay static in both modes — the shared contract is the CPU path, and
+shared + CUDA is not composed (unverified). The composed target sets
+`WINDOWS_EXPORT_ALL_SYMBOLS` on MSVC; because auto-export cannot parse MSVC's PCH
+bookkeeping symbol, the MSVC shared build compiles the modules without a precompiled
+header (the ELF shared build keeps it).
 
 Run both parity configurations before asking for review: some diagnostics are
 compiler-specific, and the compiler you did not build with is the only one that reports
@@ -57,9 +76,10 @@ them.
 A multi-configuration generator is in use, so a module's test binary lands under its
 configuration: `build/windows-msvc/<module>/Release/qcx-<module>-tests.exe`.
 
-The shared presets are the exception: every first-party executable and shared library
-lands in `build/<preset>/bin`, with the configuration as a subdirectory on a
-multi-configuration generator. The static layout above is unchanged.
+The shared presets are the exception: every first-party executable and the composed
+library land in `build/<preset>/bin` as `qcx.dll` (Windows) or `libqcx.so` (ELF), with
+the configuration as a subdirectory on a multi-configuration generator. The static
+layout above is unchanged.
 
 The options that matter when configuring:
 
@@ -74,7 +94,8 @@ The options that matter when configuring:
 | `QCX_REFERENCE_REGENERATION_CHECK` | `OFF` | the local-only regeneration checks |
 | `QCX_TEST_TIMEOUT_SECONDS` | `2400` | the per-test timeout |
 | `QCX_INTEGRALS_LMAX` | `6` | the instantiation ceiling for the MD 2e/3c class matrix (6 is the supported bound and what CI builds; lower values build a reduced matrix for local compile-time experiments) |
-| `QCX_BUILD_SHARED` | `OFF` | builds the first-party `qcx-<module>` libraries shared; every vendored tree stays static. Configure it through a `-shared` preset, which also sets ELF default visibility and the common `bin` output directory. Refused on MSVC (see the note above); the CUDA libraries stay static |
+| `QCX_ISA` | `avx2` | the instruction-set tier every first-party translation unit compiles at. `avx2` is the shipped AVX2 + FMA tier; `baseline` compiles the x86-64 baseline: no `/arch:AVX2`, no `-mavx2`/`-mfma`/`-mf16c`, GCC and Clang keep `-ffp-contract=off`, MSVC keeps its `/fp:precise` default. Configure it through the `-baseline` presets. Measured cost of the baseline on the Boys stream: 8.67 -> 13.99 ns per call, 1.61x (reference machine for the 2026-10-17 tier ruling; 2.8 % of the ERI span). `tools/check_isa_flags.py` checks the flags a configured tree emits |
+| `QCX_BUILD_SHARED` | `OFF` | composes one `qcx` shared library from the static first-party modules, so the header-defined process-wide state lives in one image; every vendored tree stays static. Configure it through a `-shared` preset, which also sets PIC, ELF default visibility and the common `bin` output directory. The CUDA lane libraries stay static |
 
 The link-mode comparison is `tools/bench/link_mode_comparison.py`: one hot call in a
 base revision and a head revision, reported as a ratio with the session canary and a

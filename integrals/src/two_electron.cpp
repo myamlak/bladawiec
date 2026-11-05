@@ -5,6 +5,7 @@
 #include "qcx/integrals/two_electron.hpp"
 
 #include "internal/shells_flat.hpp"
+#include "qcx/integrals/boys.hpp"
 
 #include <Eigen/Core>
 #include <cmath>

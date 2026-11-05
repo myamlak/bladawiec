@@ -7,7 +7,7 @@
 # consumers (Hirshfeld/Voronoi charges, ESP fits) live in the properties
 # module.  Sits between basisset and integrals in the module DAG
 # (check_dag.py).
-add_library(qcx-grid
+add_library(qcx-grid ${QCX_MODULE_LIBRARY_TYPE}
   src/angular_grid.cpp
   src/radial_grid.cpp
   src/atomic_grid.cpp
@@ -53,7 +53,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/synthetic_fixture.cpp
         tests/synthetic_fixture_test.cpp
         tests/xc_screening_test.cpp)
-    target_link_libraries(qcx-grid-tests PRIVATE qcx-grid qcx-test-fixtures gtest gtest_main)
+    target_link_libraries(qcx-grid-tests PRIVATE ${QCX_LINK_grid} qcx-test-fixtures gtest gtest_main)
 
     qcx_apply_asan_runtime(qcx-grid-tests)
     qcx_apply_fast_test_mode(qcx-grid-tests)

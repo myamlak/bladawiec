@@ -1,4 +1,4 @@
-add_library(qcx-storage
+add_library(qcx-storage ${QCX_MODULE_LIBRARY_TYPE}
     src/fingerprint.cpp
     src/hdf5_util.cpp
     src/eri_store.cpp
@@ -39,7 +39,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/scf_checkpoint_test.cpp
         tests/pyscf_cross_check_test.cpp)
     target_link_libraries(qcx-storage-tests PRIVATE
-        qcx-storage qcx-test-fixtures gtest gtest_main highfive)
+        ${QCX_LINK_storage} qcx-test-fixtures gtest gtest_main highfive)
     # The tests reach the module's internal test hook (src/test_hooks.hpp)
     # for the append failure-injection seam.
     target_include_directories(qcx-storage-tests PRIVATE

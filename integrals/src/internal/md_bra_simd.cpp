@@ -34,10 +34,11 @@
 // checksum never sees.
 //
 // THE GATE. Nothing here runs unless HasAvx2Fma() holds - md_transform.hpp
-// dispatches on it, and it is qcx::backend::CpuHasAvx2Fma()
-// (qcx/backend/cpu_features.hpp), which reads
-// the FMA flag from the ARCHITECTURAL bit CPUID.01H:ECX bit 12. It used to
-// read CPUID.(EAX=7,ECX=0):EBX bit 12, RDT-M/PQM, which no consumer CPU
+// dispatches on it, and it is QcxIsaAvx2Fma (the tier the flags selected;
+// false at QCX_ISA=baseline, where this file's entry points are the portable
+// kernels) AND qcx::backend::CpuHasAvx2Fma() (qcx/backend/cpu_features.hpp),
+// which reads the FMA flag from the ARCHITECTURAL bit CPUID.01H:ECX bit 12.
+// It used to read CPUID.(EAX=7,ECX=0):EBX bit 12, RDT-M/PQM, which no consumer CPU
 // reports: the answer was "no FMA" on a machine that has FMA, every in-tree
 // transform shape went to the scalar md_gemm.hpp kernels instead, and this
 // whole tier was dead code (found and measured 2026-09-12 on the
@@ -45,19 +46,19 @@
 // fock_contract_simd.cpp - and with the backend module's
 // host compute-profile probe - so no two consumers can drift apart again).
 //
-// ON A NON-x86-64 TARGET THE TU KEEPS ITS ENTRY POINTS AND NOTHING ELSE. The
-// tree's architecture test (QcxArchX86_64, defined by
+// ON A NON-x86-64 TARGET OR AT THE x86-64 BASELINE THE TU KEEPS ITS ENTRY
+// POINTS AND NOTHING ELSE. The build's tier (QcxIsaAvx2Fma, defined by
 // qcx/backend/cpu_features.hpp) excludes the intrinsics header and the whole
 // vector tier, and MicroGemmAddSimd / MicroGemmSimd call the portable
 // md_gemm.hpp kernels - the same kernels the runtime check already selects on
 // an x86-64 machine without FMA.
 
 #include "md_bra_simd.hpp"
-// The architecture test is included before the intrinsics header because the
-// guard on that include reads it.
+// The tier test is included before the intrinsics header because the guard on
+// that include reads it.
 #include <cstddef>
 #include <qcx/backend/cpu_features.hpp>
-#if QcxArchX86_64
+#if QcxIsaAvx2Fma
 #include <immintrin.h>
 #else
 // The portable kernels this file's two entry points fall back to below.
@@ -66,7 +67,7 @@
 
 namespace qcx::integrals::internal {
 
-#if QcxArchX86_64
+#if QcxIsaAvx2Fma
 
 namespace {
 
@@ -403,10 +404,10 @@ inline bool SmallnShape(std::size_t n, std::size_t k) noexcept {
 
 } // namespace
 
-#endif // QcxArchX86_64
+#endif // QcxIsaAvx2Fma
 
 bool HasAvx2Fma() noexcept {
-    return qcx::backend::CpuHasAvx2Fma();
+    return QcxIsaAvx2Fma != 0 && qcx::backend::CpuHasAvx2Fma();
 }
 
 void MicroGemmAddSimd(
@@ -418,7 +419,7 @@ void MicroGemmAddSimd(
     const double* a,
     const double* b,
     double* c) {
-#if QcxArchX86_64
+#if QcxIsaAvx2Fma
     const std::size_t nFull = n & ~std::size_t{3};
 
     if (nFull == 0)
@@ -491,7 +492,7 @@ void MicroGemmSimd(
     const double* a,
     const double* b,
     double* c) {
-#if QcxArchX86_64
+#if QcxIsaAvx2Fma
     const std::size_t nFull = n & ~std::size_t{3};
 
     if (nFull == 0)

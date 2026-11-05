@@ -486,11 +486,14 @@ def FreshnessOf(exe: pathlib.Path, binary_dir: pathlib.Path,
 
 def DetectLinkMode(exe: pathlib.Path) -> str | None:
     """What the executable actually links, not what the caller asked for.
-    Windows: a first-party DLL sitting beside the executable. Elsewhere: ldd.
+    Windows: the first-party DLL sitting beside the executable - the composed
+    qcx.dll, or a per-module qcx-*.dll from a base revision that predates the
+    composed shape. Elsewhere: ldd, where libqcx.so is both spellings' prefix.
     None when the question cannot be answered on this host."""
     if os.name == "nt":
-        siblings = [path for path in exe.parent.glob("qcx-*.dll") if path.is_file()]
-        return "shared" if siblings else "static"
+        composed = (exe.parent / "qcx.dll").is_file()
+        per_module = any(path.is_file() for path in exe.parent.glob("qcx-*.dll"))
+        return "shared" if (composed or per_module) else "static"
 
     try:
         result = subprocess.run(["ldd", str(exe)], capture_output=True,
@@ -501,7 +504,7 @@ def DetectLinkMode(exe: pathlib.Path) -> str | None:
     if result.returncode != 0:
         return None
 
-    return "shared" if "libqcx-" in result.stdout else "static"
+    return "shared" if "libqcx" in result.stdout else "static"
 
 
 def ArmRecord(label: str, arm: dict) -> dict:

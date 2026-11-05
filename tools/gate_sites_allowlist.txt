@@ -41,3 +41,11 @@
 # values stand exactly as they were - on the rule the section above records: a
 # loosened gate is not a licence to re-pin. This file declares no off-ladder
 # site today.
+
+# The Kohn-Sham/Hartree-Fock limit's cross-path comparison (nocv_test): the
+# operating tight rung's 1e-8 density leg leaves a 2.33e-6 electrostatic
+# difference against the 2e-6 cross-path band, so the limit test runs the
+# kTight energy over a 1e-9 density leg. Measured on this tree; the reason is
+# above the site in properties/tests/nocv_test.cpp.
+properties/tests/nocv_test.cpp :: densityTolerance :: 1e-09
+properties/tests/nocv_test.cpp :: energyTolerance :: 1e-10

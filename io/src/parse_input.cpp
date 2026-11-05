@@ -1085,6 +1085,25 @@ qcx::Result<void> ResolveBuilderBlock(RunInput& input, toml::table& table) {
         return std::unexpected(backendName.error());
     }
 
+    // The two HALF keys (the per-half refinement of the family axis): the
+    // smallest spelling that does not collide with `integral_family` or with a
+    // deprecated family word. Their values are the family vocabulary's own,
+    // because a half is a request for one of the existing builders' halves -
+    // the role is carried by the key, never by a new provider word.
+    auto coulombHalfName = ReadString(builder, "builder.coulomb_half");
+
+    if (!coulombHalfName.has_value())
+    {
+        return std::unexpected(coulombHalfName.error());
+    }
+
+    auto exchangeHalfName = ReadString(builder, "builder.exchange_half");
+
+    if (!exchangeHalfName.has_value())
+    {
+        return std::unexpected(exchangeHalfName.error());
+    }
+
     auto deviceName = ReadString(builder, "builder.device");
 
     if (!deviceName.has_value())
@@ -1110,8 +1129,9 @@ qcx::Result<void> ResolveBuilderBlock(RunInput& input, toml::table& table) {
         input.builder.device = *parsed;
     }
 
+    const bool halvesGiven = coulombHalfName->has_value() || exchangeHalfName->has_value();
     const bool axesGiven =
-        familyName->has_value() || tierName->has_value() || backendName->has_value();
+        familyName->has_value() || tierName->has_value() || backendName->has_value() || halvesGiven;
 
     if (!axesGiven)
     {
@@ -1180,18 +1200,67 @@ qcx::Result<void> ResolveBuilderBlock(RunInput& input, toml::table& table) {
         backend = *parsed;
     }
 
+    // The half words, parsed against the family vocabulary. An unknown word is
+    // refused AT ITS OWN KEY with that key's accepted list - not through the
+    // family axis's message, which would send the author to a key the file may
+    // not even carry.
+    std::optional<IntegralFamily> coulombHalf;
+    std::optional<IntegralFamily> exchangeHalf;
+
+    if (coulombHalfName->has_value())
+    {
+        auto parsed = ParseIntegralFamily(**coulombHalfName);
+
+        if (!parsed.has_value())
+        {
+            return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                                       "unknown builder.coulomb_half \"" + **coulombHalfName +
+                                           "\" (direct | ri_j_link | ri_jk | qfmm)"));
+        }
+
+        coulombHalf = *parsed;
+    }
+
+    if (exchangeHalfName->has_value())
+    {
+        auto parsed = ParseIntegralFamily(**exchangeHalfName);
+
+        if (!parsed.has_value())
+        {
+            return std::unexpected(Err(qcx::ErrorCode::kInvalidArgument,
+                                       "unknown builder.exchange_half \"" + **exchangeHalfName +
+                                           "\" (direct | ri_j_link | ri_jk | qfmm)"));
+        }
+
+        exchangeHalf = *parsed;
+    }
+
+    // The lean tier names the direct family's member, so it is legal exactly
+    // when a direct family supplies at least one half of the plan - the family
+    // axis itself, or one of the half keys. It is never a whole-family word, so
+    // a non-direct family axis beside a direct HALF is a coherent request (the
+    // tier governs the direct half, the other half is another family's). A
+    // tier/backend-only request names no family and no half, so its default
+    // family IS direct and the lean word is coherent.
+    const bool directNamed = (familyName->has_value() && family == IntegralFamily::kDirect) ||
+                             coulombHalf == IntegralFamily::kDirect ||
+                             exchangeHalf == IntegralFamily::kDirect;
+    const bool directHalfPresent =
+        directNamed || (!familyName->has_value() && !coulombHalfName->has_value() &&
+                        !exchangeHalfName->has_value());
+
     // The acceptance matrix. An un-runnable COMBINATION is refused by name with
     // both sides stated - the same rule (a request that names a mechanism on a
     // family that cannot honour it) read across axes instead of across keys.
-    if (tier == StorageTier::kLean && family != IntegralFamily::kDirect)
+    if (tier == StorageTier::kLean && !directHalfPresent)
     {
         return std::unexpected(Err(
             qcx::ErrorCode::kInvalidArgument,
             "builder.storage_tier = \"lean\" is the direct family's within-family member, so it "
-            "cannot be combined with builder.integral_family = \"" +
+            "needs a direct family in the plan: builder.integral_family = \"" +
                 std::string(ToString(family)) +
-                "\" (lean is the direct family's Schwarz-only "
-                "member; no other family has one)"));
+                "\" and the half keys name no direct half (lean is the direct family's "
+                "Schwarz-only member; no other family has one)"));
     }
 
     if (tier == StorageTier::kLean && backend != ExecutionBackend::kCpu)
@@ -1229,13 +1298,33 @@ qcx::Result<void> ResolveBuilderBlock(RunInput& input, toml::table& table) {
         return std::unexpected(agreement.error());
     }
 
-    input.builder.integralFamily = family;
-    input.builder.storageTier = tier;
-    input.builder.executionBackend = backend;
+    // The half keys are always stored: they refine the selection whatever
+    // whole-selection axis, if any, was written.
+    input.builder.coulombHalf = coulombHalf;
+    input.builder.exchangeHalf = exchangeHalf;
+
+    // A HALF-only request refines the selection the size ladder makes; it does
+    // not name a whole selection, so the axis slots stay EMPTY and the ladder
+    // keeps deciding the unwritten half. A written family, tier or backend
+    // axis is a whole-selection request and resolves exactly as before.
+    const bool wholeSelectionGiven =
+        familyName->has_value() || tierName->has_value() || backendName->has_value();
+
+    if (wholeSelectionGiven)
+    {
+        input.builder.integralFamily = family;
+        input.builder.storageTier = tier;
+        input.builder.executionBackend = backend;
+    }
 
     if (backend == ExecutionBackend::kGpu)
     {
         input.method.builder = BuilderKind::kGpu;
+        return {};
+    }
+
+    if (!wholeSelectionGiven)
+    {
         return {};
     }
 

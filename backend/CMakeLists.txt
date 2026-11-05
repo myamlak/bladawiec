@@ -53,7 +53,7 @@ else()
     set(_qcxMemoryTopologySource src/memory_topology_posix.cpp)
 endif()
 
-add_library(qcx-backend
+add_library(qcx-backend ${QCX_MODULE_LIBRARY_TYPE}
   src/cpu_backend.cpp
   src/gpu_compute_profile.cpp
   src/host_compute_profile.cpp
@@ -68,14 +68,14 @@ target_link_libraries(qcx-backend PUBLIC qcx-core OpenMP::OpenMP_CXX stdexec)
 target_precompile_headers(qcx-backend PRIVATE
     <qcx/backend/cpu_backend.hpp>)
 
-# The host compute-profile probe's AVX2 lane carries the /arch:AVX2
-# flag on its own TU only, and that TU skips the module PCH - the same pair of
-# source properties the integrals module's SIMD TUs carry (clang rejects a PCH
-# built without the target feature the TU compiles with). The probe's scalar
-# reference lane stays in the portable TU precisely so the flag cannot reach
-# it: an auto-vectorized "scalar" lane would let the compiler's vector width
-# into the measurement.
-if (QCX_ARCH_X86_64)
+# The host compute-profile probe's AVX2 lane carries the /arch:AVX2 flag on its
+# own TU only in the shipped QCX_ISA=avx2 configuration, and that TU skips the
+# module PCH - the same pair of source properties the integrals module's SIMD
+# TUs carry (clang rejects a PCH built without the target feature the TU
+# compiles with). The probe's scalar reference lane stays in the portable TU
+# precisely so the flag cannot reach it: an auto-vectorized "scalar" lane would
+# let the compiler's vector width into the measurement.
+if (QCX_ARCH_X86_64 AND QCX_ISA STREQUAL "avx2")
     if (MSVC)
         set_source_files_properties(src/host_compute_profile_simd.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
     else()
@@ -83,13 +83,13 @@ if (QCX_ARCH_X86_64)
     endif()
     set_source_files_properties(src/host_compute_profile_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 else()
-    # No AVX2 target feature exists here to set, and the TU compiles none of
-    # its intrinsics (its guards read the architecture test from
-    # qcx/backend/cpu_features.hpp): MeasureFmaLaneAvx2() returns the scalar
-    # lane's reading instead. The PCH skip is not needed either - it exists so
-    # clang does not reject a PCH built without the target feature this TU
-    # compiles with.
-    message(STATUS "qcx-backend: non-x86-64 target - the host compute-profile probe has no AVX2 lane")
+    # No AVX2 target feature is set in this configuration (a non-x86-64 target,
+    # or QCX_ISA=baseline), and the TU compiles none of its intrinsics: its
+    # guards read QcxIsaAvx2Fma from qcx/backend/cpu_features.hpp, so
+    # MeasureFmaLaneAvx2() returns the scalar lane's reading instead. The PCH
+    # skip is not needed either - it exists so clang does not reject a PCH
+    # built without the target feature this TU compiles with.
+    message(STATUS "qcx-backend: QCX_ISA=${QCX_ISA}, x86-64=${QCX_ARCH_X86_64} - the host compute-profile probe has no AVX2 lane")
 endif()
 
 if (QCX_ENABLE_CUDA)
@@ -125,7 +125,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
       tests/host_compute_profile_test.cpp
       tests/memory_topology_test.cpp
       tests/topology_profile_test.cpp)
-    target_link_libraries(qcx-backend-tests PRIVATE qcx-backend gtest gtest_main)
+    target_link_libraries(qcx-backend-tests PRIVATE ${QCX_LINK_backend} gtest gtest_main)
     target_precompile_headers(qcx-backend-tests PRIVATE
         <gtest/gtest.h>
         <qcx/backend/cpu_backend.hpp>)
@@ -140,7 +140,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     # OMP_NUM_THREADS test gets its own binary instead of sharing
     # qcx-backend-tests' already-warm cache.
     add_executable(qcx-backend-team-size-tests tests/team_size_test.cpp)
-    target_link_libraries(qcx-backend-team-size-tests PRIVATE qcx-backend gtest gtest_main)
+    target_link_libraries(qcx-backend-team-size-tests PRIVATE ${QCX_LINK_backend} gtest gtest_main)
     target_precompile_headers(qcx-backend-team-size-tests PRIVATE
         <gtest/gtest.h>
         <qcx/backend/cpu_backend.hpp>)
