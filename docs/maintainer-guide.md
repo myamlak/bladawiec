@@ -58,16 +58,22 @@ tree's import library then exceeds the 65,535-member limit (LNK1189; measured
 filtered list of the first-party `qcx::` symbols from `link -dump -symbols`, and the
 MSVC shared build compiles the modules without a precompiled header (the ELF shared
 build keeps it and uses the default visibility). One image is the mechanism,
-not a packaging choice: the tree keeps process-wide mutable
-state and thread-local storage in headers (the allocation instrument's switches and
-counters, the CPU scheduler's ceiling), and a shared library per module gives every
-module its own copy, so a writer in one module and a reader in another disagree. The
-composed image is the tree's only shared target; the vendored trees stay static, and the
-CUDA lane libraries stay static in both modes — the shared contract is the CPU path, and
-shared + CUDA is not composed (unverified). The composed target sets
-`WINDOWS_EXPORT_ALL_SYMBOLS` on MSVC; because auto-export cannot parse MSVC's PCH
-bookkeeping symbol, the MSVC shared build compiles the modules without a precompiled
-header (the ELF shared build keeps it).
+not a packaging choice: the tree keeps process-wide mutable state and thread-local
+storage behind the library (the allocation instrument's switches and counters, the CPU
+scheduler's ceiling). A shared library per module would give every module its own copy,
+so a writer in one module and a reader in another would disagree; one image removes
+that. The executable is still a separate image, so state that the library and an
+executable must share is defined in the library and reached through an exported entry:
+the instrument's state is imported by shared consumers, and its thread-local tag-scope
+chain and the team-size ceiling cross through exported entries (MSVC cannot import a
+thread-local). The library's own paths keep the header-inline accessors, so the state
+costs the same there as in the static build. Do not add a mutable header-inline variable
+that both the library and an executable write or read: it is one copy per image. The vendored trees stay static, and the CUDA lane
+libraries stay static in both modes — the shared contract is the CPU path, and
+shared + CUDA is not composed (unverified). On MSVC the composed target's export list is
+the filtered `.def` described above and `WINDOWS_EXPORT_ALL_SYMBOLS` is OFF; auto-export
+cannot parse MSVC's PCH bookkeeping symbol, so the MSVC shared build compiles the
+modules without a precompiled header (the ELF shared build keeps it).
 
 Run both parity configurations before asking for review: some diagnostics are
 compiler-specific, and the compiler you did not build with is the only one that reports
@@ -95,7 +101,7 @@ The options that matter when configuring:
 | `QCX_TEST_TIMEOUT_SECONDS` | `2400` | the per-test timeout |
 | `QCX_INTEGRALS_LMAX` | `6` | the instantiation ceiling for the MD 2e/3c class matrix (6 is the supported bound and what CI builds; lower values build a reduced matrix for local compile-time experiments) |
 | `QCX_ISA` | `avx2` | the instruction-set tier every first-party translation unit compiles at. `avx2` is the shipped AVX2 + FMA tier; `baseline` compiles the x86-64 baseline: no `/arch:AVX2`, no `-mavx2`/`-mfma`/`-mf16c`, GCC and Clang keep `-ffp-contract=off`, MSVC keeps its `/fp:precise` default. Configure it through the `-baseline` presets. Measured cost of the baseline on the Boys stream: 8.67 -> 13.99 ns per call, 1.61x (reference machine for the 2026-10-17 tier ruling; 2.8 % of the ERI span). `tools/check_isa_flags.py` checks the flags a configured tree emits |
-| `QCX_BUILD_SHARED` | `OFF` | composes one `qcx` shared library from the static first-party modules, so the header-defined process-wide state lives in one image; every vendored tree stays static. Configure it through a `-shared` preset, which also sets PIC, ELF default visibility and the common `bin` output directory. The CUDA lane libraries stay static |
+| `QCX_BUILD_SHARED` | `OFF` | composes one `qcx` shared library from the static first-party modules, so the process-wide state lives in one library image and consumers reach it through exported entries; every vendored tree stays static. Configure it through a `-shared` preset, which also sets PIC, ELF default visibility and the common `bin` output directory. The CUDA lane libraries stay static |
 
 The link-mode comparison is `tools/bench/link_mode_comparison.py`: one hot call in a
 base revision and a head revision, reported as a ratio with the session canary and a
