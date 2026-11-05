@@ -454,9 +454,9 @@ TEST(EriStoreTest, FailedAppendDoesNotCorruptTheNextPlacement) {
         // its quartets as orphan rows on the tables; the mirrors never
         // commit (the injection flag is reset before any assertion, so a
         // regression that lets the append through cannot leak it).
-        qcx::storage::internal::failAfterQuartetsWrite = true;
+        qcx::storage::internal::SetFailAfterQuartetsWrite(true);
         auto failed = store->AppendBatch(failedRun.quartets, failedRun.values);
-        qcx::storage::internal::failAfterQuartetsWrite = false;
+        qcx::storage::internal::SetFailAfterQuartetsWrite(false);
         ASSERT_FALSE(failed.has_value());
         EXPECT_EQ(failed.error().code, qcx::ErrorCode::kIOError);
         EXPECT_EQ(store->StoredChunkCount(), std::size_t{0});

@@ -51,6 +51,28 @@
 
 namespace qcx::storage {
 
+namespace internal {
+
+namespace {
+
+// The append failure-injection flag's storage. The library's AppendImpl
+// reads it and the module's regression test arms it; keeping the storage
+// here and exposing accessors makes both images share one flag in the
+// composed shared build.
+bool gFailAfterQuartetsWrite = false;
+
+} // namespace
+
+bool FailAfterQuartetsWrite() noexcept {
+    return gFailAfterQuartetsWrite;
+}
+
+void SetFailAfterQuartetsWrite(bool armed) noexcept {
+    gFailAfterQuartetsWrite = armed;
+}
+
+} // namespace internal
+
 // The canonical-quartet key of the store's lookup maps.
 using QuartetKey = std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>;
 
@@ -762,7 +784,7 @@ qcx::Result<void> AppendImpl(
     // between the quartets and values writes - the orphan-rows case that
     // the mirror-derived placement (above) recovers from. Only the C1
     // regression test arms this.
-    if (internal::failAfterQuartetsWrite)
+    if (internal::FailAfterQuartetsWrite())
     {
         return std::unexpected(
             qcx::Error{qcx::ErrorCode::kIOError, "injected failure after the quartets write"});
