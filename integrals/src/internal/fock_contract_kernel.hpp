@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include "qcx/integrals/eri_block_layout.hpp"
 #include "qcx/integrals/shell_pairs.hpp"
 
 #include <Eigen/Core>
