@@ -310,7 +310,7 @@ input file keys (a key marked required must be written):
                                     element-dependent exponent
 [properties]
     hirshfeld = false               bool; Hirshfeld stockholder charges (the
-                                    analysis needs Z <= 10)
+                                    analysis needs Z <= 19)
     voronoi = false                 bool; Voronoi cell charges
     esp = "chelpg"                  optional; chelpg | mk; the electrostatic
                                     potential fit. Absent = no fit

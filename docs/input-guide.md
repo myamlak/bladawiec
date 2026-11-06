@@ -258,7 +258,7 @@ than refused.
 
 `core` and `gwh` are accepted by both a closed-shell and a per-spin run. `sad` builds per-element
 atomic fragments, which only the per-spin path does, so it is refused on the closed-shell lanes
-(`rhf` and `rks`); the atomic-multiplicity table this version carries stops at Z = 10. `restart`
+(`rhf` and `rks`); the atomic-multiplicity table this version carries stops at Z = 19. `restart`
 seeds the restricted solver, so it is refused on every per-spin lane (`uhf`, `uks`, `rohf` and
 `roks`). An absent `type` means `core`.
 
@@ -399,7 +399,7 @@ renumbering the molecule applies on construction and not necessarily the order t
 written in.
 
 Two analyses are limited by the element table this version carries: `hirshfeld` needs the atomic
-fragments of the SAD guess, which stops at Z = 10, and `nalewajski` needs isolated-atom fragment
+fragments of the SAD guess, which stops at Z = 19, and `nalewajski` needs isolated-atom fragment
 SCFs, which stop at Z = 19. Beyond those, the analysis refuses by name.
 
 `fukui` runs on every method word. The N+1 and N-1 species follow the run's own method: on an

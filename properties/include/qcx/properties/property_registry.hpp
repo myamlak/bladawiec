@@ -63,7 +63,7 @@ enum class RefusalReason : std::uint8_t {
     kEtsNocvHartreeFockOnly,
     /// Hirshfeld beyond the SAD atomic-multiplicity table. The promolecular
     /// fragment densities are the SAD guess's, and the v1 table covers
-    /// Z <= 10 (`"the SAD atomic-multiplicity table (v1, Z <= 10) does not
+    /// Z <= 19 (`"the SAD atomic-multiplicity table (v1, Z <= 19) does not
     /// cover element Z = <N>"`).
     kHirshfeldSadTableZLimit,
     /// Nalewajski-Mrozek beyond its isolated-atom Aufbau table, which covers
