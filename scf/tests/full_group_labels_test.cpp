@@ -718,6 +718,114 @@ TEST(FullGroupLabelsTest, AmmoniaC3vTwoEManifolds) {
 }
 
 // ---------------------------------------------------------------------------
+// The degeneracy check the labels support: the pass verdict
+// ---------------------------------------------------------------------------
+
+TEST(FullGroupLabelsTest, AmmoniaC3vDegeneracyCheckPasses) {
+    const auto molecule = qcx::symmetry::testing::MakeAmmonia();
+    ASSERT_TRUE(molecule.has_value());
+    auto basis = MakeSto3g({"N", "H", "H", "H"});
+    ASSERT_TRUE(basis.has_value());
+
+    const auto analysis = DetectPointGroup(*molecule);
+    ASSERT_EQ(analysis.group, PointGroupName::kC3v);
+
+    const auto blocks = BuildSymmetryBlocks(*molecule, *basis, analysis);
+    ASSERT_TRUE(blocks.has_value());
+
+    const auto realization = BuildFullGroupRealization(*molecule, *basis, analysis);
+    ASSERT_TRUE(realization.has_value());
+    const qcx::symmetry::FullGroupTable* table = FullGroupTableFor(analysis.group);
+    ASSERT_NE(table, nullptr);
+    Eigen::MatrixXd pure;
+    PureIrrepBasis(blocks->u, *realization, *table, pure);
+
+    // The same converged-like fixture as AmmoniaC3vTwoEManifolds: both E
+    // pairs agree to 1e-8, so every mandated set is intact and the check the
+    // labels exist for passes.
+    const Eigen::VectorXd eps(
+        (Eigen::VectorXd(8) << 0.5, 0.8, 1.2, 1.5, 0.3, 0.3 + 1e-8, 1.0, 1.0 + 1e-8).finished());
+    const SyntheticState state = MakeSynthetic(pure, eps, Eigen::MatrixXd::Identity(8, 8), 8);
+    const auto result = SymmetryLabelAndSymmetrize(
+        state.fock, state.coefficients, state.density, 8, *molecule, *basis, analysis);
+    ASSERT_TRUE(result.has_value());
+
+    const qcx::scf::SymmetryDegeneracyReport& degeneracy = result->degeneracy;
+    EXPECT_EQ(degeneracy.verdict, qcx::scf::SymmetryDegeneracyVerdict::kPassed);
+    EXPECT_EQ(degeneracy.toleranceHartree, 1e-6);
+    EXPECT_EQ(degeneracy.multipletCount, 2);
+    EXPECT_EQ(degeneracy.brokenMultipletCount, 0);
+
+    // Two E sets, one per energy manifold, in ascending column order:
+    // {4, 5} and {6, 7}, each two columns of a dimension-two irrep - the
+    // cardinality the irrep mandates.
+    ASSERT_EQ(degeneracy.multiplets.size(), 2u);
+    EXPECT_EQ(degeneracy.multiplets[0].irrepLabel, "E");
+    EXPECT_EQ(degeneracy.multiplets[0].dimension, 2);
+    EXPECT_EQ(degeneracy.multiplets[0].moIndices, (std::vector<int>{4, 5}));
+    EXPECT_TRUE(degeneracy.multiplets[0].intact);
+    EXPECT_LE(degeneracy.multiplets[0].spreadHartree, 1e-6);
+    EXPECT_EQ(degeneracy.multiplets[1].irrepLabel, "E");
+    EXPECT_EQ(degeneracy.multiplets[1].moIndices, (std::vector<int>{6, 7}));
+    EXPECT_TRUE(degeneracy.multiplets[1].intact);
+    EXPECT_LE(degeneracy.multiplets[1].spreadHartree, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// The deliberately broken case: one E partner split above the tolerance
+// ---------------------------------------------------------------------------
+
+TEST(FullGroupLabelsTest, AmmoniaC3vDegeneracyCheckFailsOnASplitPartner) {
+    const auto molecule = qcx::symmetry::testing::MakeAmmonia();
+    ASSERT_TRUE(molecule.has_value());
+    auto basis = MakeSto3g({"N", "H", "H", "H"});
+    ASSERT_TRUE(basis.has_value());
+
+    const auto analysis = DetectPointGroup(*molecule);
+    ASSERT_EQ(analysis.group, PointGroupName::kC3v);
+
+    const auto blocks = BuildSymmetryBlocks(*molecule, *basis, analysis);
+    ASSERT_TRUE(blocks.has_value());
+
+    const auto realization = BuildFullGroupRealization(*molecule, *basis, analysis);
+    ASSERT_TRUE(realization.has_value());
+    const qcx::symmetry::FullGroupTable* table = FullGroupTableFor(analysis.group);
+    ASSERT_NE(table, nullptr);
+    Eigen::MatrixXd pure;
+    PureIrrepBasis(blocks->u, *realization, *table, pure);
+
+    // Same fixture, one column moved: eps(5) sits 1e-3 above its E partner
+    // (1e3 times the clustering tolerance). The pair {4, 5} is now two
+    // one-column clusters, so the mandated E degeneracy is absent from the
+    // energies - the numerical-symmetry-breaking signal the check exists to
+    // report. Nothing else changes: the {6, 7} pair is still intact.
+    Eigen::VectorXd eps(
+        (Eigen::VectorXd(8) << 0.5, 0.8, 1.2, 1.5, 0.3, 0.3 + 1e-8, 1.0, 1.0 + 1e-8).finished());
+    eps(5) = 0.3 + 1e-3;
+    const SyntheticState state = MakeSynthetic(pure, eps, Eigen::MatrixXd::Identity(8, 8), 8);
+    const auto result = SymmetryLabelAndSymmetrize(
+        state.fock, state.coefficients, state.density, 8, *molecule, *basis, analysis);
+    ASSERT_TRUE(result.has_value());
+
+    const qcx::scf::SymmetryDegeneracyReport& degeneracy = result->degeneracy;
+    EXPECT_EQ(degeneracy.verdict, qcx::scf::SymmetryDegeneracyVerdict::kFailed);
+    // The split pair appears as two singleton E records; the intact manifold
+    // is the third record.
+    EXPECT_EQ(degeneracy.multipletCount, 3);
+    EXPECT_EQ(degeneracy.brokenMultipletCount, 2);
+    ASSERT_EQ(degeneracy.multiplets.size(), 3u);
+    EXPECT_EQ(degeneracy.multiplets[0].irrepLabel, "E");
+    EXPECT_EQ(degeneracy.multiplets[0].moIndices, (std::vector<int>{4}));
+    EXPECT_FALSE(degeneracy.multiplets[0].intact);
+    EXPECT_EQ(degeneracy.multiplets[1].irrepLabel, "E");
+    EXPECT_EQ(degeneracy.multiplets[1].moIndices, (std::vector<int>{5}));
+    EXPECT_FALSE(degeneracy.multiplets[1].intact);
+    EXPECT_EQ(degeneracy.multiplets[2].irrepLabel, "E");
+    EXPECT_EQ(degeneracy.multiplets[2].moIndices, (std::vector<int>{6, 7}));
+    EXPECT_TRUE(degeneracy.multiplets[2].intact);
+}
+
+// ---------------------------------------------------------------------------
 // The UNKNOWN outcome: a vector with no dominant irrep
 // ---------------------------------------------------------------------------
 

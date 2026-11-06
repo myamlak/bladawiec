@@ -92,6 +92,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/ks_gradient_test.cpp
         tests/ks_tau_test.cpp
         tests/ks_input_file_test.cpp
+        tests/xc_screening_test.cpp
         tests/ri_chunk_bytes_record_test.cpp
         tests/eri_store_record_test.cpp
         tests/eri_cache_record_test.cpp

@@ -479,7 +479,7 @@ bumped whenever a consumer must notice a change (§7).
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | The schema version; currently 49 (`RunResult::kSchemaVersion`) |
+| `schema_version` | int | The schema version; currently 50 (`RunResult::kSchemaVersion`) |
 | `molecule_units` | string | Schema 28. The unit the run's geometry was **read under** — the RESOLVED `[molecule] units` value, `"angstrom"` or `"bohr"`, never a request left for a consumer to apply. **Always present**, and `"angstrom"` is the value an absent key resolves to (the parser's default is a judgement, and the disclosure rule makes a judgement stateable). It exists so a record is self-describing on the one convention that has produced a wasted hunt twice in this project (2026-08-26, pyscf's Ångström default; 2026-09-15, Bohr numbers in an Ångström input file): a reader holding the JSON alone can now tell at what scale the geometry was read without consulting the input file. It describes the INPUT, not the numbers — the internal geometry is Bohr under either value |
 | `converged` | bool | True when a convergence criterion fired |
 | `iterations` | int | Iterations spent; the budget when not converged |
@@ -896,6 +896,44 @@ and the subspace records reference MO columns in coefficients order.
 | `straddled` | array of objects | The degenerate subspaces that straddle a canonicalization boundary and kept the SCF's arbitrary partners: `{ "irrep_label": "E", "mo_indices": [..] }` |
 | `symmetrization_subset` | array of strings | The finite irrep subset the density symmetrization averaged over |
 | `averaged_element_count` | int | The number of elements averaged by the symmetrization |
+| `degeneracy` | object | Schema 50. The degeneracy check the labels support (§3.7.1) |
+
+#### 3.7.1 The `degeneracy` check (schema 50)
+
+The labelling stage labels every MO by its full-group irrep. A full irrep of
+dimension `d >= 2` forces its MOs into degenerate sets whose cardinality is a
+multiple of `d`; a calculation whose group mandates degenerate partners and
+whose Fock expectations do not show them has broken numerical symmetry, and
+that used to be a signal a reader had to notice. This object is the run's own
+verdict on its own labels:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `verdict` | string | `"passed"` (at least one irrep-mandated set found, every set intact), `"failed"` (at least one set's cardinality is not a multiple of its irrep's dimension) or `"no_multiplets"` (nothing to judge: every irrep of the detected group is one-dimensional, or no energy cluster grouped two columns under one multi-dimensional irrep — never a pass borrowed from an empty test) |
+| `tolerance_hartree` | number | The energy-clustering cut the check ran under (`kManifoldEnergyTolerance`, 1e-06), emitted so the verdict is readable without the source |
+| `multiplet_count` | int | The number of mandated sets recorded (intact and broken alike) |
+| `broken_multiplet_count` | int | The subset of the above whose cardinality is not a multiple of the irrep dimension |
+| `multiplets` | array of objects | Every mandated set, in ascending order of its lowest MO column: `{ "irrep_label": "E", "dimension": 2, "mo_indices": [4, 5], "spread_hartree": 4.2e-09, "intact": true }` |
+
+The check is a REPORT, never a refusal: the SCF's numbers and the
+canonicalized density are untouched by it. It partitions the energy-sorted
+columns into clusters whose consecutive gaps are within `tolerance_hartree`,
+groups each cluster by irrep label, and records every group of one of those
+irreps — **including a singleton**. A singleton record is how a split partner
+appears: two one-column records of dimension two, each with `"intact": false`,
+which is the numerical-symmetry-breaking signal. `spread_hartree` is the
+largest minus the smallest Fock expectation of the set within its cluster; a
+singleton's spread is 0 and it is the CARDINALITY that carries the break
+there. Clusters whose only members are one-dimensional irreps produce no
+record, so a C2v molecule (every irrep one-dimensional) reports
+`"no_multiplets"` rather than a vacuous pass.
+
+The object is filled by the SAME pass that canonicalizes the degenerate
+partners, so the check and the rotation read one partition of the same
+energy-sorted columns — the two can never disagree. It is present on every
+present `symmetry`/`symmetry_beta` block (the stage always runs its check),
+and absent with the block.
+
 
 The **`symmetry_blocking`** object beside them is the blocking guard's own
 decision record — whether the irrep blocks were actually USED — and its shape
@@ -1196,6 +1234,70 @@ The Fock-build planner's decision, present exactly when the input wrote
   any mixed plan on a per-spin lane — is refused by name before serialization,
   so a present block is a block whose providers ran.
 
+### 3.12 `xc_screening` (schema 50)
+
+The exchange-correlation grid's screening counters, summed per SCF
+iteration, present exactly when a Kohn-Sham run performed at least one
+iteration and absent on every Hartree-Fock run (or a Kohn-Sham run that
+stopped before its first Fock build). The counts describe WORK, not time —
+they are valid under any machine load, and no timing cell exists beside
+them.
+
+The example below is measured from a C10H22/STO-3G PBE run (72 contracted
+basis functions). Its first two rows are shown: the first sums the seed and
+first-iterate integrations, the second a single iterate.
+
+```json
+"xc_screening": {
+  "per_iteration": [
+    { "iteration": 1, "evaluations": 2, "points": 1097784, "batches": 44446,
+      "density_weight_terms": 10368, "shell_tests": 57084768, "shell_keeps": 31384946,
+      "ao_fetches": 1074978, "ao_slots_evaluated": 46551734, "ao_slots_dense": 79040448,
+      "contraction_pairs": 4230267500, "contraction_pairs_dense": 11381824512 },
+    { "iteration": 2, "evaluations": 1, "points": 548892, "batches": 22223,
+      "density_weight_terms": 5184, "shell_tests": 28542384, "shell_keeps": 15697308,
+      "ao_fetches": 537572, "ao_slots_evaluated": 23279672, "ao_slots_dense": 39520224,
+      "contraction_pairs": 2115413856, "contraction_pairs_dense": 5690912256 }
+  ]
+}
+```
+
+- `iteration` is the 1-based SCF iteration the row is attributed to — the
+  Fock build count. A row opens when the iteration's Fock build begins and
+  closes when the next one begins, so it carries EVERY grid integration made
+  between the two builds: the Fock build's own evaluation and the energy
+  path's evaluation of the density the build produced. `evaluations` says how
+  many integrations were summed into the row (at least one), so a row whose
+  attribution a reader doubts can be audited rather than trusted. On an
+  ordinary converging run the first row carries two integrations (the seed
+  density and the first iterate) and each later row one; an SCF that reruns a
+  trajectory adds rows, because the counts measure the work done.
+- `points` is the number of LIVE (nonzero-weight) grid points integrated;
+  `batches` the point batches walked. Both are properties of the grid alone,
+  so per integration they repeat across the rows of one run; a row that summed
+  two integrations carries twice their value, which is the first row of an
+  ordinary converging run.
+- `density_weight_terms` counts the shell-density-weight setup terms per
+  evaluation: `AOCount^2` on a closed-shell evaluation (one shared pass over
+  one density matrix) and `2 * AOCount^2` when the two spin densities differ.
+  A row sums its evaluations, as every count in the row does.
+- `shell_tests` counts every significant-shell test, `shell_keeps` the tests
+  that kept the shell.
+- `ao_fetches` counts the live points that kept at least one shell (the
+  points that entered the AO tier); a point with no significant shell
+  contributes to `points` but not to `ao_fetches`.
+- `ao_slots_evaluated` is the AO-slot count actually evaluated over the kept
+  shells, `contraction_pairs` the kernel's work `2 * slots^2` over those
+  slots. `ao_slots_dense` and `contraction_pairs_dense` are the DENSE
+  denominators the same integration would cost with no screening at all
+  (`points * AOCount` and `2 * points * AOCount^2`), so the two pairs state
+  the screened fraction beside the work. The identities
+  `ao_slots_dense == points * AOCount` and
+  `contraction_pairs_dense == 2 * points * AOCount^2` hold by construction.
+- The block is the run's own account of the grid term's cost: it exists
+  because the screening's saving was measurable only in-process, and a record
+  that named the grid it built could not say what that grid did.
+
 ## 4. Units
 
 | Quantity | Unit |
@@ -1478,7 +1580,7 @@ What to notice in this output:
 - No opt-in analysis key (`charges`, `esp`, `eddb`, `fukui`, `nalewajski`,
   `nocv`, `density_at_nuclei`, `qtaim`) appears anywhere — none was
   requested (§3.4).
-- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 48.
+- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 50.
 
 ### Other pin fixtures
 
@@ -2209,6 +2311,27 @@ an alias by construction cannot.
   and the absence is the "no request", never a fabricated plan. A mixed plan
   is the case the whole-family vocabulary cannot state, and it is why the
   block exists. Keys added, so the number moves with them.
+- 49 → 50 (the XC grid's screened-work counters and the labelling stage's
+  degeneracy verdict reach the record, under one bump): the top-level
+  `xc_screening` block (§3.12) writes the grid engine's screening counters per
+  SCF iteration — live points, batches, density-weight terms, shell tests and
+  keeps, AO fetches, evaluated and dense AO slots, and evaluated and dense
+  contraction pairs — with the number of integrations summed into each row, so
+  a Kohn-Sham record states the work its grid term did instead of leaving it
+  measurable only in-process. It is present exactly when a Kohn-Sham run
+  performed at least one iteration and absent on every Hartree-Fock run; the
+  counts are load-independent, and no timing cell accompanies them. The
+  `symmetry` and `symmetry_beta` blocks gain the `degeneracy` object
+  (§3.7.1): the verdict (`"passed"` / `"failed"` / `"no_multiplets"`), the
+  energy-clustering tolerance it ran under, the count of irrep-mandated
+  degenerate sets and of the broken ones, and each set's irrep label,
+  dimension, MO columns, Fock-expectation spread and `intact` flag. The
+  verdict is filled by the same pass that canonicalizes the degenerate
+  partners, so the check and the rotation read one partition; a split partner
+  appears as one-column records of its multi-dimensional irrep with
+  `"intact": false`. Keys added, so the number moves with them. A document
+  outside a Kohn-Sham run and without a labeling block is byte-identical
+  under the change.
 
 ## 8. The builder-selection axes (schema 35)
 

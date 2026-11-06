@@ -134,6 +134,71 @@ struct DegenerateSubspaceRecord {
     std::vector<int> moIndices; ///< MO columns of the subspace (coefficients order).
 };
 
+/// The labelling stage's degeneracy verdict: the word the run's own labels
+/// support on its energies.
+enum class SymmetryDegeneracyVerdict {
+    /// At least one irrep-mandated set was found and every set is intact.
+    kPassed,
+    /// At least one irrep-mandated set's cardinality is not a multiple of its
+    /// irrep's dimension - the numerical-symmetry-breaking signal.
+    kFailed,
+    /// Nothing to judge: the detected group's irreps are all one-dimensional,
+    /// or no pair of columns in one energy cluster carried the same
+    /// multi-dimensional irrep. The honest answer - never a pass borrowed
+    /// from an empty test.
+    kNoMultiplets,
+};
+
+/// One irrep-mandated degenerate set the labelling stage judged: the MO
+/// columns of one energy cluster that carry one full-group irrep of dimension
+/// at least two.
+///
+/// A full irrep of dimension d forces its MOs into degenerate sets whose
+/// cardinality is a multiple of d. The check partitions the energy-sorted
+/// columns into clusters whose consecutive gaps are within
+/// SymmetryDegeneracyReport::toleranceHartree, groups each cluster by irrep
+/// label, and records every such group - including a singleton, which is how
+/// a split partner appears: two one-column records of dimension two, with the
+/// `intact` flag naming what the energies did not do.
+struct SymmetryMultipletRecord {
+    std::string irrepLabel; ///< The full-group irrep label ("E", "T2g", "Pi_u").
+    int dimension =
+        0; ///< The irrep's dimension (from the character table, or 2 on the linear path).
+    std::vector<int> moIndices; ///< MO columns of the set (coefficients order).
+    /// The spread of the set's Fock expectations, largest minus smallest,
+    /// Hartree. Within one energy cluster by construction; a singleton
+    /// record's spread is 0, and it is the CARDINALITY that carries the
+    /// break there.
+    double spreadHartree = 0.0;
+    /// True exactly when `moIndices.size()` is a multiple of `dimension` -
+    /// the degeneracy the irrep mandates. False is the numerical-symmetry-
+    /// breaking signal.
+    bool intact = false;
+};
+
+/// The labelling stage's degeneracy check: the verdict the run's own labels
+/// support, and the sets it rests on.
+///
+/// The stage labels every MO by its full-group irrep; this report turns those
+/// labels into the check the labels exist for: a calculation whose group
+/// mandates degenerate partners, and whose Fock expectations do not show
+/// them, is reported rather than left for a reader to notice. It is a report,
+/// never a refusal - the SCF's numbers are untouched.
+struct SymmetryDegeneracyReport {
+    SymmetryDegeneracyVerdict verdict = SymmetryDegeneracyVerdict::kNoMultiplets;
+    /// The energy-clustering cut the check ran under, Hartree, so the
+    /// verdict is readable without the source (the symmetry-blocking
+    /// tolerance rule).
+    double toleranceHartree = 0.0;
+    /// The number of mandated sets recorded (intact and broken alike).
+    int multipletCount = 0;
+    /// The subset of the above whose cardinality is not a multiple of the
+    /// irrep dimension.
+    int brokenMultipletCount = 0;
+    /// Every mandated set, in ascending order of its lowest MO column.
+    std::vector<SymmetryMultipletRecord> multiplets;
+};
+
 /// The full-group labeling output of one spin channel.
 ///
 /// The RHF result carries one SymmetryLabels (the spin-summed density was
@@ -189,6 +254,13 @@ struct SymmetryLabels {
     std::vector<std::string> symmetrizationSubset;
     /// |G| on the table path, or the finite subset size on the linear path.
     int averagedElementCount = 0;
+
+    /// The degeneracy check the labels support: whether every irrep-mandated
+    /// degenerate set the energies were expected to show is intact. Filled by
+    /// the same pass that canonicalizes the degenerate partners, so the check
+    /// and the rotation read one partition of the same energy-sorted
+    /// columns, never two free to disagree.
+    SymmetryDegeneracyReport degeneracy;
 };
 
 /// Labels ONE caller-supplied vector in the FULL group, off the SCF path.

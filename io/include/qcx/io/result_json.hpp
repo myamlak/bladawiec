@@ -804,12 +804,75 @@ struct RunDegenerateSubspace {
     std::vector<int> moIndices; ///< MO columns of the subspace (coefficients order).
 };
 
+/// One symmetry-mandated degenerate set the labelling stage checked (schema
+/// 50): the MO columns of one energy cluster that carry one full-group irrep
+/// of dimension at least two.
+///
+/// A full irrep of dimension d forces its MOs into degenerate sets whose
+/// cardinality is a multiple of d. The check partitions the energy-sorted
+/// columns into clusters whose consecutive gaps are within
+/// `RunSymmetryDegeneracy::toleranceHartree`, groups each cluster by irrep
+/// label, and records every such group here. A split partner therefore
+/// appears as two one-column records of dimension two - the `intact` flag
+/// naming what the energies did not do.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-io
+struct RunSymmetryMultiplet {
+    std::string irrepLabel; ///< The full-group irrep label of the set ("E", "T2g", "Pi_u").
+    int dimension =
+        0; ///< The irrep's dimension (from the character table, or 2 on the linear path).
+    std::vector<int> moIndices; ///< MO columns of the set (coefficients order).
+    /// The spread of the set's Fock expectations, largest minus smallest,
+    /// Hartree. Within one energy cluster by construction; a singleton
+    /// record's spread is 0, and it is the CARDINALITY that carries the
+    /// break there.
+    double spreadHartree = 0.0;
+    /// True exactly when `moIndices.size()` is a multiple of `dimension` -
+    /// the degeneracy the irrep mandates. False is the numerical-symmetry-
+    /// breaking signal.
+    bool intact = false;
+};
+
+/// The labelling stage's degeneracy check (schema 50): the verdict a run's own
+/// labels support, and the sets it rests on.
+///
+/// The stage labels every MO by its full-group irrep; this block turns those
+/// labels into the CHECK the labels exist for: a calculation whose group
+/// mandates degenerate partners, and whose Fock expectations do not show
+/// them, is reported here rather than left for a reader to notice. It is a
+/// report, never a refusal: the energies are the run's own and no number in
+/// the record moves.
+/// \ingroup qcx-io
+struct RunSymmetryDegeneracy {
+    /// One word: "passed" (at least one mandated set, every set intact),
+    /// "failed" (at least one set broken), or "no_multiplets" (the detected
+    /// group's irreps are all one-dimensional, or every label is UNKNOWN, so
+    /// the check had nothing to judge - the honest answer, never a pass
+    /// borrowed from an empty test). Defaults to "no_multiplets", the same
+    /// honest default the labelling stage's own report carries, so a
+    /// default-constructed record never states a verdict the check did not
+    /// reach.
+    std::string verdict = "no_multiplets";
+    /// The energy-clustering cut the check ran under, Hartree, so the verdict
+    /// is readable without the source (the `symmetry_blocking` tolerance
+    /// rule).
+    double toleranceHartree = 0.0;
+    /// The number of mandated sets recorded (intact and broken alike).
+    int multipletCount = 0;
+    /// The subset of the above whose cardinality is not a multiple of the
+    /// irrep dimension.
+    int brokenMultipletCount = 0;
+    /// Every mandated set, in ascending order of its lowest MO column.
+    std::vector<RunSymmetryMultiplet> multiplets;
+};
+
 /// The symmetry block of a run result: the full-group labeling of
 /// the converged state, when the stage ran. Carries the per-MO irrep
 /// labels, the detected full group and the Abelian reduction the SCF
 /// actually used, the canonicalization/straddle record of the degenerate
-/// subspaces, and the finite symmetrization subset (linear molecules
-/// only). The MO coefficients and the symmetrized density are NOT
+/// subspaces, the finite symmetrization subset (linear molecules
+/// only), and the check that turns the labels on the energies (schema 50).
+/// The MO coefficients and the symmetrized density are NOT
 /// serialized: the Molden export carries the coefficients, and the JSON
 /// consumer needs the labels, not the matrices.
 /// \ingroup qcx-io
@@ -827,6 +890,12 @@ struct RunSymmetry {
                                                    ///< subset (linear path only).
     int averagedElementCount = 0; ///< |G| on the table path, the subset size on the
                                   ///< linear path.
+    /// The labelling stage's own degeneracy check (schema 50): the verdict the
+    /// labels support on the energies, with the sets it rests on. Always
+    /// present inside a labeling block - a stage that ran produced labels and
+    /// therefore a check - with `"no_multiplets"` as the honest verdict when
+    /// the group has no degenerate irrep to judge.
+    RunSymmetryDegeneracy degeneracy;
 };
 
 /// One spin channel's symmetry-blocking DISCLOSURE (schema 32): what the run
@@ -1689,6 +1758,68 @@ struct RunXcGrid {
     std::size_t blockTarget = 1024; ///< The spatial re-batching target.
 };
 
+/// One screened exchange-correlation integration's counts (schema 50): the
+/// grid engine's `XcScreeningCounts`, member for member.
+///
+/// These are COUNTS, not times, and that is why they are in the record: the
+/// engine has computed them on every screened evaluation since the grid was
+/// written (the grid test suite is their only consumer), and a count is valid
+/// under any machine load - a run can state the work the grid term did
+/// without a timing cell and without an idle machine. The DENSE denominators
+/// beside the screened numerators (`aoSlotsDense`, `contractionPairsDense`)
+/// are the same walk with screening off, so the ratio of a pair is the
+/// screening's own share of that term, measured rather than modelled.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-io
+struct RunXcScreeningCounts {
+    std::size_t points = 0; ///< Grid points integrated (zero-weight points skipped).
+    std::size_t batches = 0; ///< Batch passes the walk took.
+    std::size_t densityWeightTerms = 0; ///< Density entries summed for the weights.
+    std::size_t shellTests = 0; ///< Shell-significance tests run (points x shells).
+    std::size_t shellKeeps = 0; ///< Tests that kept their shell.
+    std::size_t aoFetches = 0; ///< AO fetches issued: one per integrated point that kept a shell.
+    std::size_t aoSlotsEvaluated = 0; ///< AO values evaluated, selected shells only.
+    std::size_t aoSlotsDense = 0; ///< The same walk with no screening: points x AOCount.
+    std::size_t contractionPairs = 0; ///< Density-contraction terms read.
+    std::size_t contractionPairsDense = 0; ///< The unscreened contraction: points x 2 x AOCount^2.
+};
+
+/// One SCF iteration's exchange-correlation grid counts (schema 50).
+///
+/// The row holds every integration performed between the start of this
+/// iteration's Fock build and the start of the next one. The loop builds the
+/// Fock once per iteration, and the Kohn-Sham composition integrates the
+/// functional once per distinct density: the first row therefore carries the
+/// seed density's integration (charged by the first build) and every row
+/// carries the integration of the density its iteration produced (charged by
+/// the energy step that closes the iteration). `evaluations` states how many
+/// integrations the row sums, so the attribution is readable rather than
+/// implied.
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-io
+struct RunXcScreeningIteration {
+    int iteration = 0; ///< 1-based SCF iteration (the Fock build count).
+    int evaluations = 0; ///< Integrations summed into this row (at least one).
+    RunXcScreeningCounts counts; ///< The row's summed counts.
+};
+
+/// The `xc_screening` block of a Kohn-Sham run (schema 50): the exchange-
+/// correlation grid's screening counts, per SCF iteration.
+///
+/// The engine is built once per run and the composition evaluates it per
+/// density; the driver drains the counts at the loop's iteration boundaries
+/// and this block is that drain. Present exactly when a Kohn-Sham run wired a
+/// grid engine and performed at least one iteration - a Hartree-Fock run
+/// integrates no functional and carries no block, the same presence rule as
+/// `xc_grid` (the absence is the statement that no grid was involved).
+/// Public aggregate: the fields are the API (aggregate-struct exemption).
+/// \ingroup qcx-io
+struct RunXcScreening {
+    /// One row per SCF iteration, in iteration order. Never empty in a
+    /// serialized block.
+    std::vector<RunXcScreeningIteration> perIteration;
+};
+
 /// The run's RESOLVED builder selection in the orthogonal axis vocabulary
 /// (schema 35), serialized as "builder_axes":
 /// which axes the run actually ran, stated in the vocabulary that replaced the
@@ -2092,7 +2223,26 @@ struct RunResult {
     /// what a consumer must notice, and the block's absence is the
     /// "no request" the null-honesty rule requires. Keys added, so the number
     /// moved with them.
-    static constexpr int kSchemaVersion = 49;
+    ///
+    /// Schema 50 ADDS two blocks under one bump, both turning an
+    /// already-computed internal count into a statement the record makes.
+    /// (1) The top-level `xc_screening` block (RunXcScreening): the
+    /// exchange-correlation grid's screening counts - integrated points,
+    /// AO fetches, shell tests, density-weight terms and the unscreened
+    /// dense denominators beside them - summed per SCF iteration. Keys
+    /// added, so the number moved with them. Counts rather than times is
+    /// the point: they stay valid under any machine load, which a timing
+    /// cell in this block would not, and the presence rule is the same as
+    /// `xc_grid` (a Kohn-Sham run that performed at least one iteration).
+    /// (2) The `symmetry.degeneracy` object (RunSymmetryDegeneracy): the
+    /// labelling stage's own check on the energies - the verdict, the
+    /// energy-clustering cut, and every irrep-mandated degenerate set with
+    /// its spread and whether its cardinality is a multiple of the irrep
+    /// dimension. A key added; a consumer must notice it because it is the
+    /// record's only statement of whether the run's numbers HONOURED its
+    /// own symmetry, and its verdict vocabulary ("passed" | "failed" |
+    /// "no_multiplets") is a claim rather than a bare flag.
+    static constexpr int kSchemaVersion = 50;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.
@@ -2369,6 +2519,20 @@ struct RunResult {
     /// and `restart_path` only when a restart actually read a checkpoint.
     /// Appended last so the aggregate's earlier fields keep their positions.
     RunGuess guess;
+
+    /// The exchange-correlation grid's screening counts per SCF iteration
+    /// (schema 50, RunXcScreening), serialized as "xc_screening". Present
+    /// exactly when a run integrated a density functional (rks/uks) and its
+    /// SCF loop performed at least one iteration; absent on every
+    /// Hartree-Fock run, which integrates no functional (the `xc_grid`
+    /// presence rule, for the same reason). The block exists because the
+    /// grid's cost is the part of a Kohn-Sham run a reader cannot get from
+    /// the energy: the counts are valid under any load (they measure work,
+    /// not time), so a loaded machine still yields a usable number, and the
+    /// dense denominators make the screening's share a measurement rather
+    /// than a model. Appended last so the aggregate's earlier fields keep
+    /// their positions.
+    std::optional<RunXcScreening> xcScreening;
 };
 
 /// Serializes a run result to the JSON schema (see the header note).

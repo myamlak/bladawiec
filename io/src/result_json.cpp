@@ -62,12 +62,38 @@ void MarkNonFiniteNumbers(nlohmann::json& value) {
     }
 }
 
+// The labelling stage's degeneracy check (schema 50): the verdict the run's
+// own labels support, the energy-clustering cut it ran under, and every
+// irrep-mandated set the check judged. The verdict word is copied through -
+// `passed` / `failed` / `no_multiplets` - never re-derived from the
+// multiplet records beside it, which are the evidence the reader can check
+// the word against.
+nlohmann::json SerializeSymmetryDegeneracy(const RunSymmetryDegeneracy& degeneracy) {
+    std::vector<nlohmann::json> multiplets;
+    multiplets.reserve(degeneracy.multiplets.size());
+
+    for (const auto& record : degeneracy.multiplets)
+    {
+        multiplets.push_back(nlohmann::json{{"irrep_label", record.irrepLabel},
+                                            {"dimension", record.dimension},
+                                            {"mo_indices", record.moIndices},
+                                            {"spread_hartree", record.spreadHartree},
+                                            {"intact", record.intact}});
+    }
+
+    return nlohmann::json{{"verdict", degeneracy.verdict},
+                          {"tolerance_hartree", degeneracy.toleranceHartree},
+                          {"multiplet_count", degeneracy.multipletCount},
+                          {"broken_multiplet_count", degeneracy.brokenMultipletCount},
+                          {"multiplets", multiplets}};
+}
+
 // The full-group labeling block: the per-MO labels, the detected
 // full group and the Abelian reduction, the canonicalization/straddle
-// records, and the finite symmetrization subset. The MO coefficients and
-// the symmetrized density stay out of the JSON (the Molden export
-// carries the coefficients); the consumer needs the labels, not the
-// matrices.
+// records, the finite symmetrization subset, and the degeneracy check the
+// labels support. The MO coefficients and the symmetrized density stay out
+// of the JSON (the Molden export carries the coefficients); the consumer
+// needs the labels, not the matrices.
 nlohmann::json SerializeSymmetry(const RunSymmetry& symmetry) {
     std::vector<nlohmann::json> canonicalized;
     canonicalized.reserve(symmetry.canonicalized.size());
@@ -94,7 +120,8 @@ nlohmann::json SerializeSymmetry(const RunSymmetry& symmetry) {
                           {"canonicalized", canonicalized},
                           {"straddled", straddled},
                           {"symmetrization_subset", symmetry.symmetrizationSubset},
-                          {"averaged_element_count", symmetry.averagedElementCount}};
+                          {"averaged_element_count", symmetry.averagedElementCount},
+                          {"degeneracy", SerializeSymmetryDegeneracy(symmetry.degeneracy)}};
 }
 
 // The symmetry-blocking disclosure of one spin channel (schema 32): the
@@ -168,6 +195,39 @@ std::string SerializeRunResultJson(const RunResult& result) {
                                              {"radial_exponent", grid.radialExponent},
                                              {"trim_weight", grid.trimWeight},
                                              {"block_target", grid.blockTarget}};
+    }
+
+    // The exchange-correlation grid's screening counts per SCF iteration
+    // (schema 50): the engine's own counters, drained at the loop's
+    // iteration boundaries. Written exactly when a Kohn-Sham run performed
+    // at least one iteration - a Hartree-Fock run integrates no functional
+    // and carries no block (the `xc_grid` presence rule). The keys are
+    // COUNTS, valid under any machine load, with the unscreened dense
+    // denominators kept beside their screened numerators so the screening's
+    // share is a measurement a consumer can form from the record alone.
+    if (result.xcScreening.has_value())
+    {
+        std::vector<nlohmann::json> rows;
+        rows.reserve(result.xcScreening->perIteration.size());
+
+        for (const auto& row : result.xcScreening->perIteration)
+        {
+            rows.push_back(
+                nlohmann::json{{"iteration", row.iteration},
+                               {"evaluations", row.evaluations},
+                               {"points", row.counts.points},
+                               {"batches", row.counts.batches},
+                               {"density_weight_terms", row.counts.densityWeightTerms},
+                               {"shell_tests", row.counts.shellTests},
+                               {"shell_keeps", row.counts.shellKeeps},
+                               {"ao_fetches", row.counts.aoFetches},
+                               {"ao_slots_evaluated", row.counts.aoSlotsEvaluated},
+                               {"ao_slots_dense", row.counts.aoSlotsDense},
+                               {"contraction_pairs", row.counts.contractionPairs},
+                               {"contraction_pairs_dense", row.counts.contractionPairsDense}});
+        }
+
+        document["xc_screening"] = nlohmann::json{{"per_iteration", rows}};
     }
 
     // The dispersion correction (schema 41): the resolved form, the source of

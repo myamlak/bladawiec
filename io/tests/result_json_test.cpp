@@ -39,7 +39,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsFortyNine) {
+TEST(ResultJsonTest, SchemaVersionIsFifty) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -211,7 +211,23 @@ TEST(ResultJsonTest, SchemaVersionIsFortyNine) {
     // planner's provider per half, the sharing taken and the constraints
     // checked, present exactly when the input wrote `[builder] coulomb_half`
     // or `[builder] exchange_half`.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 49);
+    //
+    // v49 -> v50: TWO blocks under one bump, both turning an
+    // already-computed internal count into a statement the record makes.
+    // (1) The top-level `xc_screening` block (RunXcScreening): the
+    // exchange-correlation grid's screening counts per SCF iteration - the
+    // engine's own XcScreeningCounts, drained at the loop's Fock-call
+    // boundary, with the unscreened dense denominators beside the screened
+    // numerators. Keys added, so the number moves with them; counts rather
+    // than times is the point (a count is exact under any machine load), and
+    // the presence rule is the `xc_grid` one. (2) The `symmetry.degeneracy`
+    // object (RunSymmetryDegeneracy): the labelling stage's verdict on the
+    // energies - "passed" | "failed" | "no_multiplets", the clustering
+    // tolerance, and every irrep-mandated set with its spread and whether
+    // its cardinality is a multiple of the irrep dimension. A key added; a
+    // consumer must notice it because it is the record's only statement of
+    // whether the run's numbers honoured its own symmetry.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 50);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {
@@ -1594,6 +1610,114 @@ TEST(ResultJsonTest, SymmetryBlockEmittedWhenPresent) {
     EXPECT_NE(json.find("\"straddled\""), std::string::npos);
     EXPECT_NE(json.find("\"symmetrization_subset\""), std::string::npos);
     EXPECT_NE(json.find("\"averaged_element_count\": 2"), std::string::npos);
+}
+
+TEST(ResultJsonTest, SymmetryDegeneracyVerdictAndSetsAreWritten) {
+    // The labelling stage's check on the energies (schema 50): the verdict
+    // word, the clustering cut it ran under, the two counts, and every
+    // irrep-mandated set with its spread and its intact flag. A FAILED
+    // verdict with one broken record is pinned so the word cannot be
+    // re-derived from the counts without the test noticing.
+    qcx::io::RunResult result;
+    qcx::io::RunSymmetry symmetry;
+    symmetry.fullGroup = "C3v";
+    symmetry.abelianReduction = "Cs";
+    symmetry.degeneracy.verdict = "failed";
+    symmetry.degeneracy.toleranceHartree = 1e-6;
+    symmetry.degeneracy.multipletCount = 2;
+    symmetry.degeneracy.brokenMultipletCount = 1;
+    symmetry.degeneracy.multiplets = {qcx::io::RunSymmetryMultiplet{"E", 2, {4, 5}, 4.2e-9, true},
+                                      qcx::io::RunSymmetryMultiplet{"E", 2, {6}, 0.0, false}};
+    result.symmetry = std::move(symmetry);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(json.find("\"degeneracy\""), std::string::npos);
+    EXPECT_NE(json.find("\"verdict\": \"failed\""), std::string::npos);
+    EXPECT_NE(json.find("\"tolerance_hartree\": 1e-06"), std::string::npos);
+    EXPECT_NE(json.find("\"multiplet_count\": 2"), std::string::npos);
+    EXPECT_NE(json.find("\"broken_multiplet_count\": 1"), std::string::npos);
+    EXPECT_EQ(CountOccurrences(json, "\"irrep_label\": \"E\""), 2);
+    EXPECT_EQ(CountOccurrences(json, "\"dimension\": 2"), 2);
+    EXPECT_NE(json.find("\"intact\": true"), std::string::npos);
+    EXPECT_NE(json.find("\"intact\": false"), std::string::npos);
+    EXPECT_NE(json.find("\"spread_hartree\": 4.2e-09"), std::string::npos);
+}
+
+TEST(ResultJsonTest, SymmetryDegeneracyIsAlwaysInsideALabelingBlock) {
+    // A stage that ran produced labels and therefore a check, so the
+    // degeneracy object is present whenever the labeling block is - with
+    // `no_multiplets` as the honest default when the group has no degenerate
+    // irrep to judge (never a pass borrowed from an empty test).
+    qcx::io::RunResult result;
+    qcx::io::RunSymmetry symmetry;
+    symmetry.fullGroup = "C2v";
+    symmetry.abelianReduction = "C2v";
+    result.symmetry = std::move(symmetry);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(json.find("\"verdict\": \"no_multiplets\""), std::string::npos);
+    EXPECT_NE(json.find("\"multiplet_count\": 0"), std::string::npos);
+    EXPECT_NE(json.find("\"multiplets\": []"), std::string::npos);
+}
+
+TEST(ResultJsonTest, XcScreeningBlockIsWrittenPerIteration) {
+    // The exchange-correlation grid's counts (schema 50), member for member:
+    // two rows, each with the iteration index, the integrations it sums and
+    // the engine's ten counters. The values are pinned exactly - the block's
+    // whole point is that the record carries the numbers rather than a note
+    // that a counter existed.
+    qcx::io::RunResult result;
+    qcx::io::RunXcScreening screening;
+    qcx::io::RunXcScreeningIteration first;
+    first.iteration = 1;
+    first.evaluations = 2;
+    first.counts.points = 1200;
+    first.counts.batches = 19;
+    first.counts.densityWeightTerms = 1680;
+    first.counts.shellTests = 4200;
+    first.counts.shellKeeps = 3900;
+    first.counts.aoFetches = 1200;
+    first.counts.aoSlotsEvaluated = 7000;
+    first.counts.aoSlotsDense = 8400;
+    first.counts.contractionPairs = 15000;
+    first.counts.contractionPairsDense = 48000;
+    qcx::io::RunXcScreeningIteration second;
+    second.iteration = 2;
+    second.evaluations = 1;
+    second.counts.points = 1100;
+    second.counts.aoSlotsDense = 7700;
+    screening.perIteration = {first, second};
+    result.xcScreening = std::move(screening);
+
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_NE(json.find("\"xc_screening\""), std::string::npos);
+    EXPECT_EQ(CountOccurrences(json, "\"per_iteration\""), 1);
+    EXPECT_EQ(CountOccurrences(json, "\"iteration\""), 2);
+    EXPECT_NE(json.find("\"iteration\": 1"), std::string::npos);
+    EXPECT_NE(json.find("\"iteration\": 2"), std::string::npos);
+    EXPECT_NE(json.find("\"evaluations\": 2"), std::string::npos);
+    EXPECT_NE(json.find("\"evaluations\": 1"), std::string::npos);
+    EXPECT_NE(json.find("\"points\": 1200"), std::string::npos);
+    EXPECT_NE(json.find("\"batches\": 19"), std::string::npos);
+    EXPECT_NE(json.find("\"density_weight_terms\": 1680"), std::string::npos);
+    EXPECT_NE(json.find("\"shell_tests\": 4200"), std::string::npos);
+    EXPECT_NE(json.find("\"shell_keeps\": 3900"), std::string::npos);
+    EXPECT_NE(json.find("\"ao_fetches\": 1200"), std::string::npos);
+    EXPECT_NE(json.find("\"ao_slots_evaluated\": 7000"), std::string::npos);
+    EXPECT_NE(json.find("\"ao_slots_dense\": 8400"), std::string::npos);
+    EXPECT_NE(json.find("\"contraction_pairs\": 15000"), std::string::npos);
+    EXPECT_NE(json.find("\"contraction_pairs_dense\": 48000"), std::string::npos);
+    // The second row carries its own numbers, not the first row's.
+    EXPECT_NE(json.find("\"points\": 1100"), std::string::npos);
+    EXPECT_NE(json.find("\"ao_slots_dense\": 7700"), std::string::npos);
+}
+
+TEST(ResultJsonTest, XcScreeningBlockAbsentWhenNoGridRan) {
+    // A Hartree-Fock run integrates no functional: no block, never a
+    // zero-filled one (the xc_grid presence rule).
+    qcx::io::RunResult result;
+    const std::string json = qcx::io::SerializeRunResultJson(result);
+    EXPECT_EQ(json.find("xc_screening"), std::string::npos);
 }
 
 TEST(ResultJsonTest, SymmetryBetaBlockEmittedWhenPresent) {

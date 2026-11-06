@@ -7587,6 +7587,85 @@ full_group = false
     EXPECT_EQ(result->find("\"symmetry\""), std::string::npos);
 }
 
+// The labelling stage's degeneracy verdict at the driver level: the run's own
+// labels say whether the degenerate partners the group mandates are there.
+// Ammonia is C3v by construction, and its E irrep mandates pairs of degenerate
+// orbitals; a converged SCF must show those pairs, so the record is expected
+// to carry a passing verdict with at least one E set. The geometry is the
+// repository's ammonia fixture in bohr, written at full double precision
+// through the same trig: a four-digit coordinate lands at the detector's own
+// position tolerance (1e-4 bohr) and the group would be demoted to Cs, whose
+// irreps are all one-dimensional and whose check could only say
+// "no_multiplets".
+//
+// The SCF is tightened below the default gate so the verdict is read on a
+// genuinely converged pair: the clustering cut is 1e-6 Hartree and the
+// default density tolerance is also 1e-6, which would leave a legitimate
+// question at the boundary rather than a test.
+TEST(DriverRunTest, FullGroupDegeneracyCheckReportsItsVerdict) {
+    std::ostringstream text;
+    text << "[molecule]\nunits = \"bohr\"\ncharge = 0\nmultiplicity = 1\natoms = [\n";
+    text << "    [\"N\", 0.0, 0.0, 0.0],\n";
+
+    for (int k = 0; k < 3; ++k)
+    {
+        const double theta =
+            static_cast<double>(k) * 2.0 * std::numbers::pi / 3.0 + std::numbers::pi / 6.0;
+        text << std::setprecision(17) << "    [\"H\", " << std::cos(theta) << ", "
+             << std::sin(theta) << ", 0.4],\n";
+    }
+
+    text << R"(]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+
+[scf]
+energy_tolerance = 1e-10
+density_tolerance = 1e-8
+max_iterations = 100
+)";
+
+    const std::string toml = text.str();
+    auto result = RunInputText(toml.c_str());
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+    EXPECT_NE(result->find("\"converged\": true"), std::string::npos);
+
+    // The detected group is the full C3v (not its Cs reduction), so the E
+    // irrep reached the labelling stage.
+    EXPECT_NE(result->find("\"full_group\": \"C3v\""), std::string::npos);
+
+    const auto degeneracyPos = result->find("\"degeneracy\"");
+    ASSERT_NE(degeneracyPos, std::string::npos)
+        << "the labelling stage ran, so its degeneracy check must be in the record";
+
+    // The verdict, the sets it rests on and the tolerance it ran under. The
+    // count is read rather than pinned: this is a real molecule's spectrum,
+    // and the property under test is that the check judged at least one
+    // irrep-mandated set and found none broken - not a particular count.
+    EXPECT_NE(result->find("\"verdict\": \"passed\"", degeneracyPos), std::string::npos);
+    EXPECT_NE(result->find("\"tolerance_hartree\": 1e-06", degeneracyPos), std::string::npos);
+
+    const auto multipletCount = JsonNumber(*result, "\"multiplet_count\"", degeneracyPos);
+    ASSERT_TRUE(multipletCount.has_value());
+    EXPECT_GE(*multipletCount, 1.0) << "a pass with no set judged would be vacuous";
+
+    const auto brokenCount = JsonNumber(*result, "\"broken_multiplet_count\"", degeneracyPos);
+    ASSERT_TRUE(brokenCount.has_value());
+    EXPECT_EQ(*brokenCount, 0.0);
+
+    // Each recorded set is an E set: dimension two, an even MO-column count,
+    // and the intact flag the verdict rests on.
+    EXPECT_NE(result->find("\"irrep_label\": \"E\"", degeneracyPos), std::string::npos);
+    EXPECT_NE(result->find("\"dimension\": 2", degeneracyPos), std::string::npos);
+    EXPECT_NE(result->find("\"intact\": true", degeneracyPos), std::string::npos);
+}
+
 // The memory seam refuses a run whose modeled peak clears the cap, and
 // the diagnostic names the reinstatement ladder — the disk-backed store is
 // always named. The H2 direct run's actual usage is ~6 MB (measured), so
