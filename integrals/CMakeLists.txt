@@ -124,6 +124,7 @@ add_library(qcx-integrals ${QCX_MODULE_LIBRARY_TYPE}
   src/eri_dense.cpp
   src/eri_gradient.cpp
   src/fock_build.cpp
+  src/fock_contract_scalar.cpp
   src/fock_contract_simd.cpp
   src/lean_fock_build.cpp
   src/incremental_fock.cpp
@@ -247,12 +248,25 @@ set_source_files_properties(${_qcxBoysExt}/src/boys.cpp PROPERTIES SKIP_PRECOMPI
 set_source_files_properties(${_qcxBoysExt}/src/boys_probe.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
-# The Fock-contraction kernel's AVX2 copy. The kernel body is ONE template
-# (internal/fock_contract_kernel.hpp); the scalar copy instantiates inside
-# fock_build.cpp and this unit compiles the AVX2 copy, entered only after the
-# runtime cpuid check (FockAvx2Available - the boys_simd.cpp dispatch shape,
-# auto-vectorization only, no hand-written intrinsics here). Same PCH skip as
-# the other SIMD units.
+# The Fock-contraction kernel's two copies. The kernel body is ONE template
+# (internal/fock_contract_kernel.hpp) and each copy is its own out-of-line
+# unit: the AVX2 copy here, entered only after the runtime cpuid check
+# (FockAvx2Available - the boys_simd.cpp dispatch shape, auto-vectorization
+# only, no hand-written intrinsics here), and the baseline copy in
+# fock_contract_scalar.cpp, which the dispatcher takes when that check is
+# false or the caller pinned the scalar contract.
+#
+# The baseline copy is the ONE first-party unit an avx2 build compiles
+# without the tier: a host whose processor has no AVX2 has to be able to run
+# the fallback, and until this unit existed the "scalar copy" was the AVX2
+# tier's codegen inside fock_build.cpp, so no build exercised the difference.
+# The per-source options are appended after the directory's tier flags, so
+# the last spelling wins (measured: /arch:AVX2 /arch:SSE2 emits SSE2, not
+# VEX). It also skips the PCH: this module's PCH is qcx/integrals/boys.hpp,
+# and a unit compiled at the baseline tier that includes a Boys header is
+# refused at start-up by the library's tier registry. Both copies are
+# skipped from the PCH for the same group-marker reason as the other SIMD
+# units.
 #
 # The header states "both copies must deliver bit-identical output". The
 # program-wide contraction pin in the root CMakeLists is what holds that: on
@@ -271,6 +285,23 @@ else()
     # this unit's copy is entered only after FockAvx2Available(), which reads
     # the x86-64-only CPU feature probe and is false on this target.
     message(STATUS "qcx-integrals: non-x86-64 target - the Fock contraction AVX2 copy is excluded")
+endif()
+
+# The baseline copy's tier. In an avx2 build this one unit overrides the
+# directory's tier flags with the x86-64 baseline's, so the fallback body is
+# code a processor without AVX2 can run; a baseline build already compiles
+# every unit without the tier, and a non-x86-64 target has no tier to remove.
+# The source options are appended after the directory's flags, so the last
+# spelling wins (measured on MSVC: /arch:AVX2 /arch:SSE2 emits SSE2, not VEX).
+set_source_files_properties(src/fock_contract_scalar.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+if (QCX_ARCH_X86_64 AND QCX_ISA STREQUAL "avx2")
+    if (MSVC)
+        set_source_files_properties(src/fock_contract_scalar.cpp
+            PROPERTIES COMPILE_OPTIONS "/arch:SSE2")
+    else()
+        set_source_files_properties(src/fock_contract_scalar.cpp
+            PROPERTIES COMPILE_OPTIONS "-mno-avx2;-mno-avx;-mno-fma;-mno-f16c")
+    endif()
 endif()
 
 # PCH (mandatory on every target).

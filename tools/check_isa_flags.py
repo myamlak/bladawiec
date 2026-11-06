@@ -10,7 +10,9 @@ promises are the flags the compiler was handed.
       every GCC/Clang command keeps the -ffp-contract=off pin. MSVC keeps its
       default /fp:precise, so /fp:fast is refused there.
   --isa avx2: every first-party C++ command carries the full tier:
-      /arch:AVX2 on MSVC, -mavx2 -mfma -mf16c -ffp-contract=off on GCC/Clang.
+      /arch:AVX2 on MSVC, -mavx2 -mfma -mf16c -ffp-contract=off on GCC/Clang,
+      except the named baseline units (BASELINE_UNITS), which must carry
+      none of the tier and must keep the contraction pin.
 
 First-party means the module directories in tools/check_dag.py's ORDER, plus
 tests/, benchmarks/ and external/boys/ (the Boys sources compiled into
@@ -39,6 +41,14 @@ IMPLIED_TIER_FLAGS = ("-march=native", "-march=x86-64-v3", "-march=x86-64-v4", "
 FORBIDDEN_BASELINE = TIER_FLAGS_GNU + IMPLIED_TIER_FLAGS + (TIER_FLAG_MSVC, "/fp:fast")
 
 FIRST_PARTY_PREFIXES = tuple(ORDER) + ("tests", "benchmarks", "external/boys")
+
+# The units an avx2 build compiles at the baseline tier on purpose: the Fock
+# contraction's fallback body (integrals/CMakeLists.txt states each one's
+# per-source override), so a processor without AVX2 can run the code the
+# dispatcher selects for it. In an avx2 build each of these is checked as a
+# baseline unit - no tier flag, and the contraction pin - rather than as a
+# member of the tier; every other first-party command must carry the tier.
+BASELINE_UNITS = ("integrals/src/fock_contract_scalar.cpp",)
 
 
 def compiler_of(command: str) -> str:
@@ -122,7 +132,10 @@ def main() -> int:
         if path is None:
             continue
         command = entry.get("command") or " ".join(entry.get("arguments", []))
-        findings.extend(check(path, command, compiler_of(command)))
+        if arguments.isa == "avx2" and path in BASELINE_UNITS:
+            findings.extend(check_baseline(path, command, compiler_of(command)))
+        else:
+            findings.extend(check(path, command, compiler_of(command)))
         checked += 1
 
     if checked == 0:

@@ -15,6 +15,7 @@
 #include "h2_sto3g.hpp"
 #include "h2o_sto3g.hpp"
 #include "hf_sto3g.hpp"
+#include "internal/fock_contract_kernel.hpp"
 #include "internal/fock_screen.hpp"
 #include "internal/footprint.hpp"
 #include "qcx/backend/cpu_backend.hpp"
@@ -1638,9 +1639,10 @@ TEST(DirectJkFockBuilderTest, TrivialReductionKeepsPlainPath) {
 }
 
 // The dispatch A/B pin. The contraction kernel is compiled
-// twice - the scalar copy inside fock_build.cpp (no /arch flag), an
-// /arch:AVX2 copy in fock_contract_simd.cpp - and dispatched at runtime on
-// cpuid (FockAvx2Available, the boys_simd.cpp shape).
+// twice, each copy its own out-of-line unit - the baseline copy in
+// fock_contract_scalar.cpp (that unit alone is compiled without the AVX2
+// tier), the /arch:AVX2 copy in fock_contract_simd.cpp - and dispatched at
+// runtime on cpuid (FockAvx2Available, the boys_simd.cpp shape).
 // FockBuildOptions::forceScalarContract pins the scalar copy even on an
 // AVX2-capable machine, so BOTH copies are exercised on every machine: any
 // difference beyond the band below is a dispatch bug (the fallback's
@@ -1693,6 +1695,17 @@ void CheckDispatchPathsBitIdentical(const qcx::molecule::Molecule& molecule,
     const double maxAbsDiff = (defaultMatrix - scalarMatrix).cwiseAbs().maxCoeff();
     EXPECT_LE(maxAbsDiff, kDispatchCopyMaxAbsDiff)
         << "the AVX2 and scalar kernel copies diverge beyond the cross-platform band";
+}
+
+// The fallback's tier, as a fact of the build rather than of the code path:
+// the scalar copy is its own unit, and integrals/CMakeLists.txt compiles it
+// without the AVX2 tier in an avx2 configure. This asserts that the
+// per-source override actually reached the compiler. If it did not, the
+// "scalar" fallback would be AVX2 codegen and a processor without AVX2 could
+// fault in the entry selected for exactly that processor - values alone
+// cannot show this, because the two tiers are bit-identical by contract.
+TEST(FockBuildTest, TheFallbackCopyIsCompiledAtTheBaselineTier) {
+    EXPECT_TRUE(qcx::integrals::internal::FockScalarCopyIsBaseline());
 }
 
 TEST(FockBuildTest, Avx2DispatchPathsAreBitIdenticalH2) {
