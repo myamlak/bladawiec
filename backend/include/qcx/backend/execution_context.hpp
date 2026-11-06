@@ -17,15 +17,18 @@
 
 #include "qcx/error.hpp"
 
+#include <cstddef>
 #include <memory>
+#include <span>
 
 namespace qcx::backend {
 
 /// The process's execution context.
 ///
 /// One instance per process: Create() returns the same object on every call.
-/// Rank, size, barrier and the integer/double sum all-reduce are the whole
-/// interface; a work distribution builds on them (StaticDispatcher).
+/// Rank, size, barrier, the integer/double sum all-reduce and the in-place
+/// dense sum all-reduce are the whole interface; a work distribution builds on
+/// them (StaticDispatcher).
 /// \ingroup qcx-backend
 class ExecutionContext {
 public:
@@ -63,6 +66,19 @@ public:
     /// \returns The sum over all ranks (a copy of \p value in a serial build),
     /// or an Error (kInternalError) when the MPI call fails.
     qcx::Result<double> AllReduceSum(double value) const;
+
+    /// Sums a dense array of doubles across every rank, in place.
+    ///
+    /// This is the reduction a distributed matrix assembly needs: one call
+    /// for a whole matrix, so a Fock build costs one collective per call
+    /// rather than one per element. Every rank must pass the same size, and
+    /// every rank receives the element-wise sum.
+    /// \param values This rank's values; on return, the sum over all ranks.
+    /// Unchanged in a serial build. The size must not exceed INT_MAX
+    /// elements, the largest count one MPI call can carry.
+    /// \returns An Error (kInvalidArgument) when \p values is larger than one
+    /// MPI call can carry, or (kInternalError) when the MPI call fails.
+    qcx::Result<void> AllReduceSumInPlace(std::span<double> values) const;
 
     ExecutionContext(const ExecutionContext&) = delete;
     ExecutionContext& operator=(const ExecutionContext&) = delete;

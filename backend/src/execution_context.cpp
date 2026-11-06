@@ -5,6 +5,7 @@
 
 #include "qcx/backend/execution_context.hpp"
 
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -188,6 +189,36 @@ qcx::Result<double> ExecutionContext::AllReduceSum(double value) const {
 #else
     return value;
 #endif
+}
+
+qcx::Result<void> ExecutionContext::AllReduceSumInPlace(std::span<double> values) const {
+#if defined(QcxHasMpi)
+    // The MPI count is an int; refuse a buffer one call cannot carry instead
+    // of truncating the count and summing a prefix.
+    if (values.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "AllReduceSumInPlace: the buffer holds " +
+                                              std::to_string(values.size()) +
+                                              " elements, more than one MPI call can carry"});
+    }
+
+    if (!values.empty())
+    {
+        const int count = static_cast<int>(values.size());
+
+        if (const int code = MPI_Allreduce(
+                MPI_IN_PLACE, values.data(), count, MPI_DOUBLE, MPI_SUM, _impl->communicator);
+            code != MPI_SUCCESS)
+        {
+            return std::unexpected(MpiFailure("MPI_Allreduce(MPI_DOUBLE, dense)", code));
+        }
+    }
+#else
+    (void)values;
+#endif
+
+    return {};
 }
 
 } // namespace qcx::backend
