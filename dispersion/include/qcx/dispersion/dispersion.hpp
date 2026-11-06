@@ -103,14 +103,16 @@ struct DispersionGradient {
     Eigen::VectorXd gradient;
 };
 
-/// Which derivative of the D4 two-body energy a gradient request takes.
+/// Which derivative of the D4 two-body energy a derivative request takes.
 ///
 /// The two-body energy's C6 and C8 coefficients are functions of the geometry
 /// through the coordination numbers and the electronegativity-equilibration
 /// charges that build the reference polarizabilities, so the energy has two
-/// distinct coordinate derivatives depending on what is held fixed.
+/// distinct coordinate derivatives depending on what is held fixed. The
+/// first derivative and the second choose between the same two, so one name
+/// serves both requests.
 /// \ingroup qcx-dispersion
-enum class DispersionGradientTier {
+enum class DispersionDerivativeTier {
     /// Hold C6 and C8 at the geometry's own values and differentiate through
     /// the interatomic distances: the frozen-charge tier, which this module
     /// implements.
@@ -143,7 +145,45 @@ enum class DispersionGradientTier {
 qcx::Result<DispersionGradient> EvaluateDispersionGradient(
     const molecule::Molecule& molecule,
     const ResolvedDispersion& resolved,
-    DispersionGradientTier tier = DispersionGradientTier::kFrozenCharge);
+    DispersionDerivativeTier tier = DispersionDerivativeTier::kFrozenCharge);
+
+/// A dispersion correction's energy and its analytic coordinate Hessian.
+/// \ingroup qcx-dispersion
+struct DispersionHessian {
+    double energy = 0.0; ///< The correction's energy, Hartree (negative for attraction).
+    /// The 3N x 3N second derivatives in the molecule's atom order,
+    /// Hartree/Bohr^2: `hessian(3 a + d, 3 b + e)` differentiates twice with
+    /// respect to the `d`-th and `e`-th Cartesian components of atoms `a` and
+    /// `b`. The sum over every atom of one row's 3-vector vanishes, because
+    /// the correction depends on interatomic distances alone and a uniform
+    /// translation is not a deformation; the matrix is symmetric.
+    Eigen::MatrixXd hessian;
+};
+
+/// Evaluates the resolved correction and its analytic coordinate Hessian.
+///
+/// Only the frozen-charge derivative exists in this module, and only for D4:
+/// the D3 kernel provides an energy and a first derivative, and its second
+/// derivative would be a new excgrid kernel rather than a seam here. A D3
+/// request and a charge-relaxed D4 request are therefore refused by name
+/// rather than answered with a number that is a different derivative of the
+/// same energy. The frozen-charge D4 Hessian differentiates the same pair
+/// expression the gradient entry does, with the pair C6, C8 and damping
+/// radius held at the energy entry's values.
+/// \param molecule The molecule, its coordinates in Bohr.
+/// \param resolved The resolved form and values.
+/// \param tier The derivative a D4 request takes; the frozen-charge tier is
+/// the one implemented.
+/// \returns The energy in Hartree and the (3N x 3N) Hessian in
+/// Hartree/Bohr^2, or an Error: a D3 request and a charge-relaxed D4 request
+/// are kUnimplemented naming the derivative they cannot take, and a charged
+/// D4 molecule, an element the form does not cover or a kernel-level refusal
+/// is reported as in EvaluateDispersion.
+/// \ingroup qcx-dispersion
+qcx::Result<DispersionHessian> EvaluateDispersionHessian(
+    const molecule::Molecule& molecule,
+    const ResolvedDispersion& resolved,
+    DispersionDerivativeTier tier = DispersionDerivativeTier::kFrozenCharge);
 
 /// The resolved values under the form's own key names.
 ///

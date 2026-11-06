@@ -410,11 +410,11 @@ qcx::Result<double> EvaluateDispersion(const molecule::Molecule& molecule,
 
 qcx::Result<DispersionGradient> EvaluateDispersionGradient(const molecule::Molecule& molecule,
                                                            const ResolvedDispersion& resolved,
-                                                           DispersionGradientTier tier) {
+                                                           DispersionDerivativeTier tier) {
     // The frozen-charge tier is the derivative the module computes; the
     // charge-relaxed one is a different derivative of the same energy and is
     // named rather than answered with the frozen-charge number.
-    if (resolved.form == DispersionForm::kD4 && tier == DispersionGradientTier::kChargeRelaxed)
+    if (resolved.form == DispersionForm::kD4 && tier == DispersionDerivativeTier::kChargeRelaxed)
     {
         return std::unexpected(qcx::Error{
             qcx::ErrorCode::kUnimplemented,
@@ -548,6 +548,143 @@ qcx::Result<DispersionGradient> EvaluateDispersionGradient(const molecule::Molec
             output.gradient(static_cast<Eigen::Index>(3 * atom + direction)) =
                 result->gradient[atom][direction];
         }
+    }
+
+    return output;
+}
+
+qcx::Result<DispersionHessian> EvaluateDispersionHessian(const molecule::Molecule& molecule,
+                                                         const ResolvedDispersion& resolved,
+                                                         DispersionDerivativeTier tier) {
+    // The D3 kernel provides the zero-damping energy and its first derivative;
+    // a second derivative is a new kernel, not a seam this module can take.
+    if (resolved.form == DispersionForm::kD3)
+    {
+        return std::unexpected(qcx::Error{
+            qcx::ErrorCode::kUnimplemented,
+            "dispersion: form \"d3\" has no coordinate Hessian: its kernel provides the "
+            "zero-damping energy and its first derivative, and the second derivative is a "
+            "kernel-side capability this module does not have (the d4 arm's frozen-charge "
+            "Hessian is implemented)"});
+    }
+
+    // The charge-relaxed derivative is a different second derivative of the
+    // same energy, named rather than answered with the frozen-charge matrix.
+    if (tier == DispersionDerivativeTier::kChargeRelaxed)
+    {
+        return std::unexpected(qcx::Error{
+            qcx::ErrorCode::kUnimplemented,
+            "dispersion: form \"d4\" has no charge-relaxed coordinate Hessian: its C6 and C8 "
+            "coefficients depend on the geometry through the coordination numbers and the EEQ "
+            "partial charges, and that second derivative is not implemented (the frozen-charge "
+            "tier holds those coefficients at the geometry's values and differentiates twice "
+            "through the interatomic distances)"});
+    }
+
+    auto geometry = qcx::grid::ToExcgridGeometry(molecule);
+
+    if (!geometry.has_value())
+    {
+        return std::unexpected(geometry.error());
+    }
+
+    if (auto refusal = D4MoleculeRefusal(molecule); refusal.has_value())
+    {
+        return std::unexpected(std::move(*refusal));
+    }
+
+    const auto* values = std::get_if<D4ParameterValues>(&resolved.parameters);
+
+    if (values == nullptr)
+    {
+        return std::unexpected(
+            MakeError("dispersion: the resolved values do not match form \"d4\""));
+    }
+
+    const excgrid::D4Parameters parameters{values->s6, values->s8, values->a1, values->a2};
+    auto energy = excgrid::D4TwoBodyEnergy(*geometry, parameters);
+
+    if (!energy.has_value())
+    {
+        return std::unexpected(
+            qcx::grid::TranslateExcgridError(energy.error(), "dispersion: the d4 kernel"));
+    }
+
+    // The pairs are the energy's own, in its own order, exactly as the
+    // gradient entry takes them: the Hessian is the second derivative of the
+    // expression EvaluateDispersion returns, with the pair coefficients held.
+    auto pairs = excgrid::D4TwoBodyPairs(*geometry, parameters);
+
+    if (!pairs.has_value())
+    {
+        return std::unexpected(
+            qcx::grid::TranslateExcgridError(pairs.error(), "dispersion: the d4 kernel"));
+    }
+
+    // One pair's term in the energy is -[s6 C6/(r^6 + b^6) + s8 C8/(r^8 +
+    // b^8)] with its coefficients held. With R = R_a - R_b and radial(r) the
+    // first derivative the gradient entry uses,
+    //   g_a = radial R,  g_b = -radial R,
+    // the pair's Hessian blocks are
+    //   H_aa =  radial I + (radial'/r) R (x) R,
+    //   H_ab = H_ba = -H_aa,  H_bb = H_aa.
+    const auto dimension = static_cast<Eigen::Index>(3 * molecule.AtomCount());
+
+    DispersionHessian output;
+    output.energy = *energy;
+    output.hessian = Eigen::MatrixXd::Zero(dimension, dimension);
+
+    for (const excgrid::D4TwoBodyPair& pair : *pairs)
+    {
+        const std::array<double, 3>& first = geometry->atoms[pair.first].position;
+        const std::array<double, 3>& second = geometry->atoms[pair.second].position;
+        const std::array<double, 3> displacement{
+            first[0] - second[0], first[1] - second[1], first[2] - second[2]};
+        const double r =
+            std::sqrt(displacement[0] * displacement[0] + displacement[1] * displacement[1] +
+                      displacement[2] * displacement[2]);
+
+        // A coincident pair is not in the kernel's list; the guard keeps a
+        // malformed list from dividing by zero rather than changing the sum.
+        if (!(r > 0.0))
+        {
+            continue;
+        }
+
+        const double r2 = r * r;
+        const double r3 = r2 * r;
+        const double r5 = r3 * r2;
+        const double r6 = r3 * r3;
+        const double r9 = r6 * r3;
+        const double r13 = r6 * r6 * r;
+        const double radius6 = std::pow(pair.radius, 6.0);
+        const double radius8 = radius6 * pair.radius * pair.radius;
+        const double denominator6 = r6 + radius6;
+        const double denominator8 = r6 * r2 + radius8;
+        const double denominator6Squared = denominator6 * denominator6;
+        const double denominator8Squared = denominator8 * denominator8;
+
+        // The first derivative the gradient entry forms, and its own
+        // derivative with respect to r.
+        const double radial = 6.0 * values->s6 * pair.c6 * (r6 / r2) / denominator6Squared +
+                              8.0 * values->s8 * pair.c8 * r6 / denominator8Squared;
+        const double radialPrime = 6.0 * values->s6 * pair.c6 *
+                                       (4.0 * r3 / denominator6Squared -
+                                        12.0 * r9 / (denominator6Squared * denominator6)) +
+                                   8.0 * values->s8 * pair.c8 *
+                                       (6.0 * r5 / denominator8Squared -
+                                        16.0 * r13 / (denominator8Squared * denominator8));
+
+        const Eigen::Vector3d separation(displacement[0], displacement[1], displacement[2]);
+        const Eigen::Matrix3d block = radial * Eigen::Matrix3d::Identity() +
+                                      (radialPrime / r) * separation * separation.transpose();
+
+        const auto firstIndex = static_cast<Eigen::Index>(3 * pair.first);
+        const auto secondIndex = static_cast<Eigen::Index>(3 * pair.second);
+        output.hessian.block<3, 3>(firstIndex, firstIndex) += block;
+        output.hessian.block<3, 3>(firstIndex, secondIndex) -= block;
+        output.hessian.block<3, 3>(secondIndex, firstIndex) -= block;
+        output.hessian.block<3, 3>(secondIndex, secondIndex) += block;
     }
 
     return output;
