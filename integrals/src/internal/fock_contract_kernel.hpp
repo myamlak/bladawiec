@@ -1,17 +1,19 @@
-// The shared per-quartet Fock-contraction kernel: ONE body,
-// compiled twice - the scalar copy instantiates inside fock_build.cpp (that
-// TU has no /arch flag) and an /arch:AVX2 copy instantiates in
-// fock_contract_simd.cpp, selected at runtime by the cpuid check
+// The shared per-quartet Fock-contraction kernel: ONE body, compiled twice
+// into two out-of-line units - the baseline copy in fock_contract_scalar.cpp,
+// which every build compiles without the AVX2 tier, and an /arch:AVX2 copy in
+// fock_contract_simd.cpp - selected at runtime by the cpuid check
 // (FockAvx2Available - the boys_simd.cpp dispatch shape). The Tag only
 // separates the two compiled copies; the TU's architecture flag is what
-// actually changes the codegen. Both copies must deliver bit-identical
-// output - the A/B tests in fock_build_test.cpp pin the contract, and
-// FockBuildOptions::forceScalarContract exists so the fallback is
-// exercisable on AVX2-capable machines.
+// actually changes the codegen, which is why each copy owns its unit rather
+// than instantiating inside a caller compiled at the build's tier. Both
+// copies must deliver bit-identical output - the A/B tests in
+// fock_build_test.cpp pin the contract, and FockBuildOptions::
+// forceScalarContract exists so the fallback is exercisable on
+// AVX2-capable machines.
 
 #pragma once
 
-#include "qcx/integrals/eri_batch.hpp"
+#include "qcx/integrals/eri_block_layout.hpp"
 #include "qcx/integrals/shell_pairs.hpp"
 
 #include <Eigen/Core>
@@ -503,5 +505,25 @@ void AccumulateBlockAvx2(const double* block,
                          std::size_t pairBra,
                          std::size_t pairKet,
                          const FockContractContext& context);
+
+// The baseline copy of the kernel (fock_contract_scalar.cpp), compiled
+// without the AVX2 tier so a host whose processor has no AVX2 can run it:
+// the entry the dispatcher takes when FockAvx2Available() is false or the
+// caller pinned the scalar contract. Its TU includes no Boys header, so a
+// program assembled from it and the vector tier stays one tier in the
+// library's own registry - the two copies are this template at two flag
+// sets, and the header's contract (bit-identical output) is what the
+// contraction pin and the A/B tests hold.
+void AccumulateBlockScalar(const double* block,
+                           const ShellQuartet& quartet,
+                           std::size_t pairBra,
+                           std::size_t pairKet,
+                           const FockContractContext& context);
+
+// Whether the scalar copy's translation unit was compiled without the AVX2
+// tier: the fact a test asserts to prove the fallback body is the portable
+// one rather than the vector body at a different entry. It is a property of
+// this build's flags, read at compile time.
+bool FockScalarCopyIsBaseline() noexcept;
 
 } // namespace qcx::integrals::internal

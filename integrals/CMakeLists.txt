@@ -247,12 +247,25 @@ set_source_files_properties(${_qcxBoysExt}/src/boys.cpp PROPERTIES SKIP_PRECOMPI
 set_source_files_properties(${_qcxBoysExt}/src/boys_probe.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(${_qcxBoysExt}/src/boys_orders_simd.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
-# The Fock-contraction kernel's AVX2 copy. The kernel body is ONE template
-# (internal/fock_contract_kernel.hpp); the scalar copy instantiates inside
-# fock_build.cpp and this unit compiles the AVX2 copy, entered only after the
-# runtime cpuid check (FockAvx2Available - the boys_simd.cpp dispatch shape,
-# auto-vectorization only, no hand-written intrinsics here). Same PCH skip as
-# the other SIMD units.
+# The Fock-contraction kernel's two copies. The kernel body is ONE template
+# (internal/fock_contract_kernel.hpp) and each copy is its own out-of-line
+# unit: the AVX2 copy here, entered only after the runtime cpuid check
+# (FockAvx2Available - the boys_simd.cpp dispatch shape, auto-vectorization
+# only, no hand-written intrinsics here), and the baseline copy in
+# fock_contract_scalar.cpp, which the dispatcher takes when that check is
+# false or the caller pinned the scalar contract.
+#
+# The baseline copy is the ONE first-party unit an avx2 build compiles
+# without the tier: a host whose processor has no AVX2 has to be able to run
+# the fallback, and until this unit existed the "scalar copy" was the AVX2
+# tier's codegen inside fock_build.cpp, so no build exercised the difference.
+# The per-source options are appended after the directory's tier flags, so
+# the last spelling wins (measured: /arch:AVX2 /arch:SSE2 emits SSE2, not
+# VEX). It also skips the PCH: this module's PCH is qcx/integrals/boys.hpp,
+# and a unit compiled at the baseline tier that includes a Boys header is
+# refused at start-up by the library's tier registry. Both copies are
+# skipped from the PCH for the same group-marker reason as the other SIMD
+# units.
 #
 # The header states "both copies must deliver bit-identical output". The
 # program-wide contraction pin in the root CMakeLists is what holds that: on
@@ -272,6 +285,17 @@ else()
     # the x86-64-only CPU feature probe and is false on this target.
     message(STATUS "qcx-integrals: non-x86-64 target - the Fock contraction AVX2 copy is excluded")
 endif()
+
+# The baseline copy's tier. It is compiled in isa_baseline/, a directory of
+# its own, because it must not inherit this build's tier: a host whose
+# processor has no AVX2 has to run the fallback the dispatcher selects for it,
+# and CMake cannot remove a directory-wide compile option for one source. A
+# subdirectory can - see that directory's CMakeLists.txt - and its objects
+# join this target here. In a baseline configure the tier block added no
+# flags, so the reset subtracts nothing and the unit is baseline by the same
+# rule as every other unit; a non-x86-64 target has no tier at all.
+add_subdirectory(isa_baseline)
+target_sources(qcx-integrals PRIVATE $<TARGET_OBJECTS:qcx-fock-scalar>)
 
 # PCH (mandatory on every target).
 target_precompile_headers(qcx-integrals PRIVATE

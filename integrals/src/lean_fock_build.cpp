@@ -377,8 +377,7 @@ void ContractBlock(const double* block,
         internal::AccumulateBlockAvx2(block, quartet, pairBra, pairKet, context);
     } else
     {
-        internal::AccumulateBlockKernel<internal::AccumulateBlockScalarTag>(
-            block, quartet, pairBra, pairKet, context);
+        internal::AccumulateBlockScalar(block, quartet, pairBra, pairKet, context);
     }
 }
 

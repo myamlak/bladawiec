@@ -849,12 +849,13 @@ struct FockContractor {
     // Contracts one computed quartet block into the Fock matrix (either
     // precision; the fp32 lane casts per element - covered by the
     // certified bound). The kernel body lives in
-    // internal/fock_contract_kernel.hpp - ONE template compiled twice: the
-    // scalar copy instantiates here (this TU carries no /arch flag) and an
-    // /arch:AVX2 copy in fock_contract_simd.cpp, entered only after the
+    // internal/fock_contract_kernel.hpp - ONE template compiled twice into
+    // two out-of-line units: the baseline copy in fock_contract_scalar.cpp,
+    // a TU compiled without the AVX2 tier, and the /arch:AVX2 copy in
+    // fock_contract_simd.cpp. The AVX2 copy is entered only after the
     // runtime cpuid check (FockAvx2Available - the boys_simd.cpp dispatch
-    // shape). forceScalarContract pins the scalar copy even on
-    // an AVX2-capable machine (the fallback test pin); both copies must be
+    // shape); forceScalarContract pins the baseline copy even on an
+    // AVX2-capable machine (the fallback test pin). Both copies must be
     // bit-identical - the A/B tests in fock_build_test.cpp check that.
     void AccumulateBlock(const double* block,
                          const ShellQuartet& quartet,
@@ -885,8 +886,7 @@ struct FockContractor {
             internal::AccumulateBlockAvx2(block, quartet, pairBra, pairKet, context);
         } else
         {
-            internal::AccumulateBlockKernel<internal::AccumulateBlockScalarTag>(
-                block, quartet, pairBra, pairKet, context);
+            internal::AccumulateBlockScalar(block, quartet, pairBra, pairKet, context);
         }
     }
 
