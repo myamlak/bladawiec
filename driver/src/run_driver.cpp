@@ -247,7 +247,7 @@ private:
     void ClosePending() {
         if (_pending.has_value())
         {
-            _rows.push_back(std::move(*_pending));
+            _rows.push_back(*_pending);
             _pending.reset();
         }
     }
@@ -6808,12 +6808,13 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
 
     // The run's one accuracy preset, carried into the assembly. The gradient
     // belongs to the energy the run computed, so its two-electron
-    // representation - the direct Fock builder of the default matrix-free band,
-    // or the dense ERI build when that band is selected - and its
-    // two-electron derivative walk screen at the same preset the SCF did; the
-    // default (kNormal) would silently compute a kLoose run's gradient at a
-    // tighter preset than the reference it differentiates, and the mismatch
-    // shows up as a spurious stationarity refusal at the screening floor.
+    // representation - the automatic policy's dense tensor where the a-priori
+    // estimate fits the admission cap, the matrix-free derivative where it
+    // does not - and its two-electron derivative walk screen at the same
+    // preset the SCF did; the default (kNormal) would silently compute a
+    // kLoose run's gradient at a tighter preset than the reference it
+    // differentiates, and the mismatch shows up as a spurious stationarity
+    // refusal at the screening floor.
     options.eri.accuracy = input.method.accuracy;
 
     // The restricted Kohn-Sham reference's own keys: the functional, the

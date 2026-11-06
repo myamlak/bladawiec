@@ -1,6 +1,7 @@
 #include "qcx/backend/execution_context.hpp"
 
 #include <gtest/gtest.h>
+#include <vector>
 
 // This file runs unchanged against both build modes: the serial stub of a
 // build without MPI support and the real MPI context of a build with it. ctest
@@ -64,7 +65,7 @@ TEST(ExecutionContextTest, DoubleAllReduceSumsOverTheRankCount) {
 
     const auto sum = (*context)->AllReduceSum(local);
     ASSERT_TRUE(sum.has_value()) << sum.error().message;
-    EXPECT_DOUBLE_EQ(*sum, static_cast<double>(size * (size + 1) / 2));
+    EXPECT_DOUBLE_EQ(*sum, static_cast<double>(size) * (size + 1) / 2.0);
 }
 
 TEST(ExecutionContextTest, AllReduceSumsNegativeValues) {
@@ -90,4 +91,35 @@ TEST(ExecutionContextTest, AllReduceOfZeroIsZero) {
     const auto doubleSum = (*context)->AllReduceSum(0.0);
     ASSERT_TRUE(doubleSum.has_value()) << doubleSum.error().message;
     EXPECT_DOUBLE_EQ(*doubleSum, 0.0);
+}
+
+// The dense in-place sum: the reduction a distributed matrix assembly uses.
+// Every element receives the sum over ranks (the value itself in a serial
+// build), and the call accepts an empty buffer.
+TEST(ExecutionContextTest, DenseAllReduceSumsEveryElementInPlace) {
+    const auto context = CreateContext();
+    ASSERT_TRUE(context.has_value()) << context.error().message;
+
+    const int size = (*context)->Size();
+    const double local = static_cast<double>((*context)->Rank() + 1);
+    std::vector<double> values(7, local);
+
+    const auto sum = (*context)->AllReduceSumInPlace(values);
+    ASSERT_TRUE(sum.has_value()) << sum.error().message;
+
+    const double expected = static_cast<double>(size * (size + 1) / 2);
+
+    for (const double value : values)
+    {
+        EXPECT_DOUBLE_EQ(value, expected);
+    }
+}
+
+TEST(ExecutionContextTest, DenseAllReduceAcceptsAnEmptyBuffer) {
+    const auto context = CreateContext();
+    ASSERT_TRUE(context.has_value()) << context.error().message;
+
+    std::vector<double> values;
+
+    EXPECT_TRUE((*context)->AllReduceSumInPlace(values).has_value());
 }

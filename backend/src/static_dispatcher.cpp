@@ -9,9 +9,9 @@
 
 namespace qcx::backend {
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): (count, rank, size) is
-// the published reading of the partition; the two rank numbers are validated
-// against each other below.
+// (count, rank, size) is the published reading of the partition; the two
+// rank numbers are validated against each other below.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 qcx::Result<IndexRange> PartitionRange(std::size_t count, int rank, int size) {
     if (size <= 0)
     {
@@ -46,8 +46,8 @@ qcx::Result<IndexRange> PartitionRange(std::size_t count, int rank, int size) {
     return IndexRange{begin, end};
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the pair is the
-// published (rank, size) reading, validated by PartitionRange.
+// The pair is the published (rank, size) reading, validated by PartitionRange.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 StaticDispatcher::StaticDispatcher(int rank, int size) noexcept : _rank(rank), _size(size) {}
 
 int StaticDispatcher::Rank() const noexcept {
