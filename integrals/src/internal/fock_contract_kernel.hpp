@@ -1,13 +1,15 @@
-// The shared per-quartet Fock-contraction kernel: ONE body,
-// compiled twice - the scalar copy instantiates inside fock_build.cpp (that
-// TU has no /arch flag) and an /arch:AVX2 copy instantiates in
-// fock_contract_simd.cpp, selected at runtime by the cpuid check
+// The shared per-quartet Fock-contraction kernel: ONE body, compiled twice
+// into two out-of-line units - the baseline copy in fock_contract_scalar.cpp,
+// which every build compiles without the AVX2 tier, and an /arch:AVX2 copy in
+// fock_contract_simd.cpp - selected at runtime by the cpuid check
 // (FockAvx2Available - the boys_simd.cpp dispatch shape). The Tag only
 // separates the two compiled copies; the TU's architecture flag is what
-// actually changes the codegen. Both copies must deliver bit-identical
-// output - the A/B tests in fock_build_test.cpp pin the contract, and
-// FockBuildOptions::forceScalarContract exists so the fallback is
-// exercisable on AVX2-capable machines.
+// actually changes the codegen, which is why each copy owns its unit rather
+// than instantiating inside a caller compiled at the build's tier. Both
+// copies must deliver bit-identical output - the A/B tests in
+// fock_build_test.cpp pin the contract, and FockBuildOptions::
+// forceScalarContract exists so the fallback is exercisable on
+// AVX2-capable machines.
 
 #pragma once
 

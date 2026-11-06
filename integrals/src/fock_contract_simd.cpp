@@ -6,8 +6,8 @@
 // (qcx::backend::CpuHasAvx2(), qcx/backend/cpu_features.hpp) AND the build's
 // tier (QcxIsaAvx2Fma, same header) both pass. At QCX_ISA=baseline this TU is
 // the scalar code without a target feature, and the entry is not selected.
-// The scalar copy
-// instantiates inside fock_build.cpp. The dispatch
+// The baseline copy is its own unit, fock_contract_scalar.cpp, compiled
+// without the tier in every build. The dispatch
 // shape mirrors boys_simd.cpp: CPUID + OSXSAVE detection cached in a
 // function-local static, the caller gating on it before the AVX2 path is ever
 // entered - never assume the deployment machine has AVX2 just because the dev
