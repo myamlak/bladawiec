@@ -310,7 +310,7 @@ TEST(PropertyRegistryTest, ElementLimitsNameTheirReason) {
         EXPECT_NE(declaration.elementRefusal, RefusalReason::kNone) << ToString(declaration.kind);
     }
 
-    EXPECT_EQ(DeclarationFor(PropertyKind::kHirshfeld).maxAtomicNumber, 10);
+    EXPECT_EQ(DeclarationFor(PropertyKind::kHirshfeld).maxAtomicNumber, 19);
     EXPECT_EQ(DeclarationFor(PropertyKind::kHirshfeld).elementScope, ElementScope::kMolecule);
     EXPECT_EQ(DeclarationFor(PropertyKind::kHirshfeld).elementRefusal,
               RefusalReason::kHirshfeldSadTableZLimit);

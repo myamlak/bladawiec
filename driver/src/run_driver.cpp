@@ -4136,6 +4136,24 @@ int AtomicGroundStateMultiplicity(int atomicNumber) {
         return 2;
     case 10: // Ne 1S
         return 1;
+    case 11: // Na 2S
+        return 2;
+    case 12: // Mg 1S
+        return 1;
+    case 13: // Al 2P
+        return 2;
+    case 14: // Si 3P
+        return 3;
+    case 15: // P 4S
+        return 4;
+    case 16: // S 3P
+        return 3;
+    case 17: // Cl 2P
+        return 2;
+    case 18: // Ar 1S
+        return 1;
+    case 19: // K 2S
+        return 2;
     default:
         return 0; // not in the v1 table
     }
@@ -4157,7 +4175,7 @@ qcx::Result<std::map<int, qcx::scf::AtomicUhfInputs>> BuildAtomicInputs(
         if (multiplicity == 0)
         {
             return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
-                                       "the SAD atomic-multiplicity table (v1, Z <= 10) does "
+                                       "the SAD atomic-multiplicity table (v1, Z <= 19) does "
                                        "not cover element Z = " +
                                            std::to_string(atom.atomicNumber)));
         }

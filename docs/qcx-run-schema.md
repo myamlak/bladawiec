@@ -255,7 +255,7 @@ type is a parse error). The population/moment block has no switch
 
 | TOML key | Valid values / behavior |
 |---|---|
-| `[properties] hirshfeld` | bool; Hirshfeld stockholder charges. Needs SAD fragment densities; limited to Z <= 10 (see §5) |
+| `[properties] hirshfeld` | bool; Hirshfeld stockholder charges. Needs SAD fragment densities; limited to Z <= 19 (see §5) |
 | `[properties] voronoi` | bool; Voronoi cell charges |
 | `[properties] esp` | string, `"chelpg"` \| `"mk"`; an empty string counts as absent |
 | `[properties] eddb` | bool; EDDB delocalized-bond analysis |
@@ -1215,9 +1215,9 @@ The errors below are what a user actually sees when a limit is tripped.
 
 **Element-count limits:**
 
-- **Hirshfeld and the `sad` guess: Z <= 10.** The promolecular fragment
+- **Hirshfeld and the `sad` guess: Z <= 19.** The promolecular fragment
   densities and the SAD guess come from the same atomic-multiplicity table:
-  `the SAD atomic-multiplicity table (v1, Z <= 10) does not cover element Z = <N>`
+  `the SAD atomic-multiplicity table (v1, Z <= 19) does not cover element Z = <N>`
 - **Nalewajski-Mrozek and NOCV: Z <= 19.** Both use the Aufbau
   shell-degeneracy table:
   `the Nalewajski-Mrozek Aufbau table covers Z = 1..19` /

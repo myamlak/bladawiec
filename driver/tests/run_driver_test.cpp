@@ -4460,10 +4460,10 @@ force_disk_ri = true
     // like the RHF one, and O2UhfExplicitLeanWordWiresTheLeanMember runs
     // it. The rest of this test keeps the combinations that DO refuse.
 
-    // The SAD atomic-multiplicity table stops at Z = 10.
-    const auto sadArgon = RunInputText(R"(
+    // The SAD atomic-multiplicity table stops at Z = 19.
+    const auto sadCalcium = RunInputText(R"(
 [molecule]
-atoms = [["Ar", 0.0, 0.0, 0.0]]
+atoms = [["Ca", 0.0, 0.0, 0.0]]
 [basis]
 orbital = "sto-3g"
 [method]
@@ -4473,8 +4473,8 @@ accuracy = "kNormal"
 [guess]
 type = "sad"
 )");
-    ASSERT_FALSE(sadArgon.has_value());
-    EXPECT_EQ(sadArgon.error().code, qcx::ErrorCode::kUnimplemented);
+    ASSERT_FALSE(sadCalcium.has_value());
+    EXPECT_EQ(sadCalcium.error().code, qcx::ErrorCode::kUnimplemented);
 
     // SAD needs the per-element atomic fragment inputs, which only the UHF
     // path builds in v1 (the guess default wired gwh for RHF; sad stays UHF-only); the
@@ -4495,11 +4495,11 @@ type = "sad"
     EXPECT_EQ(rhfSad.error().code, qcx::ErrorCode::kUnimplemented);
 
     // The hirshfeld promolecular densities need the same SAD
-    // atomic-multiplicity table; a heavier element fails the analysis even
-    // on an RHF run whose own guess is core.
-    const auto hirshfeldArgon = RunInputText(R"(
+    // atomic-multiplicity table; an element past its Z <= 19 range fails
+    // the analysis even on an RHF run whose own guess is core.
+    const auto hirshfeldCalcium = RunInputText(R"(
 [molecule]
-atoms = [["Ar", 0.0, 0.0, 0.0]]
+atoms = [["Ca", 0.0, 0.0, 0.0]]
 [basis]
 orbital = "sto-3g"
 [method]
@@ -4509,19 +4509,19 @@ accuracy = "kNormal"
 [properties]
 hirshfeld = true
 )");
-    ASSERT_FALSE(hirshfeldArgon.has_value());
-    EXPECT_EQ(hirshfeldArgon.error().code, qcx::ErrorCode::kUnimplemented);
+    ASSERT_FALSE(hirshfeldCalcium.has_value());
+    EXPECT_EQ(hirshfeldCalcium.error().code, qcx::ErrorCode::kUnimplemented);
     // The refusal NAMES the missing capability, which is what the coverage
     // record's kHirshfeldSadTableZLimit cell claims: the SAD
-    // atomic-multiplicity table stops at neon, and the element that crossed
+    // atomic-multiplicity table covers Z <= 19, and the element that crossed
     // it is named by its atomic number. A code-only assertion would pass on
     // any other kUnimplemented this run could raise.
     EXPECT_NE(
-        hirshfeldArgon.error().message.find("the SAD atomic-multiplicity table (v1, Z <= 10)"),
+        hirshfeldCalcium.error().message.find("the SAD atomic-multiplicity table (v1, Z <= 19)"),
         std::string::npos)
-        << hirshfeldArgon.error().message;
-    EXPECT_NE(hirshfeldArgon.error().message.find("element Z = 18"), std::string::npos)
-        << hirshfeldArgon.error().message;
+        << hirshfeldCalcium.error().message;
+    EXPECT_NE(hirshfeldCalcium.error().message.find("element Z = 20"), std::string::npos)
+        << hirshfeldCalcium.error().message;
 }
 
 TEST(DriverErrorTest, NalewajskiOnAnElementBeyondTheTableNamesTheTableLimit) {
@@ -8147,6 +8147,100 @@ TEST(DriverPinTest, H2oDirectRhfStage72BlocksPins) {
 // energy is the isolated O atom's (-73.8 hartree, eight electrons), the
 // second the H2 fragment's - the module test's partition {O}, {H2} pins
 // (nocv_test.cpp), which are themselves O-first.
+// The SAD atomic-multiplicity table now covers Z <= 19, so the Hirshfeld
+// analysis runs on chlorine, the first element past the old neon limit.
+// HCl/STO-3G is the cheapest molecule carrying one; the assertions are the
+// two facts the analysis must show on any element: the stockholder charges
+// sum to the molecular charge (zero here, at the driver's 80 x 194 grid) and
+// the more electronegative atom carries the negative charge. No external
+// pin is invented for chlorine: the sum rule and the ordering are the gate.
+TEST(DriverPinTest, HirshfeldRunsOnChlorineBeyondTheOldNeonLimit) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    const char* deck = R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["Cl", 0.0, 0.0, 0.0],
+    ["H", 0.0, 0.0, 2.408],
+]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rhf"
+fock_builder = "direct"
+accuracy = "kTight"
+
+[properties]
+hirshfeld = true
+)";
+
+    auto result = RunInputText(deck);
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+
+    // The canonical atom order is [H, Cl] (Molecule renumbers by Z), so the
+    // first value is hydrogen's charge and the second chlorine's.
+    const auto hirshfeld = JsonNumberArray(*result, "\"hirshfeld\":");
+    ASSERT_TRUE(hirshfeld.has_value());
+    ASSERT_EQ(hirshfeld->values.size(), 2u);
+    EXPECT_GT(hirshfeld->values[0], 0.0) << "hydrogen should carry the positive charge";
+    EXPECT_LT(hirshfeld->values[1], 0.0) << "chlorine should carry the negative charge";
+
+    // The stockholder partition is exact in the partition itself, so the
+    // charges sum to the molecular charge up to the grid's integration error.
+    const double total = hirshfeld->values[0] + hirshfeld->values[1];
+    EXPECT_NEAR(total, 0.0, 1e-3) << "sum of Hirshfeld charges should be the molecular charge";
+}
+
+// The same table is the SAD guess's, so a per-spin run on chlorine can be
+// seeded from isolated-atom fragments. The check is the run's own: it must
+// converge, and the record's guess block must say the SAD start ran.
+TEST(DriverPinTest, SadGuessRunsOnChlorineBeyondTheOldNeonLimit) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    const char* deck = R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["Cl", 0.0, 0.0, 0.0],
+    ["H", 0.0, 0.0, 2.408],
+]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "uhf"
+fock_builder = "direct"
+accuracy = "kNormal"
+
+[scf]
+energy_tolerance = 1e-8
+density_tolerance = 1e-6
+
+[guess]
+type = "sad"
+)";
+
+    auto result = RunInputText(deck);
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+    EXPECT_NE(result->find("\"converged\": true"), std::string::npos);
+
+    const auto guessBlock = GuessBlock(*result);
+    ASSERT_TRUE(guessBlock.has_value());
+    EXPECT_NE(guessBlock->find("\"ran\": \"sad\""), std::string::npos) << *guessBlock;
+}
+
 TEST(DriverPinTest, H2oDirectRhfNocvPartitionPins) {
     if (qcx::testing::IsFastOnlyMode())
     {

@@ -44,7 +44,7 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .evidence = "FillProperties; both lanes, every method",
     },
     // Hirshfeld's promolecular densities are the SAD fragment densities, whose
-    // multiplicity table stops at neon.
+    // multiplicity table covers the elements up to potassium (Z <= 19).
     {
         .kind = PropertyKind::kHirshfeld,
         .name = "hirshfeld",
@@ -55,7 +55,7 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
                      RefusalReason::kNone,
                      RefusalReason::kNone},
         .refusesWhenFunctionalNamed = false,
-        .maxAtomicNumber = 10,
+        .maxAtomicNumber = 19,
         .elementRefusal = RefusalReason::kHirshfeldSadTableZLimit,
         .evidence = "BuildChargesBlock with BuildAtomicInputs; "
                     "test DriverErrorTest.RejectsUnwiredCombinations",

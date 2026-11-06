@@ -705,7 +705,7 @@ struct RunPropertiesInput {
     /// Hirshfeld (stockholder) charges [Hirshfeld1977]. Requires the
     /// promolecular SAD fragment densities, so the driver builds the SAD
     /// guess on demand; the v1 SAD atomic-multiplicity table limits the
-    /// analysis to molecules with Z <= 10 (kUnimplemented beyond).
+    /// analysis to molecules with Z <= 19 (kUnimplemented beyond).
     bool hirshfeld = false;
     /// Voronoi (nearest-atom cell) charges [FonsecaGuerra2004].
     bool voronoi = false;
@@ -799,7 +799,7 @@ struct RunPropertiesInput {
 /// The initial-guess selection. kGwh serves RHF and UHF (the RHF gwh
 /// branch seeds the initial density; ValidateCombination accepts core and
 /// gwh for RHF); kSad is UHF-only and needs the per-element fragment runs
-/// the driver implements with its atomic-multiplicity table (Z <= 10);
+/// the driver implements with its atomic-multiplicity table (Z <= 19);
 /// kRestart is RHF-only in v1 and seeds from a last-iterate
 /// checkpoint file (guessRestartPath), the run-restart read path.
 /// \ingroup qcx-io
