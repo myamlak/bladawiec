@@ -185,6 +185,9 @@ struct SymmetryMultipletRecord {
 /// them, is reported rather than left for a reader to notice. It is a report,
 /// never a refusal - the SCF's numbers are untouched.
 struct SymmetryDegeneracyReport {
+    /// The verdict the recorded sets support: kPassed when every mandated set
+    /// is intact, kFailed when at least one is broken, kNoMultiplets when the
+    /// group's labels mandated no multi-dimensional set at all.
     SymmetryDegeneracyVerdict verdict = SymmetryDegeneracyVerdict::kNoMultiplets;
     /// The energy-clustering cut the check ran under, Hartree, so the
     /// verdict is readable without the source (the symmetry-blocking
