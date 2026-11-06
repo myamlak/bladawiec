@@ -59,7 +59,7 @@ inline std::size_t EriBlockIndex(std::size_t fi,
                                  std::size_t fk,
                                  std::size_t fl,
                                  std::size_t nI,
-                                 std::size_t nJ,
+                                 [[maybe_unused]] std::size_t nJ,
                                  std::size_t nK,
                                  std::size_t nL) noexcept {
     return (EriBlockRow(fi, fj, nI) * (nK * nL)) + EriBlockCol(fk, fl, nK);
