@@ -48,7 +48,7 @@ FIRST_PARTY_PREFIXES = tuple(ORDER) + ("tests", "benchmarks", "external/boys")
 # dispatcher selects for it. In an avx2 build each of these is checked as a
 # baseline unit - no tier flag, and the contraction pin - rather than as a
 # member of the tier; every other first-party command must carry the tier.
-BASELINE_UNITS = ("integrals/src/fock_contract_scalar.cpp",)
+BASELINE_UNITS = ("integrals/isa_baseline/fock_contract_scalar.cpp",)
 
 
 def compiler_of(command: str) -> str:

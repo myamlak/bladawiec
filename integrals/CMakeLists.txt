@@ -124,7 +124,6 @@ add_library(qcx-integrals ${QCX_MODULE_LIBRARY_TYPE}
   src/eri_dense.cpp
   src/eri_gradient.cpp
   src/fock_build.cpp
-  src/fock_contract_scalar.cpp
   src/fock_contract_simd.cpp
   src/lean_fock_build.cpp
   src/incremental_fock.cpp
@@ -287,22 +286,16 @@ else()
     message(STATUS "qcx-integrals: non-x86-64 target - the Fock contraction AVX2 copy is excluded")
 endif()
 
-# The baseline copy's tier. In an avx2 build this one unit overrides the
-# directory's tier flags with the x86-64 baseline's, so the fallback body is
-# code a processor without AVX2 can run; a baseline build already compiles
-# every unit without the tier, and a non-x86-64 target has no tier to remove.
-# The source options are appended after the directory's flags, so the last
-# spelling wins (measured on MSVC: /arch:AVX2 /arch:SSE2 emits SSE2, not VEX).
-set_source_files_properties(src/fock_contract_scalar.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-if (QCX_ARCH_X86_64 AND QCX_ISA STREQUAL "avx2")
-    if (MSVC)
-        set_source_files_properties(src/fock_contract_scalar.cpp
-            PROPERTIES COMPILE_OPTIONS "/arch:SSE2")
-    else()
-        set_source_files_properties(src/fock_contract_scalar.cpp
-            PROPERTIES COMPILE_OPTIONS "-mno-avx2;-mno-avx;-mno-fma;-mno-f16c")
-    endif()
-endif()
+# The baseline copy's tier. It is compiled in isa_baseline/, a directory of
+# its own, because it must not inherit this build's tier: a host whose
+# processor has no AVX2 has to run the fallback the dispatcher selects for it,
+# and CMake cannot remove a directory-wide compile option for one source. A
+# subdirectory can - see that directory's CMakeLists.txt - and its objects
+# join this target here. In a baseline configure the tier block added no
+# flags, so the reset subtracts nothing and the unit is baseline by the same
+# rule as every other unit; a non-x86-64 target has no tier at all.
+add_subdirectory(isa_baseline)
+target_sources(qcx-integrals PRIVATE $<TARGET_OBJECTS:qcx-fock-scalar>)
 
 # PCH (mandatory on every target).
 target_precompile_headers(qcx-integrals PRIVATE
