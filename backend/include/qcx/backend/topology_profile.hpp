@@ -8,11 +8,10 @@
 /// per node with VRAM each, and the interconnect class.
 ///
 /// Staged reality (explicit, per the design): only the single-node class is
-/// implemented. Nothing distributes a Fock build across nodes today and
-/// multi-GPU has no plan yet, so nodeCount is always 1 and interconnect is
-/// always kUnknown; the
-/// struct lands early so the cost table never needs reshaping when the
-/// paths arrive.
+/// implemented. Nothing distributes a Fock build across nodes today, multi-GPU
+/// has no plan yet, and this profile is a node-local probe, so nodeCount is
+/// always 1 and interconnect is always kUnknown; the struct lands early so the
+/// cost table never needs reshaping when the paths arrive.
 
 #include "qcx/backend/cpu_topology.hpp"
 #include "qcx/backend/memory_topology.hpp"
@@ -27,7 +26,7 @@ namespace qcx::backend {
 /// reports "not selectable" through the cost table's stub columns.
 /// \ingroup qcx-backend
 enum class InterconnectClass {
-    kUnknown, ///< No interconnect probe exists yet (MPI is not linked).
+    kUnknown, ///< No interconnect probe exists yet.
 };
 
 /// One CUDA device of this node: its id and its device memory, probed
@@ -43,8 +42,9 @@ struct DeviceProfile {
 /// The node's topology bundle.
 /// \ingroup qcx-backend
 struct TopologyProfile {
-    /// The node count: the MPI world size when a distributed build is
-    /// linked, else 1. Always 1 today - nothing distributes a Fock build yet.
+    /// The node count: the execution context's size when a probe consults it,
+    /// else 1. Always 1 today - this profile is node-local and nothing
+    /// distributes a Fock build yet.
     std::size_t nodeCount = 1;
     /// This node's CPU topology (the P/E split of DetectCpuTopology).
     CpuTopology cpu;
@@ -52,7 +52,8 @@ struct TopologyProfile {
     HostMemoryInfo hostMemory;
     /// This node's CUDA devices with VRAM each; empty = no device tier.
     std::vector<DeviceProfile> devices;
-    /// The interconnect class between nodes; kUnknown until MPI lands.
+    /// The interconnect class between nodes; kUnknown until an interconnect
+    /// probe lands.
     InterconnectClass interconnect = InterconnectClass::kUnknown;
 };
 

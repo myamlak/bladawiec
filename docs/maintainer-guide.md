@@ -94,6 +94,7 @@ The options that matter when configuring:
 | `QCX_BUILD_TESTS` | `ON` | builds the module test targets |
 | `QCX_ENABLE_IO` | `ON` | HDF5-backed storage and checkpointing |
 | `QCX_ENABLE_CUDA` | `OFF` | the CUDA backend |
+| `QCX_ENABLE_MPI` | `OFF` | the MPI-backed execution context and static dispatcher; `OFF` compiles the same interface as a serial stub (rank 0, size 1). `ON` requires an MPI implementation and registers the two-rank `qcx-mpi-smoke` ctest case |
 | `QCX_ASAN` | `OFF` | AddressSanitizer (MSVC only) |
 | `QCX_BUILD_BENCHMARKS` | `OFF` | the scaling benchmarks, local-only |
 | `QCX_ENABLE_LARGE_TESTS` | `OFF` | registers the long-running test targets (see §3) |

@@ -117,6 +117,14 @@ ALLOWED_TOKENS = frozenset({
     # naming: the backend pins the runtime's thread maximum through
     # omp_set_num_threads and reads it back through omp_get_max_threads.
     "omp_get_max_threads", "omp_set_num_threads",
+    # The MPI C API (mpi.h), the execution context's backend: library entry
+    # points and constants, not project naming.
+    "MPI_Allreduce", "MPI_Barrier", "MPI_Comm", "MPI_Comm_rank", "MPI_Comm_size",
+    "MPI_COMM_NULL", "MPI_COMM_WORLD", "MPI_DOUBLE", "MPI_Error_string",
+    "MPI_Finalize", "MPI_Get_library_version", "MPI_Get_processor_name",
+    "MPI_Init_thread", "MPI_INT", "MPI_MAX_ERROR_STRING",
+    "MPI_MAX_LIBRARY_VERSION_STRING", "MPI_MAX_PROCESSOR_NAME", "MPI_MIN",
+    "MPI_SUM", "MPI_SUCCESS", "MPI_THREAD_FUNNELED",
     "parse_error",
     "BOYS_MAX_ORDER", "BOYS_SUCCESS", "BOYS_ERROR_INVALID_ARGUMENT",
     "BOYS_ERROR_UNSUPPORTED_MULTIPLIER",

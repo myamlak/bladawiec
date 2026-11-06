@@ -55,9 +55,11 @@ endif()
 
 add_library(qcx-backend ${QCX_MODULE_LIBRARY_TYPE}
   src/cpu_backend.cpp
+  src/execution_context.cpp
   src/gpu_compute_profile.cpp
   src/host_compute_profile.cpp
   src/host_compute_profile_simd.cpp
+  src/static_dispatcher.cpp
   src/topology_profile.cpp
   ${_qcxCpuTopologySource}
   ${_qcxMemoryTopologySource}
@@ -67,6 +69,14 @@ target_compile_features(qcx-backend PUBLIC cxx_std_23)
 target_link_libraries(qcx-backend PUBLIC qcx-core OpenMP::OpenMP_CXX stdexec)
 target_precompile_headers(qcx-backend PRIVATE
     <qcx/backend/cpu_backend.hpp>)
+
+# MPI is the execution context's backend. The public header carries no MPI
+# type, so the link is PRIVATE; the definition tells a consumer which body the
+# library compiled (the stub in an OFF build).
+if (QCX_ENABLE_MPI)
+    target_link_libraries(qcx-backend PRIVATE MPI::MPI_CXX)
+    target_compile_definitions(qcx-backend PUBLIC QcxHasMpi=1)
+endif()
 
 # The host compute-profile probe's AVX2 lane carries the /arch:AVX2 flag on its
 # own TU only in the shipped QCX_ISA=avx2 configuration, and that TU skips the
@@ -121,9 +131,11 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-backend-tests
       tests/backend_test.cpp
       tests/cpu_topology_test.cpp
+      tests/execution_context_test.cpp
       tests/gpu_compute_profile_test.cpp
       tests/host_compute_profile_test.cpp
       tests/memory_topology_test.cpp
+      tests/static_dispatcher_test.cpp
       tests/topology_profile_test.cpp)
     target_link_libraries(qcx-backend-tests PRIVATE ${QCX_LINK_backend} gtest gtest_main)
     target_precompile_headers(qcx-backend-tests PRIVATE
@@ -165,4 +177,17 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         qcx_apply_asan_runtime(qcx-backend-cuda-tests)
         gtest_discover_tests(qcx-backend-cuda-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     endif()
+endif()
+
+# The MPI smoke test: the bare MPI C interface, no qcx target and no gtest. It
+# checks the installation the execution context calls, so a failure is the MPI
+# runtime's. The launcher supplies two ranks and its exit code is the verdict.
+if (QCX_BUILD_TESTS AND QCX_ENABLE_MPI)
+    add_executable(qcx-mpi-smoke tests/mpi_smoke_test.cpp)
+    target_link_libraries(qcx-mpi-smoke PRIVATE MPI::MPI_CXX)
+
+    add_test(NAME qcx-mpi-smoke
+        COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:qcx-mpi-smoke> ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(qcx-mpi-smoke PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
 endif()

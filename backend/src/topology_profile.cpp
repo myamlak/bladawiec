@@ -29,8 +29,8 @@ TopologyProfile DetectTopologyProfile(bool includeDevices) noexcept {
         profile.devices = DetectDevices();
     }
 
-    // nodeCount and interconnect keep their single-node defaults - nothing
-    // distributes a build across nodes today and nothing links it.
+    // nodeCount and interconnect keep their single-node defaults - the probe
+    // is node-local and nothing distributes a build across nodes today.
     return profile;
 }
 

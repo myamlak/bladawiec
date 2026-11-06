@@ -145,6 +145,16 @@ if (QCX_ENABLE_CUDA)
     endif()
 endif()
 
+# MPI backs the execution context and the work partition built on it. OFF
+# compiles the same interface as a serial stub, so every existing configuration
+# is unchanged; ON requires an MPI implementation and uses the imported targets
+# FindMPI resolves, never a compiler wrapper script.
+option(QCX_ENABLE_MPI "Build the MPI-backed execution context (requires an MPI implementation)" OFF)
+
+if (QCX_ENABLE_MPI)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+endif()
+
 # Dependency resolution. HDF5 is a compiled
 # dependency, so it sits behind an option: the CI Windows job configures
 # without it (no vcpkg support there, and hdf5 in CI would burn 2x-billed
