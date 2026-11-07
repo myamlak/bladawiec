@@ -369,7 +369,6 @@ std::size_t FiniteGroupOrder(PointGroupName group) {
         return 1;
     case PointGroupName::kCi:
     case PointGroupName::kCs:
-        return 2;
     case PointGroupName::kC2:
         return 2;
     case PointGroupName::kC3:

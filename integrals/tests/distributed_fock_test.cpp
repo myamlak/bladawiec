@@ -321,7 +321,7 @@ TEST(DistributedFockTest, DistributedFp64MatchesTheSerialBuilder) {
     // The figures this run's report quotes.
     std::cout << "rank " << context->Rank() << "/" << context->Size()
               << ": H2O/STO-3G fp64 distributed-vs-serial max|dF| = " << delta
-              << " (tolerance 1e-12)" << std::endl;
+              << " (tolerance 1e-12)" << '\n';
     EXPECT_LE(delta, 1e-12);
 }
 
@@ -399,7 +399,7 @@ TEST(DistributedFockTest, DistributedCertifiedLaneAgreesWithinTheCertifiedBound)
               << ", |bound difference| = " << std::abs(distributedBound - serialBound)
               << ", distributed-vs-serial max|dF| = " << crossDelta << " (tolerance "
               << crossTolerance << "), distributed-vs-fp64 max|dF| = " << boundDelta
-              << " (tolerance " << distributedBound * 1.001 + 1e-14 << ")" << std::endl;
+              << " (tolerance " << distributedBound * 1.001 + 1e-14 << ")" << '\n';
 
     EXPECT_LE(crossDelta, crossTolerance);
 
@@ -477,7 +477,7 @@ TEST(DistributedFockTest, DistributedStrongFormMatchesTheSerialBuilder) {
               << " (distributed), classBlockContractCalls = " << serialStats.classBlockContractCalls
               << " (serial) / " << distributedStats.classBlockContractCalls
               << " (this rank), distributed-vs-serial max|dF| = " << strongDelta
-              << " (tolerance 1e-12)" << std::endl;
+              << " (tolerance 1e-12)" << '\n';
     EXPECT_LE(strongDelta, 1e-12);
 }
 
