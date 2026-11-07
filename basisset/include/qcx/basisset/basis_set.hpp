@@ -8,6 +8,10 @@
 #include <string_view>
 #include <vector>
 
+namespace qcx::molecule {
+class Molecule;
+}
+
 namespace qcx::basisset {
 
 /// \defgroup qcx-basisset Basisset module
@@ -34,14 +38,52 @@ struct ElementBasis {
     std::vector<Shell> shells; ///< In file order.
 };
 
-/// Effective-core-potential stub: which core electrons an ECP replaces.
+/// One Gaussian radial term of an ECP channel: c r^n exp(-zeta r^2).
 ///
-/// Only the element and the core-electron count are captured; the radial
-/// terms are ignored until the integral machinery can consume them.
+/// The radial coordinate r is measured from the ECP centre. The corpus stores
+/// n = 2 throughout; the parser keeps the file's integer n unchanged so a term
+/// of another power survives a round trip.
+/// \ingroup qcx-basisset
+struct EcpTerm {
+    int power; ///< n, the integer power of r.
+    double exponent; ///< zeta, the positive Gaussian exponent.
+    double coefficient; ///< c, the term coefficient.
+};
+
+/// The angular-momentum value EcpChannel uses for the local (`ul`) channel.
+/// \ingroup qcx-basisset
+inline constexpr int kEcpLocalChannel = -1;
+
+/// One angular channel of an ECP, including the local channel.
+///
+/// The local channel is the `ul` block of the NWChem text; the projectors are
+/// the S, P, D, F, ... blocks. The terms are kept in file order.
+/// \ingroup qcx-basisset
+struct EcpChannel {
+    int angularMomentum; ///< l, or kEcpLocalChannel for the local `ul` channel.
+    std::vector<EcpTerm> terms; ///< In file order.
+};
+
+/// An effective-core potential: the core it replaces and its radial channels.
+///
+/// The local channel is the Gaussian expansion
+///
+///     V_loc(r) = sum_k c_k r^n_k exp(-zeta_k r^2);
+///
+/// each projector channel carries its own expansion. The channels and their
+/// terms are kept in file order, so the file's term counts and order survive
+/// the parse. A file that declared no channels (a bare `SYMBOL nelec N`
+/// block) parses to an empty channel list.
 /// \ingroup qcx-basisset
 struct EcpDefinition {
     int atomicNumber; ///< Z of the element the ECP replaces.
     int coreElectronCount; ///< Electrons removed into the core.
+    std::vector<EcpChannel> channels; ///< In file order; empty when none were declared.
+
+    /// The channel for one angular momentum, or nullptr when it is absent.
+    /// \param angularMomentum l, or kEcpLocalChannel for the local channel.
+    /// \returns The channel, or nullptr when the ECP has no such channel.
+    const EcpChannel* FindChannel(int angularMomentum) const noexcept;
 };
 
 /// A parsed basis set: one ElementBasis per element, ordered by Z.
@@ -64,7 +106,7 @@ public:
         return _elements;
     }
 
-    /// The ECP stubs, ascending Z.
+    /// The ECP definitions, ascending Z.
     /// \returns The ECP list.
     const std::vector<EcpDefinition>& Ecps() const noexcept {
         return _ecps;
@@ -94,6 +136,25 @@ private:
     std::vector<EcpDefinition> _ecps;
 };
 
+/// Number of electrons an effective-core-potential treatment leaves in the
+/// valence space.
+///
+/// Sums (Z - core) over the molecule's atoms and subtracts the molecular
+/// charge. The core is the ECP core-electron count of the atom's element in
+/// \p basis; an element the basis describes all-electron has no ECP entry and
+/// contributes all Z electrons. A basis with no ECPs therefore returns the
+/// same count as Molecule::ElectronCount(). The count is basis-dependent: the
+/// same element is all-electron in one basis and core-replaced in another.
+/// \param molecule The molecule.
+/// \param basis The basis set; its ECP entries decide each atom's core.
+/// \returns The valence electron count, or an Error (kInvalidArgument) naming
+///          the element when an atom is described neither by an orbital basis
+///          entry nor by an ECP, or when an ECP's core count is not smaller
+///          than Z.
+/// \ingroup qcx-basisset
+qcx::Result<int> ValenceElectronCount(const qcx::molecule::Molecule& molecule,
+                                      const BasisSet& basis);
+
 /// Parses NWChem-format basis text into a new BasisSet.
 ///
 /// Strict grammar: `BASIS "ao basis" [SPHERICAL|CARTESIAN] PRINT`, then one
@@ -101,11 +162,13 @@ private:
 /// one primitive per line - two columns for pure shells (exponent,
 /// coefficient), three for SP (exponent, s-coefficient, p-coefficient; an SP
 /// shell flattens to two shells whose exponents and coefficients are copied,
-/// not shared). ECP blocks
-/// (`SYMBOL nelec N` after `ECP`) fill the EcpDefinition stubs. `END`
-/// terminates the block. Blank lines and lines starting with '#' or '!' are
-/// ignored. Unreadable input is kIOError; every grammar/content violation is
-/// kInvalidArgument with the offending line number.
+/// not shared). An ECP block (`ECP`, then one `SYMBOL nelec N` line per
+/// element and one `SYMBOL ul|S|P|D|F|G|H|I` header per channel, each channel
+/// followed by `n zeta c` term lines) fills one EcpDefinition per element,
+/// channels and terms in file order. `END` terminates the block. Blank lines
+/// and lines starting with '#' or '!' are ignored. Unreadable input is
+/// kIOError; every grammar/content violation is kInvalidArgument with the
+/// offending line number.
 ///
 /// Every spherical-shell contraction is renormalized to unit norm on parse
 /// (as all QC codes do): the norm is measured under the module's convention -

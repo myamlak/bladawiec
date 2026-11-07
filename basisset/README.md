@@ -22,13 +22,17 @@ summary, not the source of truth.
 - `basisset/include/qcx/basisset/basis_set.hpp`
 - `BasisSet` — the parsed basis set (normalized per primitive).
 - `Shell` — one contraction row of one angular-momentum class.
-- `ElementBasis` — per-element shell/ECP collections.
-- `EcpDefinition` — effective-core-potential entries.
+- `ElementBasis` — per-element shell collections.
+- `EcpDefinition` — effective-core-potential entries, with the radial channels
+  (`EcpChannel`, `EcpTerm`) in file order.
+- `ValenceElectronCount` — the basis-dependent electron count,
+  sum(Z - core) - charge, over a molecule and a parsed basis.
 
 ## Rationale pointers
 
 - The module owns data, not algorithms: it parses and serves the vendored
-  corpus and computes nothing.
+  corpus. The only computation is `ValenceElectronCount`, a sum over the
+  parsed core counts; no integrals or energies live here.
 - Exactly one parser family is supported. Anything that would add a second
   input format adds a second source of truth for the same numbers.
 - Aux-basis family auto-selection is a consumer concern, not a basisset one,

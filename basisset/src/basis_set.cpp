@@ -2,6 +2,7 @@
 
 #include "qcx/backend/cpu_backend.hpp"
 #include "qcx/molecule/elements.hpp"
+#include "qcx/molecule/molecule.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -212,6 +213,25 @@ qcx::Result<int> ParseInt(const std::string& token, std::size_t lineNumber, cons
     return value;
 }
 
+// Maps an ECP channel token to its angular momentum: `ul` is the local
+// channel, otherwise the shell letters S..I give l = 0..6.
+qcx::Result<int> ParseEcpChannelType(const std::string& token, std::size_t lineNumber) {
+    if (token == "ul")
+    {
+        return kEcpLocalChannel;
+    }
+
+    const std::string names = "SPDFGHI";
+    const auto position = names.find(token);
+
+    if (token.size() != 1 || position == std::string::npos || position > kMaxShellAngularMomentum)
+    {
+        return std::unexpected(MakeError(lineNumber, "unknown ECP channel type '" + token + "'"));
+    }
+
+    return static_cast<int>(position);
+}
+
 // Maps a shell-type token to angular momentum; SP maps to both s and p.
 qcx::Result<std::vector<int>> ParseShellType(const std::string& token, std::size_t lineNumber) {
     if (token == "SP")
@@ -254,6 +274,69 @@ const ElementBasis* BasisSet::Find(std::string_view symbol) const noexcept {
     }
 
     return nullptr;
+}
+
+const EcpChannel* EcpDefinition::FindChannel(int angularMomentum) const noexcept {
+    for (const EcpChannel& channel : channels)
+    {
+        if (channel.angularMomentum == angularMomentum)
+        {
+            return &channel;
+        }
+    }
+
+    return nullptr;
+}
+
+qcx::Result<int> ValenceElectronCount(const qcx::molecule::Molecule& molecule,
+                                      const BasisSet& basis) {
+    int count = -molecule.Charge();
+
+    for (const qcx::molecule::Atom& atom : molecule.Atoms())
+    {
+        const EcpDefinition* ecp = nullptr;
+
+        for (const EcpDefinition& candidate : basis.Ecps())
+        {
+            if (candidate.atomicNumber == atom.atomicNumber)
+            {
+                ecp = &candidate;
+                break;
+            }
+        }
+
+        if (ecp == nullptr)
+        {
+            // No ECP entry: the element is described all-electron in this
+            // basis, so every electron stays. An atom the basis cannot
+            // describe at all has no defensible count and is refused.
+            if (basis.Find(atom.atomicNumber) == nullptr)
+            {
+                return std::unexpected(qcx::Error{
+                    qcx::ErrorCode::kInvalidArgument,
+                    "basis has no entry for atom '" + atom.symbol + "' (Z = " +
+                        std::to_string(atom.atomicNumber) + "); cannot count its electrons"});
+            }
+
+            count += atom.atomicNumber;
+            continue;
+        }
+
+        // A core that is not smaller than Z would leave a non-positive
+        // valence count; the count would be a data artefact, not a number.
+        if (ecp->coreElectronCount >= atom.atomicNumber)
+        {
+            return std::unexpected(qcx::Error{
+                qcx::ErrorCode::kInvalidArgument,
+                "ECP for '" + atom.symbol + "' (Z = " + std::to_string(atom.atomicNumber) +
+                    ") replaces " + std::to_string(ecp->coreElectronCount) +
+                    " electrons; the core must be smaller than Z"});
+        }
+
+        count += atom.atomicNumber - ecp->coreElectronCount;
+    }
+
+    return count;
 }
 
 qcx::Result<void> BasisSet::Merge(const BasisSet& other) {
@@ -362,12 +445,12 @@ qcx::Result<void> BasisSet::AppendNwchemText(std::string_view text) {
     }
 
     // Body: element lines (SYMBOL SHLTYPE or SYMBOL nelec N), primitive
-    // lines (2 or 3 columns), and an optional ECP block whose radial terms
-    // are skipped (only the nelec stubs are kept); END terminates.
+    // lines (2 or 3 columns), and an optional ECP block (nelec lines,
+    // channel headers, and n/zeta/c term lines); END terminates.
     enum class State : std::uint8_t {
         kExpectBlockStart, // Element header, ECP, or END.
         kExpectPrimitive, // Inside a shell.
-        kInEcp, // Inside the ECP block; radial terms ignored.
+        kInEcp, // Inside the ECP block: nelec, channel, and term lines.
         kAfterEnd, // Orbital basis closed; only an ECP block may follow.
         kDone, // Everything closed; only EOF may follow.
     };
@@ -375,6 +458,31 @@ qcx::Result<void> BasisSet::AppendNwchemText(std::string_view text) {
     ElementBasis* element = nullptr;
     Shell* shells[2] = {nullptr, nullptr};
     int activeShells = 0;
+
+    // ECP block state: the entry receiving channels and the channel receiving
+    // terms. Both are indices because blockEcps grows during the parse. A
+    // channel may only extend an ECP declared in this block, so
+    // preExistingEcpCount is the floor.
+    const std::size_t preExistingEcpCount = blockEcps.size();
+    std::size_t activeEcpIndex = 0;
+    std::size_t activeChannelIndex = 0;
+    bool hasActiveChannel = false;
+    std::size_t activeChannelLine = 0;
+    std::string activeChannelName;
+
+    // A declared channel must carry at least one term; checked whenever the
+    // channel closes, with the header's line number in the message.
+    const auto closeActiveChannel = [&]() -> qcx::Result<void> {
+        if (hasActiveChannel &&
+            blockEcps[activeEcpIndex].channels[activeChannelIndex].terms.empty())
+        {
+            return std::unexpected(MakeError(
+                activeChannelLine, "ECP channel '" + activeChannelName + "' has no terms"));
+        }
+
+        hasActiveChannel = false;
+        return {};
+    };
 
     for (std::size_t i = 1; i < lines.size(); ++i)
     {
@@ -399,6 +507,13 @@ qcx::Result<void> BasisSet::AppendNwchemText(std::string_view text) {
 
             if (state == State::kInEcp)
             {
+                const auto closed = closeActiveChannel();
+
+                if (!closed.has_value())
+                {
+                    return std::unexpected(closed.error());
+                }
+
                 state = State::kDone;
                 continue;
             }
@@ -429,59 +544,182 @@ qcx::Result<void> BasisSet::AppendNwchemText(std::string_view text) {
             continue;
         }
 
+        // A numeric first token is a primitive line inside a shell or an ECP
+        // term inside a channel, depending on the state.
+        const bool looksNumeric = std::isdigit(static_cast<unsigned char>(firstToken[0])) ||
+                                  firstToken[0] == '-' || firstToken[0] == '+' ||
+                                  firstToken[0] == '.';
+
         if (state == State::kInEcp)
         {
-            // Only SYMBOL nelec N lines are consumed; radial terms and the
-            // per-shell headers of the ECP are ignored (populated once the
-            // integral machinery consumes them).
+            // The block carries one `SYMBOL nelec N` line per element, then
+            // one `SYMBOL ul|S|P|D|F|G|H|I` header per channel, each followed
+            // by `n zeta c` term lines. Channels and terms keep file order.
+            if (looksNumeric)
+            {
+                if (!hasActiveChannel)
+                {
+                    return std::unexpected(
+                        MakeError(line.number, "ECP term line outside a channel"));
+                }
+
+                std::vector<std::string> tokens{firstToken};
+                std::string token;
+
+                while (stream >> token)
+                {
+                    tokens.push_back(token);
+                }
+
+                if (tokens.size() != 3)
+                {
+                    return std::unexpected(
+                        MakeError(line.number, "ECP term line needs exactly three columns"));
+                }
+
+                const auto power = ParseInt(tokens[0], line.number, "ECP term power");
+
+                if (!power.has_value())
+                {
+                    return std::unexpected(power.error());
+                }
+
+                const auto exponent = ParseDouble(tokens[1], line.number, "ECP term exponent");
+
+                if (!exponent.has_value())
+                {
+                    return std::unexpected(exponent.error());
+                }
+
+                if (*exponent <= 0.0)
+                {
+                    return std::unexpected(
+                        MakeError(line.number, "ECP term exponent must be positive"));
+                }
+
+                const auto coefficient =
+                    ParseDouble(tokens[2], line.number, "ECP term coefficient");
+
+                if (!coefficient.has_value())
+                {
+                    return std::unexpected(coefficient.error());
+                }
+
+                blockEcps[activeEcpIndex].channels[activeChannelIndex].terms.push_back(
+                    EcpTerm{*power, *exponent, *coefficient});
+                continue;
+            }
+
             const auto* ecpElement = qcx::molecule::FindElement(firstToken);
 
-            if (ecpElement != nullptr)
+            if (ecpElement == nullptr)
             {
-                std::string marker;
-                stream >> marker;
+                return std::unexpected(MakeError(
+                    line.number, "unknown element symbol '" + firstToken + "' in ECP block"));
+            }
 
-                if (marker == kEcpMarker)
+            std::string marker;
+            stream >> marker;
+
+            if (marker == kEcpMarker)
+            {
+                const auto closed = closeActiveChannel();
+
+                if (!closed.has_value())
                 {
-                    std::string countToken;
-                    stream >> countToken;
-                    const auto count = ParseInt(countToken, line.number, "ECP core count");
+                    return std::unexpected(closed.error());
+                }
 
-                    if (!count.has_value())
-                    {
-                        return std::unexpected(count.error());
-                    }
+                std::string countToken;
+                stream >> countToken;
+                const auto count = ParseInt(countToken, line.number, "ECP core count");
 
-                    if (*count < 1)
-                    {
-                        return std::unexpected(
-                            MakeError(line.number, "ECP core count must be at least 1"));
-                    }
+                if (!count.has_value())
+                {
+                    return std::unexpected(count.error());
+                }
 
-                    const bool ecpExists = std::any_of(
-                        blockEcps.begin(), blockEcps.end(), [&](const EcpDefinition& ecp) {
-                            return ecp.atomicNumber == ecpElement->atomicNumber;
-                        });
+                if (*count < 1)
+                {
+                    return std::unexpected(
+                        MakeError(line.number, "ECP core count must be at least 1"));
+                }
 
-                    if (ecpExists)
-                    {
-                        return std::unexpected(MakeError(
-                            line.number, "duplicate element '" + firstToken + "' in ECPs"));
-                    }
+                const bool ecpExists =
+                    std::any_of(blockEcps.begin(), blockEcps.end(), [&](const EcpDefinition& ecp) {
+                        return ecp.atomicNumber == ecpElement->atomicNumber;
+                    });
 
-                    blockEcps.push_back(EcpDefinition{ecpElement->atomicNumber, *count});
+                if (ecpExists)
+                {
+                    return std::unexpected(
+                        MakeError(line.number, "duplicate element '" + firstToken + "' in ECPs"));
+                }
+
+                blockEcps.push_back(EcpDefinition{ecpElement->atomicNumber, *count, {}});
+                continue;
+            }
+
+            if (marker.empty())
+            {
+                return std::unexpected(
+                    MakeError(line.number, "ECP line needs 'nelec N' or a channel type"));
+            }
+
+            const auto channelType = ParseEcpChannelType(marker, line.number);
+
+            if (!channelType.has_value())
+            {
+                return std::unexpected(channelType.error());
+            }
+
+            // Find the ECP this channel belongs to among the entries declared
+            // in this block; a pre-existing ECP's channels are already final.
+            std::size_t ecpIndex = preExistingEcpCount;
+
+            for (; ecpIndex < blockEcps.size(); ++ecpIndex)
+            {
+                if (blockEcps[ecpIndex].atomicNumber == ecpElement->atomicNumber)
+                {
+                    break;
                 }
             }
 
+            if (ecpIndex == blockEcps.size())
+            {
+                return std::unexpected(
+                    MakeError(line.number, "ECP channel before '" + firstToken + " nelec N'"));
+            }
+
+            const auto closed = closeActiveChannel();
+
+            if (!closed.has_value())
+            {
+                return std::unexpected(closed.error());
+            }
+
+            for (const EcpChannel& channel : blockEcps[ecpIndex].channels)
+            {
+                if (channel.angularMomentum == *channelType)
+                {
+                    return std::unexpected(MakeError(line.number,
+                                                     "duplicate ECP channel '" + marker +
+                                                         "' for element '" + firstToken + "'"));
+                }
+            }
+
+            blockEcps[ecpIndex].channels.push_back(EcpChannel{*channelType, {}});
+            activeEcpIndex = ecpIndex;
+            activeChannelIndex = blockEcps[ecpIndex].channels.size() - 1;
+            hasActiveChannel = true;
+            activeChannelLine = line.number;
+            activeChannelName = marker;
             continue;
         }
 
         // A new element header implicitly ends the previous shell - shells
         // run back-to-back with no separator - so element lines are valid
         // from either state, while primitive lines require an open shell.
-        const bool looksNumeric = std::isdigit(static_cast<unsigned char>(firstToken[0])) ||
-                                  firstToken[0] == '-' || firstToken[0] == '+' ||
-                                  firstToken[0] == '.';
 
         if (state == State::kExpectBlockStart && looksNumeric)
         {
@@ -537,7 +775,7 @@ qcx::Result<void> BasisSet::AppendNwchemText(std::string_view text) {
                         MakeError(line.number, "duplicate element '" + firstToken + "' in ECPs"));
                 }
 
-                blockEcps.push_back(EcpDefinition{tableEntry->atomicNumber, *count});
+                blockEcps.push_back(EcpDefinition{tableEntry->atomicNumber, *count, {}});
                 state = State::kInEcp;
                 continue;
             }
