@@ -28,6 +28,10 @@ offending file so the false positive is visible in a second. It reads only the
 Visual Studio generator trees (the ones carrying .vcxproj): build/wsl-gcc and
 build/wsl-clang are covered by CI building and testing in one job, and a
 Ninja/Makefile tree needs the `link.txt` equivalent this script does not read.
+Each executable's directory is the <OutDir> the project states, not an assumed
+<module>/<config>/: the shared preset composes every executable and the library
+into bin/<config>/, and a tree whose outputs moved was previously reported as
+having no output at all rather than as fresh or stale.
 
 WHY NOT A COMMIT HOOK
 A stale binary is the NORMAL state at commit time - you commit the source,
@@ -227,7 +231,8 @@ class Project:
     per-configuration output name."""
 
     __slots__ = ("path", "module_dir", "tus", "refs", "ref_keys", "target_names",
-                 "config_type", "object_templates", "cuda_tus", "cuda_templates")
+                 "out_dirs", "config_type", "object_templates", "cuda_tus",
+                 "cuda_templates")
 
     def __init__(self, path):
         self.path = path
@@ -236,6 +241,10 @@ class Project:
         self.refs = []
         self.ref_keys = []
         self.target_names = {}
+        # Configuration -> the <OutDir> the project states for it. CMake writes
+        # it per configuration; it is the directory the linker's executable
+        # really lands in, which is not module_dir/config in every preset.
+        self.out_dirs = {}
         self.config_type = ""
         # Translation unit -> the ObjectFileName template the project states for
         # it ("" when it states none and the default name applies, None when the
@@ -299,7 +308,25 @@ class Project:
         return self.path.stem
 
     def output_exe(self, config):
-        return self.module_dir / config / (self.output_name(config) + ".exe")
+        """The executable's path at `config`, from the directory the project states.
+
+        The static presets write it to <module>/<config>/, which is why that
+        path was once assumed; the shared preset sets
+        CMAKE_RUNTIME_OUTPUT_DIRECTORY=bin/<config> so every executable and the
+        library land there together, and the assumption then names a file the
+        build never wrote. The stated <OutDir> is absolute in every tree this
+        script reads. A value that still carries an MSBuild property
+        ($(SolutionDir) and friends) is not resolved - the historical default is
+        used instead, so such a tree reports "not built" rather than a path nobody
+        can point at.
+        """
+        name = self.output_name(config) + ".exe"
+        stated = self.out_dirs.get(config, "")
+        if stated and "$(" not in stated:
+            directory = stated.replace("\\", "/").strip()
+            base = Path(directory) if os.path.isabs(directory) else self.module_dir / directory
+            return base / name
+        return self.module_dir / config / name
 
 
 def resolve_include(raw, project_path):
@@ -365,6 +392,10 @@ def load_project(path):
             name = (element.text or "").strip()
             if name:
                 project.target_names[config_of_condition(element.get("Condition"))] = name
+        elif tag == "OutDir":
+            directory = (element.text or "").strip()
+            if directory:
+                project.out_dirs[config_of_condition(element.get("Condition"))] = directory
         elif tag == "ConfigurationType":
             project.config_type = (element.text or "").strip()
     # A ProjectReference is repeated once per configuration, so the same target
