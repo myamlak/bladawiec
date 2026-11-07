@@ -1081,6 +1081,15 @@ if (QCX_BUILD_SHARED)
             COMMENT "Generating the composed library's export list"
             VERBATIM)
         add_custom_target(qcx_exports DEPENDS "${_qcxExportDef}")
+        # The object-file dependencies above order the scan on Makefile and
+        # Ninja, where a file dependency is a build-graph edge. The Visual
+        # Studio generator records them as AdditionalInputs of the custom build
+        # rule, which drives up-to-date checks and not project ordering, so a
+        # parallel build could scan before the module objects existed (link
+        # LNK1181 on the first object; measured 2026-11-07 in the shared arm).
+        # The module targets as target-level dependencies give the generator
+        # the project references that order the scan after them.
+        add_dependencies(qcx_exports ${_qcxComposedModules})
         add_dependencies(qcx qcx_exports)
         target_link_options(qcx PRIVATE
             "/DEF:${CMAKE_CURRENT_BINARY_DIR}/qcx_exports_$<CONFIG>.def")
