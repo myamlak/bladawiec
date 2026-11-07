@@ -20,6 +20,7 @@
 // grid term it adds each have an assembly to disagree with that shares none of
 // their code.
 
+#include "alkane_sto3g.hpp"
 #include "fast_test_mode.hpp"
 #include "h2o_sto3g.hpp"
 #include "qcx/basisset/basis_set.hpp"
@@ -31,6 +32,7 @@
 #include "qcx/integrals/eri_dense.hpp"
 #include "qcx/integrals/one_electron.hpp"
 #include "qcx/integrals/screening.hpp"
+#include "qcx/integrals/shell_pairs.hpp"
 #include "qcx/integrals/two_electron.hpp"
 #include "qcx/memory/tensor.hpp"
 #include "qcx/molecule/mass_properties.hpp"
@@ -53,6 +55,7 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -65,6 +68,7 @@ using qcx::molecule::Atom;
 using qcx::molecule::Molecule;
 using qcx::properties::BuildResponseState;
 using qcx::properties::ComputeTotalGradient;
+using qcx::properties::ResolveOperatorBand;
 using qcx::properties::TotalGradientKohnShamRoute;
 using qcx::properties::TotalGradientOptions;
 using qcx::properties::TotalGradientXcOptions;
@@ -72,6 +76,7 @@ using qcx::response::ResponseScreening;
 using qcx::response::ResponseState;
 using qcx::response::ResponseStateReference;
 using qcx::scf::ScfGradientReference;
+using qcx::testing::MakeAlkaneSto3g;
 using qcx::testing::MakeH2oSto3gBasis;
 using qcx::testing::ToMatrix;
 
@@ -484,7 +489,17 @@ TEST(TotalGradientTest, TheStateMoTensorMatchesTheDirectTransform) {
     const auto reference = MakeReference(*molecule, *basis);
     ASSERT_TRUE(reference.has_value()) << reference.error().message;
 
-    const auto state = BuildResponseState(*molecule, *basis, *reference);
+    // This is the dense band's own test: the quarter transform against the
+    // direct transform of the same AO tensor. The band is asked for by name so
+    // the comparison does not depend on the automatic policy's choice; only
+    // the dense band carries the tensor to compare.
+    const auto state = BuildResponseState(*molecule,
+                                          *basis,
+                                          *reference,
+                                          {},
+                                          {},
+                                          std::nullopt,
+                                          qcx::response::ResponseOperatorBand::kDenseTensor);
     ASSERT_TRUE(state.has_value()) << state.error().message;
 
     EXPECT_EQ(state->NumBasisFunctions(), kNumBasis);
@@ -513,6 +528,136 @@ TEST(TotalGradientTest, TheStateMoTensorMatchesTheDirectTransform) {
         qcx::response::MakeResponseReferenceIdentity(state->CoordinatesBohr(), state->Density());
     ASSERT_TRUE(identity.has_value()) << identity.error().message;
     EXPECT_EQ(state->Screening().geometry, identity->geometry);
+}
+
+// The default band now follows the automatic policy: the dense estimate is
+// compared against the active cap, dense chosen where it fits, matrix-free
+// where it does not. A one-byte cap forces the fallback, and the route still
+// assembles the gradient; the dense band, asked by name against the same cap,
+// refuses in the build's own words. That is the mechanism the size-scale runs
+// rely on: a gradient at an n whose dense tensor would not be admitted is a
+// gradient the automatic policy runs on the matrix-free band.
+TEST(TotalGradientTest, TheDefaultBandIsNotGatedByTheDenseTensorCap) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    const auto molecule = MakeMolecule(Geometry{});
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    const auto reference = MakeReference(*molecule, *basis);
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    TotalGradientOptions options = MakeOptions();
+    options.eri.maxTensorBytes = 1;
+
+    ASSERT_EQ(options.operatorBand, qcx::response::ResponseOperatorBand::kAuto);
+
+    const auto gradient = ComputeTotalGradient(*molecule, *basis, *reference, options);
+    ASSERT_TRUE(gradient.has_value()) << gradient.error().message;
+    EXPECT_EQ(gradient->gradient.size(), static_cast<Eigen::Index>(3 * kNumAtoms));
+
+    // The resolved band is observable on the state: the fixture's own estimate
+    // fits the default cap, so the same default resolves to dense; the
+    // one-byte cap resolves to matrix-free.
+    const auto automatic = BuildResponseState(*molecule, *basis, *reference);
+    ASSERT_TRUE(automatic.has_value()) << automatic.error().message;
+    EXPECT_EQ(automatic->Band(), qcx::response::ResponseOperatorBand::kDenseTensor);
+
+    qcx::integrals::EriDenseOptions oneByte;
+    oneByte.maxTensorBytes = 1;
+    const auto fallback = BuildResponseState(*molecule, *basis, *reference, oneByte);
+    ASSERT_TRUE(fallback.has_value()) << fallback.error().message;
+    EXPECT_EQ(fallback->Band(), qcx::response::ResponseOperatorBand::kMatrixFree);
+
+    options.operatorBand = qcx::response::ResponseOperatorBand::kDenseTensor;
+    const auto refused = ComputeTotalGradient(*molecule, *basis, *reference, options);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(refused.error().message.find("maxTensorBytes"), std::string::npos)
+        << refused.error().message;
+}
+
+// The automatic policy at the size scale it was built for: the dense band is
+// the faster per-application representation, so it is chosen whenever the
+// engine's own a-priori estimate fits the active cap; the matrix-free band is
+// the fallback past it. The two fixtures bracket the default 2 GiB cap -
+// C4H10/def2-SVP estimates 2,055,270,496 B (fits) and C5H12/def2-SVP
+// 4,648,011,712 B (does not). The estimates are pinned so a basis or formula
+// change cannot move the boundary silently.
+TEST(TotalGradientTest, TheAutomaticBandFollowsTheDenseEstimate) {
+    const auto basis =
+        qcx::basisset::ParseNwchemDirectory(std::string(QcxBasisDataDir) + "/def2-svp");
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+
+    struct Case {
+        std::size_t carbons;
+        std::size_t expectedEstimate;
+        qcx::response::ResponseOperatorBand expectedBand;
+    };
+
+    const std::array<Case, 2> cases{{
+        {4, 2055270496ull, qcx::response::ResponseOperatorBand::kDenseTensor},
+        {5, 4648011712ull, qcx::response::ResponseOperatorBand::kMatrixFree},
+    }};
+
+    for (const Case& testCase : cases)
+    {
+        const auto molecule = qcx::testing::MakeAlkaneSto3g(testCase.carbons);
+        ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+
+        const auto pairList = qcx::integrals::BuildShellPairs(*molecule, *basis);
+        ASSERT_TRUE(pairList.has_value()) << pairList.error().message;
+
+        const std::size_t estimate = qcx::integrals::DenseEriTensorEstimateBytes(
+            pairList->functionCount, pairList->pairs.size());
+        EXPECT_EQ(estimate, testCase.expectedEstimate);
+
+        const auto band = ResolveOperatorBand(*molecule, *basis, qcx::integrals::EriDenseOptions{});
+        ASSERT_TRUE(band.has_value()) << band.error().message;
+        EXPECT_EQ(*band, testCase.expectedBand)
+            << "C" << testCase.carbons << "H" << 2 * testCase.carbons + 2;
+    }
+}
+
+// The two bands, with both screens off and the tightest preset, are one
+// operator: the whole gradient agrees entry by entry, not only the response
+// term. The solve's own tolerance is taken below the agreement claim; at its
+// default 1e-8 two answers agree to about 1e-8 whatever the operators do.
+TEST(TotalGradientTest, TheTwoBandsAssembleTheSameGradient) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    const auto molecule = MakeMolecule(Geometry{});
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+    const auto reference = MakeReference(*molecule, *basis);
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    TotalGradientOptions options = MakeOptions();
+    options.eri.accuracy = qcx::integrals::AccuracyPreset::kTight;
+    options.eri.screen = false;
+    options.solver.tolerance = 1e-13;
+
+    options.operatorBand = qcx::response::ResponseOperatorBand::kDenseTensor;
+    const auto dense = ComputeTotalGradient(*molecule, *basis, *reference, options);
+    ASSERT_TRUE(dense.has_value()) << dense.error().message;
+
+    options.operatorBand = qcx::response::ResponseOperatorBand::kMatrixFree;
+    const auto matrixFree = ComputeTotalGradient(*molecule, *basis, *reference, options);
+    ASSERT_TRUE(matrixFree.has_value()) << matrixFree.error().message;
+
+    double worstGradient = 0.0;
+    double worstResponse = 0.0;
+
+    for (Eigen::Index entry = 0; entry < dense->gradient.size(); ++entry)
+    {
+        worstGradient =
+            std::max(worstGradient, std::abs(matrixFree->gradient(entry) - dense->gradient(entry)));
+        worstResponse =
+            std::max(worstResponse,
+                     std::abs(matrixFree->terms.response(entry) - dense->terms.response(entry)));
+    }
+
+    std::cout << "[bands] worst |gradient difference| " << worstGradient
+              << " and |response term difference| " << worstResponse << "\n";
+    EXPECT_LT(worstGradient, kTransformTolerance);
+    EXPECT_LT(worstResponse, kTransformTolerance);
 }
 
 // The state's own refusals, each one field away from the input above: a
@@ -1321,7 +1466,16 @@ TEST(TotalGradientTest, TheKohnShamRouteRebuildsTheReferenceFock) {
             return {};
         }};
 
-    auto state = BuildResponseState(*molecule, *basis, *reference, {}, {}, route);
+    // The dense band, by name: the assertions below compare the state's Fock
+    // with the evaluator's own contraction bit for bit, and the matrix-free
+    // band's direct builder sums the same integral blocks in another order.
+    auto state = BuildResponseState(*molecule,
+                                    *basis,
+                                    *reference,
+                                    {},
+                                    {},
+                                    route,
+                                    qcx::response::ResponseOperatorBand::kDenseTensor);
     ASSERT_TRUE(state.has_value()) << state.error().message;
 
     EXPECT_TRUE(state->HasKernel());
@@ -1352,7 +1506,13 @@ TEST(TotalGradientTest, TheKohnShamRouteRebuildsTheReferenceFock) {
     const auto rhfReference = MakeReference(*molecule, *basis);
     ASSERT_TRUE(rhfReference.has_value()) << rhfReference.error().message;
 
-    auto rhfState = BuildResponseState(*molecule, *basis, *rhfReference);
+    auto rhfState = BuildResponseState(*molecule,
+                                       *basis,
+                                       *rhfReference,
+                                       {},
+                                       {},
+                                       std::nullopt,
+                                       qcx::response::ResponseOperatorBand::kDenseTensor);
     ASSERT_TRUE(rhfState.has_value()) << rhfState.error().message;
 
     EXPECT_FALSE(rhfState->HasKernel());

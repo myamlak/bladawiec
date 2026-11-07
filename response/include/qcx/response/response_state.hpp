@@ -17,8 +17,17 @@
 /// the scaled exact-exchange action. The state owns the kernel callback but
 /// not what the callback points at: the engine and the kernel action the
 /// caller's capture references must outlive the state.
+///
+/// Either operator can read its two-electron term from two bands: the
+/// reference's MO tensor (the dense band, Create and Rebase), or a
+/// MatrixFreeEriDerivative that computes it on every application (the
+/// matrix-free band, CreateMatrixFree and RebaseMatrixFree). The band is fixed
+/// by the factory and a rebase from the other family is refused by name.
+/// On the matrix-free band MoTwoElectron() is empty and the state holds no
+/// n^4 array.
 
 #include "qcx/error.hpp"
+#include "qcx/response/matrix_free_eri_derivative.hpp"
 #include "qcx/response/response_gradient.hpp"
 #include "qcx/response/response_kernel.hpp"
 #include "qcx/response/response_operator.hpp"
@@ -26,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -115,6 +125,30 @@ struct ResponseStateReport {
 };
 
 /// \ingroup qcx-response
+/// Which representation of the two-electron term a ResponseState's operator
+/// reads.
+///
+/// The state's dense band is the reference's MO two-electron tensor; the
+/// matrix-free band is a MatrixFreeEriDerivative, which builds the term from
+/// the AO integrals on every application and holds no n^4 array. The two bands
+/// are the same operator, and the agreement test is what says so.
+///
+/// kAuto is a selector, not a state: a consumer that builds its state through
+/// an automatic policy (properties::ResolveOperatorBand) asks for it, and the
+/// built state's Band() reports the resolved dense or matrix-free value.
+enum class ResponseOperatorBand : std::uint8_t {
+    kDenseTensor, ///< The MO two-electron tensor the reference carries.
+    kMatrixFree, ///< A MatrixFreeEriDerivative: one direct Fock build per application.
+    kAuto, ///< Choose from the a-priori dense estimate; a state never carries it.
+};
+
+/// Names a band, for reporting and for a refusal that names what it refused.
+/// \param band The band to name.
+/// \returns The band's name ("dense-tensor", "matrix-free" or "auto").
+/// \ingroup qcx-response
+std::string_view ToString(ResponseOperatorBand band);
+
+/// \ingroup qcx-response
 /// The reference state, screening structure and per-coordinate solvers a
 /// nuclear-displacement sweep runs against.
 ///
@@ -161,6 +195,38 @@ public:
         double exchangeFraction = 1.0,
         std::optional<KohnShamKernelTerm> kernel = std::nullopt);
 
+    /// Builds the state on the matrix-free band: the two-electron term is the
+    /// derivative's direct Fock build rather than a stored MO tensor.
+    ///
+    /// The reference is validated exactly as Create validates it, except that
+    /// its `moTwoElectron` is not read and may be empty - that array is what
+    /// this band exists to avoid. Everything else the reference carries is
+    /// still required and copied, because the operator, the solve and every
+    /// consumer of the state read it.
+    ///
+    /// The derivative must describe this reference: the same basis-function
+    /// count, occupied/virtual layout and MO coefficients. It also fixes the
+    /// exact-exchange fraction, so there is no separate fraction argument to
+    /// disagree with it.
+    /// \param reference The reference quantities; every array but
+    /// `moTwoElectron` is copied.
+    /// \param screening The screening structure, its digest matching the
+    /// reference's coordinates.
+    /// \param derivative The matrix-free two-electron action; moved in and
+    /// shared with the operator. Must not be null.
+    /// \param solverOptions The options every per-coordinate solver starts
+    /// with.
+    /// \param kernel The density functional's kernel term, as Create takes it.
+    /// \returns The state, or an Error (kInvalidArgument) naming the refusal:
+    /// the reference's own, a null derivative, or a derivative that describes
+    /// another reference.
+    static qcx::Result<ResponseState> CreateMatrixFree(
+        ResponseStateReference reference,
+        ResponseScreening screening,
+        std::shared_ptr<MatrixFreeEriDerivative> derivative,
+        ResponseSolveOptions solverOptions = {},
+        std::optional<KohnShamKernelTerm> kernel = std::nullopt);
+
     /// Replaces the reference and screening structure, keeping every stored
     /// solution vector.
     ///
@@ -188,6 +254,30 @@ public:
                              ResponseScreening screening,
                              double exchangeFraction = 1.0,
                              std::optional<KohnShamKernelTerm> kernel = std::nullopt);
+
+    /// Replaces a matrix-free state's reference and derivative, keeping every
+    /// stored solution vector.
+    ///
+    /// This is Rebase for the matrix-free band. A new reference is a new
+    /// geometry, and the derivative carries the core Hamiltonian and the AO
+    /// integrals of the geometry it was built at, so a rebase TAKES the new
+    /// derivative rather than reusing the old one: reusing it would solve the
+    /// new geometry against the old geometry's derivative. The reference goes
+    /// through the same validation and layout checks as Rebase, and the
+    /// derivative must describe the new reference.
+    /// \param reference The new reference; every array but `moTwoElectron` is
+    /// copied.
+    /// \param screening The new screening structure, its digest matching the
+    /// new coordinates.
+    /// \param derivative The matrix-free action at the new geometry; must not
+    /// be null.
+    /// \param kernel The density functional's kernel term, as Rebase takes it.
+    /// \returns An Error (kInvalidArgument) naming the refusal. A refused
+    /// rebase leaves the state unchanged.
+    qcx::Result<void> RebaseMatrixFree(ResponseStateReference reference,
+                                       ResponseScreening screening,
+                                       std::shared_ptr<MatrixFreeEriDerivative> derivative,
+                                       std::optional<KohnShamKernelTerm> kernel = std::nullopt);
 
     /// Solves the orbital response to one nuclear displacement.
     ///
@@ -255,6 +345,25 @@ public:
         return _ksOperator.has_value();
     }
 
+    /// \returns The band the state's operator reads its two-electron term
+    /// from.
+    ResponseOperatorBand Band() const {
+        return _matrixFreeDerivative != nullptr ? ResponseOperatorBand::kMatrixFree
+                                                : ResponseOperatorBand::kDenseTensor;
+    }
+
+    /// \returns Whether the two-electron term is computed on the fly (true) or
+    /// read from the reference's MO tensor (false).
+    bool IsMatrixFree() const {
+        return _matrixFreeDerivative != nullptr;
+    }
+
+    /// \returns The matrix-free derivative the operator applies, or nullptr on
+    /// the dense band.
+    const MatrixFreeEriDerivative* MatrixFreeDerivative() const {
+        return _matrixFreeDerivative.get();
+    }
+
     /// \returns The kernel term's name; empty when the state carries the
     /// Hartree-Fock operator.
     std::string_view KernelName() const {
@@ -295,7 +404,8 @@ public:
     }
 
     /// \returns The MO two-electron tensor, chemists' notation, orbital count
-    /// to the fourth.
+    /// to the fourth. Empty on the matrix-free band, where no tensor exists:
+    /// the operator reads the derivative instead.
     std::span<const double> MoTwoElectron() const {
         return _moTwoElectron;
     }
@@ -328,6 +438,18 @@ private:
                               double exchangeFraction,
                               std::optional<KohnShamKernelTerm> kernel);
 
+    /// The matrix-free counterpart of Install: migrates a validated reference
+    /// and builds the operator whose two-electron term is the derivative's
+    /// action.
+    /// \param reference The validated reference.
+    /// \param derivative The matrix-free action; moved in.
+    /// \param kernel The kernel term, when the state is a Kohn-Sham one.
+    /// \returns An Error naming the refusal; on failure the state's own
+    /// storage is untouched.
+    qcx::Result<void> InstallMatrixFree(ResponseStateReference reference,
+                                        std::shared_ptr<MatrixFreeEriDerivative> derivative,
+                                        std::optional<KohnShamKernelTerm> kernel);
+
     ResponseLayout _layout;
     std::size_t _numBasisFunctions = 0;
     std::vector<double> _coordinatesBohr;
@@ -342,6 +464,9 @@ private:
     ResponseSolveOptions _solverOptions;
     std::optional<OrbitalHessianOperator> _operator;
     std::optional<KohnShamOrbitalHessian> _ksOperator;
+    /// Set on the matrix-free band; the operator's callback captures a copy of
+    /// the shared pointer, so the derivative outlives any move of this state.
+    std::shared_ptr<MatrixFreeEriDerivative> _matrixFreeDerivative;
     std::vector<ResponseSolver<OrbitalHessianOperator>> _solvers;
     ResponseStateReport _report;
 };

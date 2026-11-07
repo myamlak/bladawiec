@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace qcx::response {
@@ -27,9 +29,12 @@ constexpr double kDensityConsistencyTolerance = 1e-8;
 constexpr double kFockAsymmetryTolerance = 1e-8;
 
 // Validates everything a response reads, and returns the reference identity
-// the screening digest is checked against.
+// the screening digest is checked against. The dense band additionally needs
+// the MO two-electron tensor; the matrix-free band neither reads nor stores it,
+// so its absence is not a defect there.
 qcx::Result<ResponseReferenceIdentity> ValidateReference(const ResponseStateReference& reference,
-                                                         const ResponseScreening& screening) {
+                                                         const ResponseScreening& screening,
+                                                         bool requireMoTensor) {
     if (!reference.converged)
     {
         return std::unexpected(
@@ -101,7 +106,8 @@ qcx::Result<ResponseReferenceIdentity> ValidateReference(const ResponseStateRefe
                       " values; the request carries " + std::to_string(reference.fock.size())));
     }
 
-    if (reference.moTwoElectron.size() != orbitals * orbitals * orbitals * orbitals)
+    if (requireMoTensor &&
+        reference.moTwoElectron.size() != orbitals * orbitals * orbitals * orbitals)
     {
         return std::unexpected(MakeError(
             "response state: the MO two-electron tensor must be numOrbitals^4 = " +
@@ -201,7 +207,63 @@ qcx::Result<ResponseReferenceIdentity> ValidateReference(const ResponseStateRefe
     return identity;
 }
 
+// The shape checks a rebase of either band shares: the stored solution vectors
+// are shaped by the basis-function count and the occupied/virtual layout, and
+// the per-coordinate solver set is keyed on the atom count.
+qcx::Result<void> ValidateRebaseShape(const ResponseStateReference& reference,
+                                      std::size_t numBasisFunctions,
+                                      ResponseLayout layout,
+                                      std::size_t numAtoms) {
+    if (reference.numBasisFunctions != numBasisFunctions)
+    {
+        return std::unexpected(
+            MakeError("response state: a rebase cannot change the basis-function count (this "
+                      "state carries " +
+                      std::to_string(numBasisFunctions) + ", the new reference states " +
+                      std::to_string(reference.numBasisFunctions) +
+                      "), because the stored solution vectors are shaped by it"));
+    }
+
+    if (reference.numOccupied != layout.numOccupied || reference.numVirtual != layout.numVirtual)
+    {
+        return std::unexpected(
+            MakeError("response state: a rebase cannot change the occupied/virtual layout (this "
+                      "state carries " +
+                      std::to_string(layout.numOccupied) + " occupied and " +
+                      std::to_string(layout.numVirtual) + " virtual; the new reference states " +
+                      std::to_string(reference.numOccupied) + " occupied and " +
+                      std::to_string(reference.numVirtual) +
+                      " virtual), because every stored solution vector is a response amplitude "
+                      "of the old layout"));
+    }
+
+    if (reference.coordinatesBohr.size() != 3 * numAtoms)
+    {
+        return std::unexpected(
+            MakeError("response state: a rebase cannot change the atom count (this state carries " +
+                      std::to_string(numAtoms) + " atoms, the new reference states " +
+                      std::to_string(reference.coordinatesBohr.size() / 3) +
+                      "), because the per-coordinate solver set is keyed on it"));
+    }
+
+    return {};
+}
+
 } // namespace
+
+std::string_view ToString(ResponseOperatorBand band) {
+    switch (band)
+    {
+    case ResponseOperatorBand::kDenseTensor:
+        return "dense-tensor";
+    case ResponseOperatorBand::kMatrixFree:
+        return "matrix-free";
+    case ResponseOperatorBand::kAuto:
+        return "auto";
+    }
+
+    return "unknown";
+}
 
 ResponseState::ResponseState() = default;
 
@@ -272,12 +334,137 @@ qcx::Result<void> ResponseState::Install(ResponseStateReference reference,
     return {};
 }
 
+qcx::Result<void> ResponseState::InstallMatrixFree(
+    ResponseStateReference reference,
+    std::shared_ptr<MatrixFreeEriDerivative> derivative,
+    std::optional<KohnShamKernelTerm> kernel) {
+    if (derivative == nullptr)
+    {
+        return std::unexpected(
+            MakeError("response state: the matrix-free band needs a derivative; the request "
+                      "carries none"));
+    }
+
+    // The operator, the right-hand side and the derivative must describe one
+    // state. The reference's own shapes were validated already; these checks
+    // compare the derivative with the reference, because a derivative built
+    // for another geometry or another orbital set would solve a different
+    // system without ever looking wrong.
+    const ResponseLayout layout{reference.numOccupied, reference.numVirtual};
+
+    if (derivative->Layout().numOccupied != layout.numOccupied ||
+        derivative->Layout().numVirtual != layout.numVirtual)
+    {
+        return std::unexpected(
+            MakeError("response state: the matrix-free derivative's occupied/virtual layout is "
+                      "not the reference's (" +
+                      std::to_string(derivative->Layout().numOccupied) + " occupied and " +
+                      std::to_string(derivative->Layout().numVirtual) + " virtual against " +
+                      std::to_string(layout.numOccupied) + " and " +
+                      std::to_string(layout.numVirtual) + ")"));
+    }
+
+    if (derivative->NumBasisFunctions() != reference.numBasisFunctions)
+    {
+        return std::unexpected(
+            MakeError("response state: the matrix-free derivative was built for " +
+                      std::to_string(derivative->NumBasisFunctions()) +
+                      " basis functions and the reference states " +
+                      std::to_string(reference.numBasisFunctions)));
+    }
+
+    const std::span<const double> derivativeCoefficients = derivative->MoCoefficients();
+
+    if (derivativeCoefficients.size() != reference.moCoefficients.size())
+    {
+        return std::unexpected(MakeError(
+            "response state: the matrix-free derivative's MO coefficients number " +
+            std::to_string(derivativeCoefficients.size()) + " values and the reference's number " +
+            std::to_string(reference.moCoefficients.size())));
+    }
+
+    for (std::size_t index = 0; index < derivativeCoefficients.size(); ++index)
+    {
+        if (derivativeCoefficients[index] != reference.moCoefficients[index])
+        {
+            return std::unexpected(
+                MakeError("response state: the matrix-free derivative was built from different MO "
+                          "coefficients than the reference (first difference at row-major index " +
+                          std::to_string(index) +
+                          "); the operator would solve a different electronic state"));
+        }
+    }
+
+    std::vector<double> coordinates(reference.coordinatesBohr.begin(),
+                                    reference.coordinatesBohr.end());
+    std::vector<double> coefficients(reference.moCoefficients.begin(),
+                                     reference.moCoefficients.end());
+    std::vector<double> energies(reference.orbitalEnergies.begin(),
+                                 reference.orbitalEnergies.end());
+    std::vector<double> density(reference.density.begin(), reference.density.end());
+    std::vector<double> fock(reference.fock.begin(), reference.fock.end());
+
+    // The class's own OrbitalEnergies accessor shadows the type name here.
+    const qcx::response::OrbitalEnergies energiesView{std::span<const double>(energies)};
+
+    // The callback captures a copy of the shared pointer, so the derivative
+    // stays alive exactly as long as an operator can call it, through any move
+    // of this state.
+    TwoElectronDerivativeActionFn twoElectron =
+        [derivative](std::span<const double> x, std::span<double> y) -> qcx::Result<void> {
+        return derivative->Apply(x, y);
+    };
+
+    std::optional<OrbitalHessianOperator> action;
+    std::optional<KohnShamOrbitalHessian> kernelAction;
+
+    if (kernel.has_value())
+    {
+        auto built = KohnShamOrbitalHessian::CreateMatrixFree(
+            layout, energiesView, twoElectron, derivative->ExchangeFraction(), std::move(*kernel));
+
+        if (!built.has_value())
+        {
+            return std::unexpected(built.error());
+        }
+
+        kernelAction.emplace(std::move(*built));
+    } else
+    {
+        auto built = OrbitalHessianOperator::CreateMatrixFree(
+            layout, energiesView, twoElectron, derivative->ExchangeFraction());
+
+        if (!built.has_value())
+        {
+            return std::unexpected(built.error());
+        }
+
+        action.emplace(std::move(*built));
+    }
+
+    _layout = layout;
+    _numBasisFunctions = reference.numBasisFunctions;
+    _coordinatesBohr = std::move(coordinates);
+    _moCoefficients = std::move(coefficients);
+    _orbitalEnergies = std::move(energies);
+    _density = std::move(density);
+    _fock = std::move(fock);
+    // The band holds no tensor: an incoming reference's array is not copied,
+    // which is the memory this band exists to save.
+    _moTwoElectron.clear();
+    _operator = std::move(action);
+    _ksOperator = std::move(kernelAction);
+    _matrixFreeDerivative = std::move(derivative);
+
+    return {};
+}
+
 qcx::Result<ResponseState> ResponseState::Create(ResponseStateReference reference,
                                                  ResponseScreening screening,
                                                  ResponseSolveOptions solverOptions,
                                                  double exchangeFraction,
                                                  std::optional<KohnShamKernelTerm> kernel) {
-    auto identity = ValidateReference(reference, screening);
+    auto identity = ValidateReference(reference, screening, true);
 
     if (!identity.has_value())
     {
@@ -308,52 +495,116 @@ qcx::Result<ResponseState> ResponseState::Create(ResponseStateReference referenc
     return state;
 }
 
-qcx::Result<void> ResponseState::Rebase(ResponseStateReference reference,
-                                        ResponseScreening screening,
-                                        double exchangeFraction,
-                                        std::optional<KohnShamKernelTerm> kernel) {
-    auto identity = ValidateReference(reference, screening);
+qcx::Result<ResponseState> ResponseState::CreateMatrixFree(
+    ResponseStateReference reference,
+    ResponseScreening screening,
+    std::shared_ptr<MatrixFreeEriDerivative> derivative,
+    ResponseSolveOptions solverOptions,
+    std::optional<KohnShamKernelTerm> kernel) {
+    auto identity = ValidateReference(reference, screening, false);
 
     if (!identity.has_value())
     {
         return std::unexpected(identity.error());
     }
 
-    if (reference.numBasisFunctions != _numBasisFunctions)
+    ResponseState state;
+    state._solverOptions = solverOptions;
+    state._identity = *identity;
+    state._screening = std::move(screening);
+    state._history = reference.history;
+
+    auto installed = state.InstallMatrixFree(reference, std::move(derivative), std::move(kernel));
+
+    if (!installed.has_value())
     {
-        return std::unexpected(
-            MakeError("response state: a rebase cannot change the basis-function count (this "
-                      "state carries " +
-                      std::to_string(_numBasisFunctions) + ", the new reference states " +
-                      std::to_string(reference.numBasisFunctions) +
-                      "), because the stored solution vectors are shaped by it"));
+        return std::unexpected(installed.error());
     }
 
-    if (reference.numOccupied != _layout.numOccupied || reference.numVirtual != _layout.numVirtual)
+    const std::size_t displacements = state.NumDisplacements();
+    state._solvers.reserve(displacements);
+
+    for (std::size_t ordinal = 0; ordinal < displacements; ++ordinal)
     {
-        return std::unexpected(
-            MakeError("response state: a rebase cannot change the occupied/virtual layout (this "
-                      "state carries " +
-                      std::to_string(_layout.numOccupied) + " occupied and " +
-                      std::to_string(_layout.numVirtual) + " virtual; the new reference states " +
-                      std::to_string(reference.numOccupied) + " occupied and " +
-                      std::to_string(reference.numVirtual) +
-                      " virtual), because every stored solution vector is a response amplitude "
-                      "of the old layout"));
+        state._solvers.emplace_back(solverOptions);
     }
 
-    if (reference.coordinatesBohr.size() != _coordinatesBohr.size())
+    return state;
+}
+
+qcx::Result<void> ResponseState::Rebase(ResponseStateReference reference,
+                                        ResponseScreening screening,
+                                        double exchangeFraction,
+                                        std::optional<KohnShamKernelTerm> kernel) {
+    if (_matrixFreeDerivative != nullptr)
     {
         return std::unexpected(
-            MakeError("response state: a rebase cannot change the atom count (this state carries " +
-                      std::to_string(NumAtoms()) + " atoms, the new reference states " +
-                      std::to_string(reference.coordinatesBohr.size() / 3) +
-                      "), because the per-coordinate solver set is keyed on it"));
+            MakeError("response state: this state is on the matrix-free band, whose operator "
+                      "reads the derivative rather than the reference's MO two-electron "
+                      "tensor; build the derivative at the new geometry and call "
+                      "RebaseMatrixFree"));
+    }
+
+    auto identity = ValidateReference(reference, screening, true);
+
+    if (!identity.has_value())
+    {
+        return std::unexpected(identity.error());
+    }
+
+    auto shape = ValidateRebaseShape(reference, _numBasisFunctions, _layout, NumAtoms());
+
+    if (!shape.has_value())
+    {
+        return std::unexpected(shape.error());
     }
 
     // Install copies and rebuilds first, so a refusal leaves the state
     // untouched; only a successful install replaces the reference record.
     auto installed = Install(reference, exchangeFraction, std::move(kernel));
+
+    if (!installed.has_value())
+    {
+        return std::unexpected(installed.error());
+    }
+
+    _identity = *identity;
+    _screening = std::move(screening);
+    _history = reference.history;
+    return {};
+}
+
+qcx::Result<void> ResponseState::RebaseMatrixFree(
+    ResponseStateReference reference,
+    ResponseScreening screening,
+    std::shared_ptr<MatrixFreeEriDerivative> derivative,
+    std::optional<KohnShamKernelTerm> kernel) {
+    if (_matrixFreeDerivative == nullptr)
+    {
+        return std::unexpected(
+            MakeError("response state: this state is on the dense-tensor band, whose operator "
+                      "reads the reference's MO two-electron tensor; a matrix-free derivative "
+                      "cannot replace it. Call Rebase"));
+    }
+
+    auto identity = ValidateReference(reference, screening, false);
+
+    if (!identity.has_value())
+    {
+        return std::unexpected(identity.error());
+    }
+
+    auto shape = ValidateRebaseShape(reference, _numBasisFunctions, _layout, NumAtoms());
+
+    if (!shape.has_value())
+    {
+        return std::unexpected(shape.error());
+    }
+
+    // InstallMatrixFree copies and rebuilds first, so a refusal leaves the
+    // state untouched; only a successful install replaces the reference
+    // record and the derivative.
+    auto installed = InstallMatrixFree(reference, std::move(derivative), std::move(kernel));
 
     if (!installed.has_value())
     {

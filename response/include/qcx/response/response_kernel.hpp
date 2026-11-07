@@ -59,6 +59,26 @@ public:
                                                       double exchangeFraction,
                                                       KohnShamKernelTerm kernel);
 
+    /// Builds the operator with a two-electron term computed on the fly
+    /// instead of read from a dense MO tensor.
+    /// \param layout Occupied/virtual counts; both must be non-zero.
+    /// \param orbitalEnergies Canonical orbital energies, occupied orbitals
+    /// first, size `layout.numOccupied + layout.numVirtual`.
+    /// \param twoElectron The two-electron action; must be non-null.
+    /// \param exchangeFraction The exact-exchange fraction c_HF, in [0, 1].
+    /// \param kernel The kernel term; its name must be non-empty and its
+    /// callback non-null.
+    /// \returns The operator, or an Error: the base operator's own refusals
+    /// (kInvalidArgument) and kInvalidArgument for an empty name or a null
+    /// callback.
+    /// \ingroup qcx-response
+    static qcx::Result<KohnShamOrbitalHessian> CreateMatrixFree(
+        ResponseLayout layout,
+        OrbitalEnergies orbitalEnergies,
+        TwoElectronDerivativeActionFn twoElectron,
+        double exchangeFraction,
+        KohnShamKernelTerm kernel);
+
     /// Applies the operator: y = A x, with every term.
     /// \param x Trial vector, size Dimension().
     /// \param y Result vector, size Dimension(); must not alias \p x.

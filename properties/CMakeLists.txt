@@ -72,6 +72,10 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
     qcx_apply_blas_runtime(qcx-properties-tests)
     qcx_apply_fast_test_mode(qcx-properties-tests)
 
+    # The automatic operator-band pin reads def2-SVP from the source tree.
+    target_compile_definitions(qcx-properties-tests PRIVATE
+        QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+
     target_precompile_headers(qcx-properties-tests PRIVATE
         <gtest/gtest.h>
         <qcx/properties/populations.hpp>

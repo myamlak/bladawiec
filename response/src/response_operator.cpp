@@ -55,6 +55,15 @@ OrbitalHessianOperator::OrbitalHessianOperator(ResponseLayout layout,
     _orbitalEnergies(orbitalEnergies.values), _moTwoElectron(moTwoElectron.values),
     _exchangeFraction(exchangeFraction), _extraTerm(std::move(extraTerm)) {}
 
+OrbitalHessianOperator::OrbitalHessianOperator(ResponseLayout layout,
+                                               OrbitalEnergies orbitalEnergies,
+                                               TwoElectronDerivativeActionFn twoElectronAction,
+                                               double exchangeFraction,
+                                               HessianExtraTermFn extraTerm) :
+    _layout(layout), _numOrbitals(layout.numOccupied + layout.numVirtual),
+    _orbitalEnergies(orbitalEnergies.values), _exchangeFraction(exchangeFraction),
+    _extraTerm(std::move(extraTerm)), _twoElectronAction(std::move(twoElectronAction)) {}
+
 qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
     ResponseLayout layout, OrbitalEnergies orbitalEnergies, MoTwoElectronTensor moTwoElectron) {
     return Create(layout, orbitalEnergies, moTwoElectron, 1.0, HessianExtraTermFn{});
@@ -116,6 +125,44 @@ qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::Create(
         layout, orbitalEnergies, moTwoElectron, exchangeFraction, std::move(extraTerm));
 }
 
+qcx::Result<OrbitalHessianOperator> OrbitalHessianOperator::CreateMatrixFree(
+    ResponseLayout layout,
+    OrbitalEnergies orbitalEnergies,
+    TwoElectronDerivativeActionFn twoElectron,
+    double exchangeFraction,
+    HessianExtraTermFn extraTerm) {
+    auto layoutStatus = ValidateLayout(layout);
+
+    if (!layoutStatus.has_value())
+    {
+        return std::unexpected(layoutStatus.error());
+    }
+
+    if (twoElectron == nullptr)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       "the matrix-free orbital-Hessian action needs its two-electron callback"});
+    }
+
+    // Written as a positive test so that a Not-a-Number fraction fails too.
+    if (!(exchangeFraction >= 0.0 && exchangeFraction <= 1.0))
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "the exact-exchange fraction must lie in [0, 1]"});
+    }
+
+    if (orbitalEnergies.values.size() != layout.numOccupied + layout.numVirtual)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                       "the orbital energies must number numOccupied + numVirtual"});
+    }
+
+    return OrbitalHessianOperator(
+        layout, orbitalEnergies, std::move(twoElectron), exchangeFraction, std::move(extraTerm));
+}
+
 qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
                                                 std::span<double> y) const {
     const std::size_t dimension = Dimension();
@@ -127,7 +174,12 @@ qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
                                           "numOccupied * numVirtual"});
     }
 
-    ApplyHartreeFock(x, y);
+    auto status = ApplyHartreeFock(x, y);
+
+    if (!status.has_value())
+    {
+        return std::unexpected(status.error());
+    }
 
     if (_extraTerm == nullptr)
     {
@@ -139,11 +191,11 @@ qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
     // accumulated result would make its output depend on the order the terms
     // happen to be written in.
     std::vector<double> extra(dimension, 0.0);
-    auto status = _extraTerm(x, extra);
+    auto extraStatus = _extraTerm(x, extra);
 
-    if (!status.has_value())
+    if (!extraStatus.has_value())
     {
-        return std::unexpected(status.error());
+        return std::unexpected(extraStatus.error());
     }
 
     for (std::size_t i = 0; i < dimension; ++i)
@@ -154,18 +206,59 @@ qcx::Result<void> OrbitalHessianOperator::Apply(std::span<const double> x,
     return {};
 }
 
-void OrbitalHessianOperator::ApplyHartreeFock(std::span<const double> x,
-                                              std::span<double> y) const {
+qcx::Result<void> OrbitalHessianOperator::ApplyHartreeFock(std::span<const double> x,
+                                                           std::span<double> y) const {
+    // The representation decides first: the matrix-free band has no tensor to
+    // read, and its callback carries the exchange fraction itself.
+    if (_twoElectronAction != nullptr)
+    {
+        return ApplyHartreeFockMatrixFree(x, y);
+    }
+
     // The unscaled branch is the branch every Hartree-Fock anchor was computed
     // on: dispatching on the fraction keeps that loop, not a rewritten copy of
     // it, so the anchors cannot move.
     if (_exchangeFraction == 1.0)
     {
         ApplyHartreeFockUnscaled(x, y);
-        return;
+        return {};
     }
 
     ApplyHartreeFockScaled(x, y);
+    return {};
+}
+
+qcx::Result<void> OrbitalHessianOperator::ApplyHartreeFockMatrixFree(std::span<const double> x,
+                                                                     std::span<double> y) const {
+    const std::size_t numOccupied = _layout.numOccupied;
+    const std::size_t numVirtual = _layout.numVirtual;
+
+    for (std::size_t i = 0; i < numOccupied; ++i)
+    {
+        for (std::size_t a = 0; a < numVirtual; ++a)
+        {
+            y[i * numVirtual + a] =
+                (_orbitalEnergies[numOccupied + a] - _orbitalEnergies[i]) * x[i * numVirtual + a];
+        }
+    }
+
+    // The callback is handed a zeroed buffer and its term is added afterwards,
+    // exactly as the extra term is: the two contributions cannot depend on the
+    // order they happen to be written in.
+    std::vector<double> twoElectron(Dimension(), 0.0);
+    auto status = _twoElectronAction(x, twoElectron);
+
+    if (!status.has_value())
+    {
+        return std::unexpected(status.error());
+    }
+
+    for (std::size_t index = 0; index < Dimension(); ++index)
+    {
+        y[index] += twoElectron[index];
+    }
+
+    return {};
 }
 
 void OrbitalHessianOperator::ApplyHartreeFockUnscaled(std::span<const double> x,

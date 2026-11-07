@@ -40,4 +40,33 @@ qcx::Result<KohnShamOrbitalHessian> KohnShamOrbitalHessian::Create(
     return KohnShamOrbitalHessian(std::move(*base), std::move(kernel.name));
 }
 
+qcx::Result<KohnShamOrbitalHessian> KohnShamOrbitalHessian::CreateMatrixFree(
+    ResponseLayout layout,
+    OrbitalEnergies orbitalEnergies,
+    TwoElectronDerivativeActionFn twoElectron,
+    double exchangeFraction,
+    KohnShamKernelTerm kernel) {
+    if (kernel.name.empty())
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument, "the kernel term must carry a name"});
+    }
+
+    if (kernel.apply == nullptr)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument, "the kernel term must carry an action"});
+    }
+
+    auto base = OrbitalHessianOperator::CreateMatrixFree(
+        layout, orbitalEnergies, std::move(twoElectron), exchangeFraction, std::move(kernel.apply));
+
+    if (!base.has_value())
+    {
+        return std::unexpected(base.error());
+    }
+
+    return KohnShamOrbitalHessian(std::move(*base), std::move(kernel.name));
+}
+
 } // namespace qcx::response
