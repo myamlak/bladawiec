@@ -5,16 +5,19 @@ add_library(qcx-response ${QCX_MODULE_LIBRARY_TYPE}
   src/response_kernel.cpp
   src/response_band.cpp
   src/response_state.cpp
+  src/matrix_free_eri_derivative.cpp
 )
 target_include_directories(qcx-response PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(qcx-response PUBLIC cxx_std_23)
-# qcx-core is the ONLY dependency of the library: the headers expose qcx::Result
-# and std::span/std::vector, and no molecule, basis, integral or SCF type appears
-# in a signature. Eigen is deliberately absent too - the operator seam is written
-# against spans, so a consumer that has never heard of Eigen can use it. The
-# physical operator a caller wants (OrbitalHessianOperator) consumes the MO
-# two-electron tensor and the orbital energies as plain spans for that reason.
-target_link_libraries(qcx-response PUBLIC qcx-core qcx-linalg)
+# The operator seam itself is spans and qcx::Result. The matrix-free derivative
+# is the one place a physical type appears: it consumes the molecule and the
+# basis set and runs the direct Fock engine, so qcx-integrals is a public
+# dependency (its AccuracyPreset is in the options struct the header exposes)
+# and molecule/basis enter through forward declarations in the header and the
+# engine's headers in the implementation. The DAG permits all three - they sit
+# to the left of response. Eigen is still absent: the seam's signatures are
+# spans, so a consumer that has never heard of Eigen can use the operator.
+target_link_libraries(qcx-response PUBLIC qcx-core qcx-linalg qcx-integrals)
 
 # PCH is mandatory on every target; response_solver.hpp carries the operator
 # header, so this one entry covers both translation units.

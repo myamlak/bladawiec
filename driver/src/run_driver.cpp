@@ -172,6 +172,135 @@ qcx::integrals::EngineDecoratorFactory MakeEriStoreFactory(std::shared_ptr<EriSt
                                                            std::string auxBasisName,
                                                            std::filesystem::path storePath);
 
+// The exchange-correlation grid's screening counts, drained per SCF
+// iteration (the record's `xc_screening` block).
+//
+// The grid engine is built once per run and the Kohn-Sham composition
+// evaluates it once per distinct density, so the counting itself is the
+// engine's own (XcScreeningCounts) and needs no clock. What the engine cannot
+// know is where an iteration ends: that is the SCF loop's boundary, and the
+// loop builds its Fock exactly once per iteration, so the Fock seam's call IS
+// the boundary. This collector is opened by the Fock-seam wrapper before each
+// build, and every integration the composition performs before the next build
+// is folded into the open row. Row 1 therefore sums the seed density's
+// integration (charged by the first build) and the first iteration's
+// energy-path integration; each later row sums the single integration its
+// iteration's energy path performed. A run whose escape ladder reran a
+// trajectory opens further rows - the counts measure the work the run did,
+// not the trajectory it kept - and `evaluations` on each row states how many
+// integrations the row sums.
+//
+// Counts, not times: a count is exact under any machine load, which is what
+// lets the record carry a grid-cost statement from a busy machine at all.
+class XcCountTimeline {
+public:
+    /// Open the next iteration row; the previous row is closed with the
+    /// integrations folded into it so far.
+    void BeginIteration() {
+        ClosePending();
+        ++_buildCount;
+        _pending = qcx::io::RunXcScreeningIteration{};
+        _pending->iteration = _buildCount;
+    }
+
+    /// Fold one successful integration's counts into the open row, opening a
+    /// row first when the caller recorded before the first build.
+    /// \param counts The engine's own per-evaluation counts.
+    void Record(const qcx::grid::XcScreeningCounts& counts) {
+        if (!_pending.has_value())
+        {
+            BeginIteration();
+        }
+
+        qcx::io::RunXcScreeningIteration& row = *_pending;
+        ++row.evaluations;
+        row.counts.points += counts.points;
+        row.counts.batches += counts.batches;
+        row.counts.densityWeightTerms += counts.densityWeightTerms;
+        row.counts.shellTests += counts.shellTests;
+        row.counts.shellKeeps += counts.shellKeeps;
+        row.counts.aoFetches += counts.aoFetches;
+        row.counts.aoSlotsEvaluated += counts.aoSlotsEvaluated;
+        row.counts.aoSlotsDense += counts.aoSlotsDense;
+        row.counts.contractionPairs += counts.contractionPairs;
+        row.counts.contractionPairsDense += counts.contractionPairsDense;
+    }
+
+    /// Close the open row and return the record block. Empty when no
+    /// integration ever ran - the record then carries no block rather than a
+    /// zero-filled one (the xc_grid presence rule).
+    /// \returns The block for RunResult::xcScreening.
+    std::optional<qcx::io::RunXcScreening> Snapshot() {
+        ClosePending();
+
+        if (_rows.empty())
+        {
+            return std::nullopt;
+        }
+
+        qcx::io::RunXcScreening block;
+        block.perIteration = _rows;
+        return block;
+    }
+
+private:
+    void ClosePending() {
+        if (_pending.has_value())
+        {
+            _rows.push_back(*_pending);
+            _pending.reset();
+        }
+    }
+
+    std::vector<qcx::io::RunXcScreeningIteration> _rows;
+    std::optional<qcx::io::RunXcScreeningIteration> _pending;
+    int _buildCount = 0;
+};
+
+// The Fock-seam wrapper that gives the timeline its iteration boundary: the
+// loop calls this once per iteration, so the row it opens is the iteration.
+// A null timeline (every Hartree-Fock run) returns the seam untouched.
+// \param fn The run's Fock seam.
+// \param timeline The run's collector, or null.
+// \returns The seam as the SCF loop receives it.
+qcx::scf::FockBuilderFn WithXcCountRows(qcx::scf::FockBuilderFn fn,
+                                        const std::shared_ptr<XcCountTimeline>& timeline) {
+    if (timeline == nullptr)
+    {
+        return fn;
+    }
+
+    return [fn = std::move(fn), timeline](const Eigen::MatrixXd& density) {
+        timeline->BeginIteration();
+        return fn(density);
+    };
+}
+
+// The per-spin twin of WithXcCountRows (the UHF/ROHF seam takes a density
+// pair and returns a pair of Focks) with the same one-row-per-build contract.
+qcx::scf::UhfFockBuilderFn WithXcCountRows(qcx::scf::UhfFockBuilderFn fn,
+                                           const std::shared_ptr<XcCountTimeline>& timeline) {
+    if (timeline == nullptr)
+    {
+        return fn;
+    }
+
+    return [fn = std::move(fn), timeline](const Eigen::MatrixXd& densityAlpha,
+                                          const Eigen::MatrixXd& densityBeta) {
+        timeline->BeginIteration();
+        return fn(densityAlpha, densityBeta);
+    };
+}
+
+// The block a finished run publishes: the collector's rows, or empty when the
+// run wired no Kohn-Sham grid or integrated nothing.
+// \param timeline The run's collector, or null.
+// \returns The block for RunResult::xcScreening.
+std::optional<qcx::io::RunXcScreening> SnapshotXcScreening(
+    const std::shared_ptr<XcCountTimeline>& timeline) {
+    return timeline == nullptr ? std::nullopt : timeline->Snapshot();
+}
+
 // The wired builder plus the artifacts the cap left in force for it. The
 // trailing members carry the ri_j budget path (the budget path): the workspace
 // budget the engine's Create-time estimate reserved from, kept alive past
@@ -262,6 +391,12 @@ struct WiredFockBuilder {
     // the same reason). Absent on every other run: a Hartree-Fock machinery
     // run holds one fused builder and one record.
     std::optional<qcx::integrals::FockModeInfo> exchangeModeInfo;
+
+    // The run's exchange-correlation count collector, set exactly when the
+    // Kohn-Sham composition was engaged (the same condition as `coulomb`
+    // above, whose evaluator records into it). Empty on every Hartree-Fock
+    // run, which integrates no functional and carries no xc_screening block.
+    std::shared_ptr<XcCountTimeline> xcCounts;
 
     // The removal ordering above is why the cleanup lives in a destructor
     // instead of a member: the destructor body runs before ANY member
@@ -657,6 +792,11 @@ struct UhfRun {
     /// and every other UHF arm's record keeps the block absent rather than
     /// stating a decision no builder made.
     std::optional<qcx::integrals::RiFullFockModeInfo> riJkModeInfo;
+    /// The exchange-correlation grid's screening counts per SCF iteration
+    /// (the run record's `xc_screening` block): filled by the shared tail
+    /// from the seam's collector when a Kohn-Sham run wired one, empty on
+    /// every Hartree-Fock run.
+    std::optional<qcx::io::RunXcScreening> xcScreening;
 };
 
 qcx::Result<UhfRun> RunDirectUhfScf(
@@ -755,7 +895,8 @@ qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
     const Eigen::MatrixXd& core,
-    const Eigen::MatrixXd& spinSummed,
+    const Eigen::MatrixXd& alphaDensity,
+    const Eigen::MatrixXd& betaDensity,
     const std::vector<std::size_t>& canonicalOrder,
     const qcx::io::RunInput& input);
 qcx::Result<std::optional<qcx::io::RunDensityAtNuclei>> BuildDensityAtNucleiBlock(
@@ -821,7 +962,9 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
 // P_sigma = C_sigma,occ C_sigma,occ^T with no factor of 2 (an RHF caller
 // passes HfResult::density / 2; a UHF caller passes
 // densityAlpha/densityBeta unchanged). The spin-summed density D = P_alpha
-// + P_beta is what the spin-summed analyses (charges, ESP, NOCV) take.
+// + P_beta is what the spin-summed analyses (charges, ESP, density at
+// nuclei) take; ETS-NOCV receives the pair as well, because its unrestricted
+// entry points resolve one NOCV problem per spin.
 // The always-on populations/moments block runs here; each opt-in analysis
 // is delegated to its per-analyzer builder (Build*Block), which returns
 // nullopt when the analysis was not requested. A requested analysis that
@@ -946,7 +1089,8 @@ qcx::Result<void> FillProperties(
 
     properties.fukui = std::move(*fukui);
 
-    auto nocv = BuildNocvBlock(molecule, basis, core, spinSummed, canonicalOrder, input);
+    auto nocv =
+        BuildNocvBlock(molecule, basis, core, alphaDensity, betaDensity, canonicalOrder, input);
 
     if (!nocv.has_value())
     {
@@ -1647,6 +1791,70 @@ std::string RecordGuessWord(qcx::io::GuessKind kind) {
     return std::string(qcx::io::ToString(kind));
 }
 
+// The ETS-NOCV entry point and reference a run path selects. Mapped once, so
+// the up-front reference gate and the entry-point dispatch downstream cannot
+// disagree about which reference produced the density. The restricted
+// open-shell paths map onto the per-spin seam family they ran; they are
+// refused for their REFERENCE, and the gate refuses it before any entry
+// point is consulted.
+struct NocvEntrySelection {
+    qcx::properties::NocvEtsEntryPoint entryPoint =
+        qcx::properties::NocvEtsEntryPoint::kClosedShellHartreeFock;
+    qcx::properties::NocvEtsReference reference = qcx::properties::NocvEtsReference::kClosedShell;
+};
+
+/// \param path A run path resolved by ResolveScfPath.
+/// \returns The ETS-NOCV entry point its analysis calls and the reference
+/// that analysis is resolved against.
+constexpr NocvEntrySelection SelectNocvEntry(ScfPath path) noexcept {
+    switch (path)
+    {
+    case ScfPath::kRestricted:
+        return {qcx::properties::NocvEtsEntryPoint::kClosedShellHartreeFock,
+                qcx::properties::NocvEtsReference::kClosedShell};
+    case ScfPath::kUnrestricted:
+        return {qcx::properties::NocvEtsEntryPoint::kUnrestrictedHartreeFock,
+                qcx::properties::NocvEtsReference::kUnrestricted};
+    case ScfPath::kRestrictedKs:
+        return {qcx::properties::NocvEtsEntryPoint::kClosedShellKohnSham,
+                qcx::properties::NocvEtsReference::kClosedShell};
+    case ScfPath::kUnrestrictedKs:
+        return {qcx::properties::NocvEtsEntryPoint::kUnrestrictedKohnSham,
+                qcx::properties::NocvEtsReference::kUnrestricted};
+    case ScfPath::kRohf:
+        return {qcx::properties::NocvEtsEntryPoint::kUnrestrictedHartreeFock,
+                qcx::properties::NocvEtsReference::kRestrictedOpenShell};
+    case ScfPath::kRohfKs:
+        return {qcx::properties::NocvEtsEntryPoint::kUnrestrictedKohnSham,
+                qcx::properties::NocvEtsReference::kRestrictedOpenShell};
+    }
+
+    // Unreachable: ResolveScfPath returns one of the six values above. The
+    // tail keeps the switch total without a `default:` arm that would hide a
+    // seventh path from every other exhaustive switch.
+    return {};
+}
+
+// The reference word the run record's `nocv.reference` key spells (schema
+// 51): the determinant the decomposition was resolved against, not the method
+// word. The restricted open-shell value never reaches a record - the module's
+// reference gate refuses that pair before the analysis - but the switch stays
+// total for the same reason SelectNocvEntry's does.
+const char* NocvReferenceLabel(qcx::properties::NocvEtsReference reference) noexcept {
+    switch (reference)
+    {
+    case qcx::properties::NocvEtsReference::kClosedShell:
+        return "closed-shell";
+    case qcx::properties::NocvEtsReference::kUnrestricted:
+        return "unrestricted";
+    case qcx::properties::NocvEtsReference::kRestrictedOpenShell:
+        return "restricted open-shell";
+    }
+
+    // Unreachable while the enumerator set above is total.
+    return "unrecognised reference";
+}
+
 // The not-yet-wired combinations the schema documents; the driver rejects
 // them up front so a silent substitution can never run the wrong physics.
 qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
@@ -2076,33 +2284,24 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
                                        " run cannot write a checkpoint nothing could consume"));
     }
 
-    // The ETS-NOCV decomposition's per-spin resolution assumes the
-    // closed-shell D_sigma = D/2 (nocv.hpp); a per-spin molecular density would
-    // silently feed it the wrong spin channels, so the combination is
-    // rejected up front like the others.
-    if (isPerSpin && !input.properties.nocvFragments.empty())
+    // ETS-NOCV admission is the properties module's reference gate
+    // (CheckNocvEtsReference), not a driver-side method table: the four
+    // references the module implements - closed-shell and unrestricted
+    // Hartree-Fock, closed-shell and unrestricted Kohn-Sham - are served, and
+    // the restricted open-shell pair (ROHF/ROKS) is refused by the module's
+    // own sentence naming the missing transition-state Fock. The gate runs
+    // here, before the SCF and before BuildNocvBlock's dense ERI tensor, so
+    // an unserved reference costs neither.
+    if (!input.properties.nocvFragments.empty())
     {
-        return std::unexpected(
-            Err(qcx::ErrorCode::kUnimplemented,
-                "the ETS-NOCV analysis is closed-shell in v1; nocv_fragments cannot be "
-                "requested on a " +
-                    std::string(qcx::io::ToString(input.method.method)) + " run"));
-    }
+        const NocvEntrySelection selection = SelectNocvEntry(*scfPath);
+        auto referenceGate =
+            qcx::properties::CheckNocvEtsReference(selection.reference, selection.entryPoint);
 
-    // ETS-NOCV is Hartree-Fock in v1 (no functional enters the fragment SCFs or
-    // the density-energy evaluator), so a functional-naming method is refused.
-    if (input.method.functional.has_value() && !input.properties.nocvFragments.empty())
-    {
-        return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
-                                   "the ETS-NOCV analysis is Hartree-Fock in v1: the fragment "
-                                   "SCFs and the density-energy evaluator take no density "
-                                   "functional, so nocv_fragments cannot be requested on a "
-                                   "method that names method.functional; the decomposition "
-                                   "would report HF fragment energies and HF E_orb channels "
-                                   "beside the run's DFT total energy. Remove "
-                                   "method.functional (an rhf run keeps ETS-NOCV) or remove "
-                                   "nocv_fragments; the functional-aware decomposition is "
-                                   "not implemented"));
+        if (!referenceGate.has_value())
+        {
+            return std::unexpected(referenceGate.error());
+        }
     }
 
     // The NOCV fragment groups index the atom rows as written in the file;
@@ -3143,6 +3342,10 @@ struct KsContext {
     qcx::driver::internal::KsFunctional functional;
     qcx::driver::internal::XcEvaluatorFn evaluator;
     qcx::driver::internal::KsGrid grid;
+    /// The run's exchange-correlation count collector: the evaluator below
+    /// records every integration into it, and each wiring arm hands it to
+    /// the seam's carrier so the run's report can drain it.
+    std::shared_ptr<XcCountTimeline> xcCounts;
 };
 
 // The XC grid settings for this run: the parser's resolved `[grid]`
@@ -3255,11 +3458,29 @@ qcx::Result<KsContext> ResolveKsContext(const qcx::io::RunInput& input,
     // rather than off a copy of the double: the energy path and the gradient
     // walk then screen by one value, and a divergence between the two is
     // unrepresentable rather than merely unlikely.
+    //
+    // The evaluator is also the ONE place the engine's screening counts are
+    // drained (the constant `screeningTolerance` screen above is what makes
+    // them interpretable): every successful integration folds its counts into
+    // the run's collector, so the record states the work the grid term did
+    // without a timing cell.
+    context.xcCounts = std::make_shared<XcCountTimeline>();
+
     context.evaluator =
-        [engine = context.grid.engine, thresholds = context.grid.thresholds](
+        [engine = context.grid.engine,
+         thresholds = context.grid.thresholds,
+         timeline = context.xcCounts](
             const Eigen::MatrixXd& densityAlpha,
             const Eigen::MatrixXd& densityBeta) -> qcx::Result<qcx::grid::XcEvaluation> {
-        return engine->EvaluateScreened(densityAlpha, densityBeta, thresholds.screeningTolerance);
+        auto evaluation =
+            engine->EvaluateScreened(densityAlpha, densityBeta, thresholds.screeningTolerance);
+
+        if (evaluation.has_value())
+        {
+            timeline->Record(evaluation->counts);
+        }
+
+        return evaluation;
     };
 
     return context;
@@ -4412,6 +4633,11 @@ struct WiredUhfBuilders {
     /// that would close the gap, and it is named as an open item rather than
     /// approximated here.
     std::optional<qcx::integrals::RiFullFockModeInfo> riJkModeInfo;
+
+    /// The run's exchange-correlation count collector, the WiredFockBuilder
+    /// member's UHF twin: set exactly when the Kohn-Sham composition was
+    /// engaged, and empty on every Hartree-Fock run.
+    std::shared_ptr<XcCountTimeline> xcCounts;
 };
 
 // The per-spin LOOP SELECTION: the ONE place where a per-spin run's SCF loop
@@ -4469,17 +4695,23 @@ qcx::Result<qcx::scf::UhfResult> RunPerSpinScf(qcx::io::MethodType method,
     // D_o = D_alpha - D_beta is the dictionary the builder already sees.
     const bool isKsSeam = wired.coulomb.has_value() && wired.contribution.has_value();
 
+    // The seam the loop receives: on a Kohn-Sham run the collector's row
+    // boundary rides the Fock call (WithXcCountRows), on a Hartree-Fock run it
+    // is the wiring's own seam untouched - the collector is empty there by
+    // construction.
+    const qcx::scf::UhfFockBuilderFn scfFock = WithXcCountRows(wired.fn, wired.xcCounts);
+
     if (!IsRestrictedOpenShellPath(*path))
     {
         return isKsSeam ? qcx::scf::RunUhfScf(molecule,
                                               overlap,
                                               core,
                                               options,
-                                              wired.fn,
+                                              scfFock,
                                               *wired.coulomb,
                                               *wired.contribution,
                                               &basis)
-                        : qcx::scf::RunUhfScf(molecule, overlap, core, options, wired.fn, &basis);
+                        : qcx::scf::RunUhfScf(molecule, overlap, core, options, scfFock, &basis);
     }
 
     qcx::scf::RohfOptions rohfOptions;
@@ -4497,10 +4729,10 @@ qcx::Result<qcx::scf::UhfResult> RunPerSpinScf(qcx::io::MethodType method,
                                            overlap,
                                            core,
                                            rohfOptions,
-                                           wired.fn,
+                                           scfFock,
                                            *wired.coulomb,
                                            *wired.contribution)
-                    : qcx::scf::RunRohfScf(molecule, overlap, core, rohfOptions, wired.fn);
+                    : qcx::scf::RunRohfScf(molecule, overlap, core, rohfOptions, scfFock);
 }
 
 // The shared tail of the UHF builder selections (the direct family's
@@ -4614,27 +4846,33 @@ qcx::Result<UhfRun> RunUhfScfWithBuilder(
         WarnOnEmptyTrace(input, statsStream, kind);
     }
 
-    return UhfRun{std::move(*scf),
-                  std::chrono::duration<double, std::milli>(scfStopped - scfStarted).count(),
-                  std::move(wired.workspaceBudget),
-                  wired.modeInfo,
-                  wired.exchangeModeInfo,
-                  // The selected arm's own QFMM model, when one ran (the
-                  // composed-QFMM runner's two arms set it; every other UHF
-                  // arm leaves it empty) - so the record's qfmm_model block
-                  // stays absent on a route where no QFMM half ran rather
-                  // than defaulting to a model nothing built.
-                  wired.qfmmModel,
-                  std::move(wired.riJkBuilder),
-                  wired.orbitExpansionEngaged,
-                  wired.orbitExpansionWired,
-                  // The composed full-RI arm's own record, moved from the
-                  // wired carrier for the reason above: only the ri_jk runner
-                  // fills it, and the record reads the run rather than the
-                  // selection - a run whose selection says ri_jk but whose arm
-                  // never carried a builder would otherwise publish a rung
-                  // decision that does not exist.
-                  wired.riJkModeInfo};
+    UhfRun run{std::move(*scf),
+               std::chrono::duration<double, std::milli>(scfStopped - scfStarted).count(),
+               std::move(wired.workspaceBudget),
+               wired.modeInfo,
+               wired.exchangeModeInfo,
+               // The selected arm's own QFMM model, when one ran (the
+               // composed-QFMM runner's two arms set it; every other UHF
+               // arm leaves it empty) - so the record's qfmm_model block
+               // stays absent on a route where no QFMM half ran rather
+               // than defaulting to a model nothing built.
+               wired.qfmmModel,
+               std::move(wired.riJkBuilder),
+               wired.orbitExpansionEngaged,
+               wired.orbitExpansionWired,
+               // The composed full-RI arm's own record, moved from the
+               // wired carrier for the reason above: only the ri_jk runner
+               // fills it, and the record reads the run rather than the
+               // selection - a run whose selection says ri_jk but whose arm
+               // never carried a builder would otherwise publish a rung
+               // decision that does not exist.
+               wired.riJkModeInfo};
+    // The exchange-correlation grid's screening counts, drained now that the
+    // loop returned (the collector's rows were opened by the Fock-seam
+    // wrapper the loop received). Empty on every Hartree-Fock run, which
+    // wired no collector.
+    run.xcScreening = SnapshotXcScreening(wired.xcCounts);
+    return run;
 }
 
 // One direct-UHF run: the per-spin J/K split builders (the
@@ -4825,6 +5063,7 @@ qcx::Result<UhfRun> RunDirectUhfScf(
             WiredUhfBuilders wiredKs{std::move(seam->fock), nullptr, std::nullopt, std::nullopt};
             wiredKs.coulomb = std::move(seam->coulomb);
             wiredKs.contribution = std::move(seam->contribution);
+            wiredKs.xcCounts = ksContext->xcCounts;
             return RunUhfScfWithBuilder(molecule,
                                         basis,
                                         overlap,
@@ -5102,6 +5341,7 @@ qcx::Result<UhfRun> RunDirectUhfScf(
             std::move(seam->fock), std::move(workspaceBudget), coulomb->ModeInfo(), exchangeMode};
         wiredKs.coulomb = std::move(seam->coulomb);
         wiredKs.contribution = std::move(seam->contribution);
+        wiredKs.xcCounts = ksContext->xcCounts;
         return RunUhfScfWithBuilder(molecule,
                                     basis,
                                     overlap,
@@ -5323,6 +5563,7 @@ qcx::Result<UhfRun> RunQfmmUhfScf(
         WiredUhfBuilders wiredKs{std::move(seam->fock), nullptr, std::nullopt, std::nullopt};
         wiredKs.coulomb = std::move(seam->coulomb);
         wiredKs.contribution = std::move(seam->contribution);
+        wiredKs.xcCounts = ksContext->xcCounts;
         // The same carriers the Hartree-Fock arm below returns, plus the
         // model record: this run's Coulomb half IS that QFMM half, so the
         // record's `qfmm_model` block states the same engine resolution an
@@ -5697,6 +5938,7 @@ qcx::Result<UhfRun> RunRiJLinkUhfScf(
         WiredUhfBuilders wiredKs{std::move(seam->fock), nullptr, std::nullopt, std::nullopt};
         wiredKs.coulomb = std::move(seam->coulomb);
         wiredKs.contribution = std::move(seam->contribution);
+        wiredKs.xcCounts = ksContext->xcCounts;
         // The ri_j_link carriers, exactly as the Hartree-Fock arm below sets
         // them: the same family on the same builder owes the record the same
         // budget, engine decision, counter source and orbit expansion pair.
@@ -6003,6 +6245,7 @@ qcx::Result<UhfRun> RunRiJkUhfScf(
             std::move(seam->fock), std::move(workspaceBudget), std::nullopt, std::nullopt};
         wiredKs.coulomb = std::move(seam->coulomb);
         wiredKs.contribution = std::move(seam->contribution);
+        wiredKs.xcCounts = ksContext->xcCounts;
         // The carriers the Hartree-Fock arm below sets, set here as well, for
         // the reason the RKS arm states: the same family on the same builder
         // owes the record the same budget and the same engine rung decision.
@@ -6366,19 +6609,53 @@ qcx::Result<std::optional<qcx::io::RunFukui>> BuildFukuiBlock(
     return block;
 }
 
-// The opt-in ETS-NOCV block . The UHF and functional rejections live in
-// ValidateCombination, with the other not-wired combinations; only the
-// analysis itself runs here.
+// The opt-in ETS-NOCV block. The entry point follows the run path the SCF
+// took: the one classifier (ResolveScfPath) decides which reference the
+// densities come from, so the analysis and the loop cannot disagree about
+// the state being decomposed. The up-front reference gate lives in
+// ValidateCombination (before the SCF and before this block's dense ERI
+// tensor); it is called again here as a failsafe, so a programmatic caller
+// reaching the builder directly still meets the module's own sentence
+// instead of a formulation that does not exist.
+//
+// The Kohn-Sham lanes resolve their functional seam here (ResolveKsContext:
+// the functional name, the `[grid]` block and the screening tolerance), the
+// same three keys the energy path and the xc_gradient walk resolve. The SCF
+// branch's engine does not outlive its branch, exactly as for the gradient
+// walk, so the keys - not the engine object - are what must not diverge.
+//
+// The densities arrive in the energy path's own convention: the spin pair on
+// every path (the restricted lane carries half the converged density in each
+// member), so the closed-shell entries receive the spin sum and the
+// unrestricted entries the pair.
 qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
     const Eigen::MatrixXd& core,
-    const Eigen::MatrixXd& spinSummed,
+    const Eigen::MatrixXd& alphaDensity,
+    const Eigen::MatrixXd& betaDensity,
     const std::vector<std::size_t>& canonicalOrder,
     const qcx::io::RunInput& input) {
     if (input.properties.nocvFragments.empty())
     {
         return std::nullopt;
+    }
+
+    const auto scfPath = ResolveScfPath(input.method.method);
+
+    if (!scfPath.has_value())
+    {
+        return std::unexpected(scfPath.error());
+    }
+
+    const NocvEntrySelection selection = SelectNocvEntry(*scfPath);
+
+    auto referenceGate =
+        qcx::properties::CheckNocvEtsReference(selection.reference, selection.entryPoint);
+
+    if (!referenceGate.has_value())
+    {
+        return std::unexpected(referenceGate.error());
     }
 
     auto fragments = MapFragmentsToCanonical(input.properties.nocvFragments, canonicalOrder);
@@ -6440,8 +6717,97 @@ qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     fragmentOptions.densityTolerance = input.scf.densityTolerance;
     fragmentOptions.useDiis = input.scf.useDiis;
 
-    auto nocv = qcx::properties::AnalyzeNocvEts(
-        molecule, basis, core, *eri, spinSummed, *fragments, fragmentOptions);
+    // The spin sum the two closed-shell entries take (the unrestricted ones
+    // take the pair itself). The restricted lane's pair is (D/2, D/2), so the
+    // sum is the converged D in the energy path's convention.
+    const Eigen::MatrixXd spinSummed = alphaDensity + betaDensity;
+
+    auto nocv = [&]() -> qcx::Result<qcx::properties::NocvEtsDecomposition> {
+        switch (*scfPath)
+        {
+        case ScfPath::kRestricted:
+            return qcx::properties::AnalyzeNocvEts(
+                molecule, basis, core, *eri, spinSummed, *fragments, fragmentOptions);
+
+        case ScfPath::kUnrestricted:
+            return qcx::properties::AnalyzeNocvEtsUnrestricted(molecule,
+                                                               basis,
+                                                               core,
+                                                               *eri,
+                                                               alphaDensity,
+                                                               betaDensity,
+                                                               selection.reference,
+                                                               *fragments,
+                                                               fragmentOptions);
+
+        case ScfPath::kRestrictedKs: {
+            auto context = ResolveKsContext(input, molecule, basis);
+
+            if (!context.has_value())
+            {
+                return std::unexpected(context.error());
+            }
+
+            const qcx::properties::NocvEtsFunctional functional{
+                context->evaluator, context->functional.exchangeFraction};
+            return qcx::properties::AnalyzeNocvEtsKohnSham(molecule,
+                                                           basis,
+                                                           core,
+                                                           *eri,
+                                                           spinSummed,
+                                                           selection.reference,
+                                                           functional,
+                                                           *fragments,
+                                                           fragmentOptions);
+        }
+
+        case ScfPath::kUnrestrictedKs: {
+            auto context = ResolveKsContext(input, molecule, basis);
+
+            if (!context.has_value())
+            {
+                return std::unexpected(context.error());
+            }
+
+            const qcx::properties::NocvEtsFunctional functional{
+                context->evaluator, context->functional.exchangeFraction};
+            return qcx::properties::AnalyzeNocvEtsUnrestrictedKohnSham(molecule,
+                                                                       basis,
+                                                                       core,
+                                                                       *eri,
+                                                                       alphaDensity,
+                                                                       betaDensity,
+                                                                       selection.reference,
+                                                                       functional,
+                                                                       *fragments,
+                                                                       fragmentOptions);
+        }
+
+        case ScfPath::kRohf:
+        case ScfPath::kRohfKs: {
+            // Unreachable: the reference gate above refused the restricted
+            // open-shell reference these paths select. The arms keep the
+            // switch exhaustive and stay fail-closed: the gate is asked
+            // again and its refusal returned, and a value would mean the
+            // gate stopped refusing, which this arm reports as an
+            // unclassified path rather than reading .error() off a value.
+            auto refusal =
+                qcx::properties::CheckNocvEtsReference(selection.reference, selection.entryPoint);
+
+            if (!refusal.has_value())
+            {
+                return std::unexpected(refusal.error());
+            }
+
+            return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
+                                       "ETS-NOCV: the restricted open-shell reference is not "
+                                       "served"));
+        }
+        }
+
+        return std::unexpected(
+            Err(qcx::ErrorCode::kUnimplemented, "ETS-NOCV: the run path is unclassified"));
+    }();
 
     if (!nocv.has_value())
     {
@@ -6449,6 +6815,7 @@ qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     }
 
     qcx::io::RunNocv block;
+    block.reference = NocvReferenceLabel(selection.reference);
     block.electrostatic = nocv->electrostatic;
     block.pauli = nocv->pauli;
     block.orbital = nocv->orbital;
@@ -6457,10 +6824,13 @@ qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     block.fragmentEnergies = ToStdVector(nocv->fragmentEnergies);
     block.orbitalComponents = ToStdVector(nocv->orbitalComponents);
     block.nocvEigenvalues = ToStdVector(nocv->nocvEigenvalues);
+    block.nocvEigenvaluesNegative = ToStdVector(nocv->nocvEigenvaluesNegative);
     block.orbitalComponentsAlpha = ToStdVector(nocv->orbitalComponentsAlpha);
     block.orbitalComponentsBeta = ToStdVector(nocv->orbitalComponentsBeta);
     block.nocvEigenvaluesAlpha = ToStdVector(nocv->nocvEigenvaluesAlpha);
+    block.nocvEigenvaluesAlphaNegative = ToStdVector(nocv->nocvEigenvaluesAlphaNegative);
     block.nocvEigenvaluesBeta = ToStdVector(nocv->nocvEigenvaluesBeta);
+    block.nocvEigenvaluesBetaNegative = ToStdVector(nocv->nocvEigenvaluesBetaNegative);
     return block;
 }
 
@@ -6623,11 +6993,14 @@ qcx::Result<std::optional<qcx::io::RunTotalGradient>> BuildTotalGradientBlock(
     qcx::properties::TotalGradientOptions options;
 
     // The run's one accuracy preset, carried into the assembly. The gradient
-    // belongs to the energy the run computed, so its dense ERI build and its
-    // two-electron derivative walk screen at the same preset the SCF did; the
-    // default (kNormal) would silently compute a kLoose run's gradient at a
-    // tighter preset than the reference it differentiates, and the mismatch
-    // shows up as a spurious stationarity refusal at the screening floor.
+    // belongs to the energy the run computed, so its two-electron
+    // representation - the automatic policy's dense tensor where the a-priori
+    // estimate fits the admission cap, the matrix-free derivative where it
+    // does not - and its two-electron derivative walk screen at the same
+    // preset the SCF did; the default (kNormal) would silently compute a
+    // kLoose run's gradient at a tighter preset than the reference it
+    // differentiates, and the mismatch shows up as a spurious stationarity
+    // refusal at the screening floor.
     options.eri.accuracy = input.method.accuracy;
 
     // The restricted Kohn-Sham reference's own keys: the functional, the
@@ -6865,6 +7238,28 @@ qcx::Result<void> WriteMoldenExport(qcx::io::RunResult& result,
     return {};
 }
 
+// The labelling stage's degeneracy verdict as the record's word: the verdict
+// the labels support on the energies, total over the enum by construction (no
+// default arm - a silently unmapped state is exactly the run record that
+// differs from what ran; the blocking action word below carries the same
+// rule).
+std::string SymmetryDegeneracyVerdictWord(qcx::scf::SymmetryDegeneracyVerdict verdict) {
+    switch (verdict)
+    {
+    case qcx::scf::SymmetryDegeneracyVerdict::kPassed:
+        return std::string("passed");
+    case qcx::scf::SymmetryDegeneracyVerdict::kFailed:
+        return std::string("failed");
+    case qcx::scf::SymmetryDegeneracyVerdict::kNoMultiplets:
+        return std::string("no_multiplets");
+    }
+
+    // Unreachable: the switch above handles every enumerator. If a fourth
+    // state is ever added, this is the line that has to be reasoned about,
+    // and the compiler's own missing-return diagnostic points here.
+    std::unreachable();
+}
+
 // The full-group labeling block of the run JSON: converts the scf
 // stage's SymmetryLabels into the io schema record. Empty when the stage
 // did not run - a C1 molecule, the [symmetry] full_group = false switch,
@@ -6896,6 +7291,27 @@ std::optional<qcx::io::RunSymmetry> MakeRunSymmetry(
 
     runSymmetry.symmetrizationSubset = labels->symmetrizationSubset;
     runSymmetry.averagedElementCount = labels->averagedElementCount;
+
+    // The degeneracy check the labels support (the report the labelling
+    // stage filled in the same pass that canonicalized the partners), copied
+    // member for member - the verdict word through the total mapper above,
+    // never re-derived from the multiplet records here.
+    const qcx::scf::SymmetryDegeneracyReport& degeneracy = labels->degeneracy;
+    runSymmetry.degeneracy.verdict = SymmetryDegeneracyVerdictWord(degeneracy.verdict);
+    runSymmetry.degeneracy.toleranceHartree = degeneracy.toleranceHartree;
+    runSymmetry.degeneracy.multipletCount = degeneracy.multipletCount;
+    runSymmetry.degeneracy.brokenMultipletCount = degeneracy.brokenMultipletCount;
+
+    for (const auto& record : degeneracy.multiplets)
+    {
+        runSymmetry.degeneracy.multiplets.push_back(
+            qcx::io::RunSymmetryMultiplet{record.irrepLabel,
+                                          record.dimension,
+                                          record.moIndices,
+                                          record.spreadHartree,
+                                          record.intact});
+    }
+
     return runSymmetry;
 }
 
@@ -8657,6 +9073,7 @@ qcx::Result<WiredFockBuilder> WireMixedHalfRestrictedFockBuilder(
     qcx::scf::FockBuilderFn fock;
     std::optional<qcx::scf::CoulombFn> coulomb;
     std::optional<qcx::scf::EnergyContributionFn> contribution;
+    std::shared_ptr<XcCountTimeline> xcCounts;
 
     if (isKs)
     {
@@ -8681,6 +9098,7 @@ qcx::Result<WiredFockBuilder> WireMixedHalfRestrictedFockBuilder(
         fock = std::move(seam->fock);
         coulomb = std::move(seam->coulomb);
         contribution = std::move(seam->contribution);
+        xcCounts = ksContext->xcCounts;
     } else
     {
         fock = [coulombHalf, exchangeHalf, coreHamiltonian](
@@ -8707,6 +9125,7 @@ qcx::Result<WiredFockBuilder> WireMixedHalfRestrictedFockBuilder(
     WiredFockBuilder wired{std::move(fock)};
     wired.coulomb = std::move(coulomb);
     wired.contribution = std::move(contribution);
+    wired.xcCounts = std::move(xcCounts);
     wired.workspaceBudget = std::move(workspaceBudget);
     wired.modeInfo = coulombModeInfo;
     wired.exchangeModeInfo = exchangeModeInfo;
@@ -9103,6 +9522,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
             WiredFockBuilder ksWired{std::move(seam->fock)};
             ksWired.coulomb = std::move(seam->coulomb);
             ksWired.contribution = std::move(seam->contribution);
+            ksWired.xcCounts = ksContext->xcCounts;
             return ksWired;
         }
 
@@ -9249,6 +9669,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
             WiredFockBuilder ksWired{std::move(seam->fock)};
             ksWired.coulomb = std::move(seam->coulomb);
             ksWired.contribution = std::move(seam->contribution);
+            ksWired.xcCounts = ksContext->xcCounts;
             // Every carrier the Hartree-Fock arm below sets, set here as well
             // (the family and the builder are the same, so the record must
             // state the same budget, the same engine decision and the same
@@ -9526,6 +9947,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
             WiredFockBuilder ksWired{std::move(seam->fock)};
             ksWired.coulomb = std::move(seam->coulomb);
             ksWired.contribution = std::move(seam->contribution);
+            ksWired.xcCounts = ksContext->xcCounts;
             // Every carrier the Hartree-Fock arm below sets, set here as well:
             // a Kohn-Sham ri_jk run is the same family on the same builder, so
             // its record must state the same budget, the same engine rung
@@ -9955,6 +10377,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
             WiredFockBuilder ksWired{std::move(seam->fock)};
             ksWired.coulomb = std::move(seam->coulomb);
             ksWired.contribution = std::move(seam->contribution);
+            ksWired.xcCounts = ksContext->xcCounts;
             // Every carrier the Hartree-Fock arm below sets, set here as well:
             // a Kohn-Sham ri_j_link run is the same family on the same builder,
             // so its record must state the same budget, the same engine
@@ -10156,6 +10579,7 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
         ksWired.exchangeModeInfo = exchangeModeInfo;
         ksWired.coulomb = std::move(seam->coulomb);
         ksWired.contribution = std::move(seam->contribution);
+        ksWired.xcCounts = std::move(ksContext->xcCounts);
         return ksWired;
     }
 
@@ -10209,6 +10633,10 @@ qcx::Result<void> FillUhfRunOutcome(
     const Eigen::MatrixXd& core,
     const qcx::scf::UhfResult& scf,
     double scfLoopMs,
+    // The exchange-correlation grid's screening counts the run's collector
+    // held when the loop returned: the Kohn-Sham block, empty on every
+    // Hartree-Fock run (which wired no collector).
+    std::optional<qcx::io::RunXcScreening> xcScreening,
     const std::vector<std::size_t>& canonicalOrder,
     const std::optional<std::map<int, qcx::scf::AtomicUhfInputs>>& atomicInputs,
     const qcx::io::RunInput& input,
@@ -10228,6 +10656,7 @@ qcx::Result<void> FillUhfRunOutcome(
                   scfLoopMs,
                   scf.numRemovedOverlapDirections);
     result.spinSquared = scf.spinSquared;
+    result.xcScreening = std::move(xcScreening);
 
     // The full-group labeling stage: the per-MO labels of both
     // spin channels; absent when the stage did not run (a C1 molecule,
@@ -11629,6 +12058,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                                              core,
                                              run->scf,
                                              run->scfLoopMs,
+                                             std::move(run->xcScreening),
                                              canonicalOrder,
                                              atomicInputs,
                                              input,
@@ -11726,6 +12156,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                                              core,
                                              run->scf,
                                              run->scfLoopMs,
+                                             std::move(run->xcScreening),
                                              canonicalOrder,
                                              atomicInputs,
                                              input,
@@ -11802,6 +12233,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                                              core,
                                              run->scf,
                                              run->scfLoopMs,
+                                             std::move(run->xcScreening),
                                              canonicalOrder,
                                              atomicInputs,
                                              input,
@@ -11884,6 +12316,7 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                                              core,
                                              run->scf,
                                              run->scfLoopMs,
+                                             std::move(run->xcScreening),
                                              canonicalOrder,
                                              atomicInputs,
                                              input,
@@ -12044,16 +12477,20 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
         // a Kohn-Sham run cannot reach the one-callback overload. There is no
         // flag that could disagree with the seam that actually runs.
         const bool isKsSeam = wired->coulomb.has_value() && wired->contribution.has_value();
+        // The collector's row boundary rides the Fock call, exactly as on the
+        // per-spin tail: a Kohn-Sham run's seam opens an xc_screening row per
+        // iteration, a Hartree-Fock run's seam is untouched.
+        const qcx::scf::FockBuilderFn scfFock = WithXcCountRows(wired->fn, wired->xcCounts);
         auto scf = isKsSeam
                        ? qcx::scf::RunRhfScf(*molecule,
                                              overlap,
                                              core,
                                              options,
-                                             wired->fn,
+                                             scfFock,
                                              *wired->coulomb,
                                              *wired->contribution,
                                              &*basis)
-                       : qcx::scf::RunRhfScf(*molecule, overlap, core, options, wired->fn, &*basis);
+                       : qcx::scf::RunRhfScf(*molecule, overlap, core, options, scfFock, &*basis);
         const auto scfStopped = std::chrono::steady_clock::now();
 
         if (!scf.has_value())
@@ -12075,6 +12512,12 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input) {
                       scf->electronicEnergy,
                       std::chrono::duration<double, std::milli>(scfStopped - scfStarted).count(),
                       scf->numRemovedOverlapDirections);
+
+        // The exchange-correlation grid's screening counts, drained now that
+        // the loop returned: the collector's rows were opened by the
+        // Fock-seam wrapper the loop received. Empty on a Hartree-Fock run,
+        // which wired no collector.
+        result.xcScreening = SnapshotXcScreening(wired->xcCounts);
 
         // The full-group labeling stage: the per-MO labels; absent
         // when the stage did not run (a C1 molecule, the [symmetry]

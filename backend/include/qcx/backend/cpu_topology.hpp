@@ -10,8 +10,8 @@
 /// OMP_NUM_THREADS wins when a scheduler set it (clusters), otherwise the
 /// physical cores (hyperthreaded siblings excluded; E-cores excluded where
 /// the probe can distinguish the classes - see the per-platform notes).
-/// Nothing here changes any default by itself - the ExecutionContext
-/// consumes it when it lands.
+/// Nothing here changes any default by itself; the caller decides when to
+/// size a team from the probe.
 
 #include <cstddef>
 #include <utility>

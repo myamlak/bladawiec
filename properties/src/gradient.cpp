@@ -1,9 +1,10 @@
-// The total analytic nuclear gradient: the response state's build (dense AO
-// tensor, four quarter-transforms, the reference Fock, the screening
-// structure), the Kohn-Sham half when a density functional is integrated (the
-// grid engine, the fixed-density potential, the kernel action, the grid
-// walks), the two integral derivative walks, the two refusal gates, and the
-// sum of the terms into the emitted gradient.
+// The total analytic nuclear gradient: the response state's build (the band's
+// two-electron representation - a dense AO tensor through four quarter
+// transforms, or the matrix-free derivative's direct engine - the reference
+// Fock, the screening structure), the Kohn-Sham half when a density functional
+// is integrated (the grid engine, the fixed-density potential, the kernel
+// action, the grid walks), the two integral derivative walks, the two refusal
+// gates, and the sum of the terms into the emitted gradient.
 
 #include "qcx/properties/gradient.hpp"
 
@@ -12,6 +13,7 @@
 #include "qcx/grid/xc_grid_engine.hpp"
 #include "qcx/grid/xc_kernel_action.hpp"
 #include "qcx/grid/xc_kernel_gradient.hpp"
+#include "qcx/integrals/eri_dense.hpp"
 #include "qcx/integrals/one_electron.hpp"
 #include "qcx/integrals/screening.hpp"
 #include "qcx/integrals/shell_pairs.hpp"
@@ -27,9 +29,11 @@
 #include <cmath>
 #include <cstddef>
 #include <excgrid/grid_derivatives.hpp>
+#include <iomanip>
 #include <memory>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,6 +43,14 @@ namespace {
 
 qcx::Error Invalid(std::string message) {
     return qcx::Error{qcx::ErrorCode::kInvalidArgument, std::move(message)};
+}
+
+// The energy gate compares a residual against a tolerance, both of which are
+// far below the default six decimals; print them so a refusal stays readable.
+std::string Scientific(double value) {
+    std::ostringstream stream;
+    stream << std::scientific << std::setprecision(6) << value;
+    return stream.str();
 }
 
 // The row-major n x n flattening every state input and every response entry
@@ -223,6 +235,18 @@ qcx::Result<response::ResponseScreening> BuildScreening(const qcx::molecule::Mol
             qcx::ErrorCode::kInternalError,
             "total gradient: the pair-bound build returned " + std::to_string(bounds->size()) +
                 " bounds for " + std::to_string(shellPairs->pairs.size()) + " shell pairs"});
+    }
+
+    // The shell list is the basis set's own statement of how many functions it
+    // spans: a reference shaped by another basis is refused here, before a
+    // bound is written into an array of the wrong length.
+    if (shellPairs->functionCount != numBasis)
+    {
+        return std::unexpected(Invalid("total gradient: the reference states " +
+                                       std::to_string(numBasis) +
+                                       " basis functions but the basis set spans " +
+                                       std::to_string(shellPairs->functionCount) +
+                                       "; the reference belongs to another basis"));
     }
 
     auto identity = response::MakeResponseReferenceIdentity(coordinatesBohr, density);
@@ -479,13 +503,39 @@ qcx::Result<KohnShamContext> BuildKohnShamContext(const qcx::molecule::Molecule&
 
 } // namespace
 
+qcx::Result<response::ResponseOperatorBand> ResolveOperatorBand(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basisSet,
+    const integrals::EriDenseOptions& eriOptions) {
+    auto pairList = integrals::BuildShellPairs(molecule, basisSet);
+
+    if (!pairList.has_value())
+    {
+        return std::unexpected(pairList.error());
+    }
+
+    // The same estimate and cap BuildEriTensorGeneral applies before it
+    // enumerates, so the automatic choice cannot select a dense build that
+    // the engine would then refuse.
+    const std::size_t estimateBytes =
+        integrals::DenseEriTensorEstimateBytes(pairList->functionCount, pairList->pairs.size());
+
+    if (estimateBytes <= eriOptions.maxTensorBytes)
+    {
+        return response::ResponseOperatorBand::kDenseTensor;
+    }
+
+    return response::ResponseOperatorBand::kMatrixFree;
+}
+
 qcx::Result<response::ResponseState> BuildResponseState(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basisSet,
     const qcx::scf::ScfGradientReference& reference,
     const integrals::EriDenseOptions& eriOptions,
     const response::ResponseSolveOptions& solverOptions,
-    std::optional<TotalGradientKohnShamRoute> kohnSham) {
+    std::optional<TotalGradientKohnShamRoute> kohnSham,
+    response::ResponseOperatorBand band) {
     const std::size_t numBasis = reference.numBasisFunctions;
     const Eigen::Index basis = static_cast<Eigen::Index>(numBasis);
 
@@ -579,6 +629,176 @@ qcx::Result<response::ResponseState> BuildResponseState(
         }
     }
 
+    const std::vector<double> density = RowMajor(reference.density);
+    const std::vector<double> coefficients = RowMajor(reference.coefficients);
+    const std::vector<double> orbitalEnergies(reference.orbitalEnergies.data(),
+                                              reference.orbitalEnergies.data() +
+                                                  reference.orbitalEnergies.size());
+    const std::vector<double> coordinates = CoordinatesRowMajor(molecule);
+
+    auto screening = BuildScreening(molecule, basisSet, coordinates, density, numBasis);
+
+    if (!screening.has_value())
+    {
+        return std::unexpected(screening.error());
+    }
+
+    response::ResponseStateReference input;
+    input.converged = true;
+    input.numBasisFunctions = numBasis;
+    input.numOccupied = reference.numOccupied;
+    input.numVirtual = reference.numVirtual;
+    input.coordinatesBohr = coordinates;
+    input.moCoefficients = coefficients;
+    input.orbitalEnergies = orbitalEnergies;
+    input.density = density;
+    input.history.scfIterations = static_cast<std::size_t>(reference.iterations);
+    input.history.achievedEnergyDelta = reference.achievedEnergyDelta;
+    input.history.achievedRmsDensityChange = reference.achievedRmsDensityChange;
+
+    // The automatic policy: the dense tensor where the engine's own estimate
+    // admits it, the matrix-free band where it does not. Resolving here means
+    // every caller - the total-gradient entry and the driver's default - gets
+    // the faster per-application representation whenever the tensor fits.
+    if (band == response::ResponseOperatorBand::kAuto)
+    {
+        auto resolved = ResolveOperatorBand(molecule, basisSet, eriOptions);
+
+        if (!resolved.has_value())
+        {
+            return std::unexpected(resolved.error());
+        }
+
+        band = *resolved;
+    }
+
+    // The matrix-free band: the derivative owns the direct screened Fock
+    // engine, which supplies the reference Fock here and every operator
+    // application after. No dense ERI tensor is built, and the state's input
+    // carries no MO tensor - that array is exactly what this band does not
+    // have.
+    if (band == response::ResponseOperatorBand::kMatrixFree)
+    {
+        response::MatrixFreeEriDerivativeOptions derivativeOptions;
+        derivativeOptions.accuracy = eriOptions.accuracy;
+        // The dense build's Schwarz switch is the one screening decision the
+        // run states; on this band it becomes the builder's density and
+        // per-element screening. With it off the action is the exact
+        // contraction, which is the agreement test's configuration.
+        derivativeOptions.useDensityScreening = eriOptions.screen;
+        derivativeOptions.usePerElementScreening = eriOptions.screen;
+        derivativeOptions.maxBatchBytes = eriOptions.maxBatchBytes;
+
+        // The operator's fraction is the method's: the Roothaan reference is
+        // unscaled, the Kohn-Sham one carries the functional's c_HF.
+        const double exchangeFraction = kohnSham.has_value() ? kohnSham->exchangeFraction : 1.0;
+        const std::vector<double> coreRowMajor = RowMajor(core);
+        auto derivative = response::MatrixFreeEriDerivative::Create(
+            molecule,
+            basisSet,
+            coreRowMajor,
+            response::ResponseLayout{reference.numOccupied, reference.numVirtual},
+            numBasis,
+            coefficients,
+            exchangeFraction,
+            derivativeOptions);
+
+        if (!derivative.has_value())
+        {
+            return std::unexpected(derivative.error());
+        }
+
+        // The Fock at the reference density, from the same builder the action
+        // runs: one engine, one screen, so the reference and the operator
+        // cannot be two different contractions.
+        //
+        // The builder's density argument is the spatial closed-shell density
+        // rho = D / 2, so the reference's spin-summed D is halved here once.
+        // The Hartree-Fock route reads the full Roothaan Fock. A restricted
+        // Kohn-Sham reference was converged against
+        //     F_KS = (H + J) + V_xc - c_HF ((H + J) - F_RHF),
+        // so the derivative's Coulomb Fock is (H + J), its full Fock is
+        // F_RHF, and the parenthesised difference is the exchange the
+        // functional scales. A functional with c_HF = 0 carries no exchange
+        // at all, and the full Fock is then never formed.
+        std::vector<double> fock;
+        const std::size_t matrixSize = numBasis * numBasis;
+        std::vector<double> spatialDensity(matrixSize, 0.0);
+
+        for (std::size_t index = 0; index < matrixSize; ++index)
+        {
+            spatialDensity[index] = 0.5 * density[index];
+        }
+
+        if (kohnSham.has_value())
+        {
+            auto coulombOnly = derivative->CoulombFock(spatialDensity);
+
+            if (!coulombOnly.has_value())
+            {
+                return std::unexpected(coulombOnly.error());
+            }
+
+            const std::vector<double> potential = RowMajor(kohnSham->potential);
+            fock.assign(matrixSize, 0.0);
+
+            for (std::size_t index = 0; index < matrixSize; ++index)
+            {
+                fock[index] = (*coulombOnly)[index] + potential[index];
+            }
+
+            if (kohnSham->exchangeFraction != 0.0)
+            {
+                auto evaluated = derivative->ReferenceFock(spatialDensity);
+
+                if (!evaluated.has_value())
+                {
+                    return std::unexpected(evaluated.error());
+                }
+
+                for (std::size_t index = 0; index < matrixSize; ++index)
+                {
+                    fock[index] -=
+                        kohnSham->exchangeFraction * ((*coulombOnly)[index] - (*evaluated)[index]);
+                }
+            }
+        } else
+        {
+            auto evaluated = derivative->ReferenceFock(spatialDensity);
+
+            if (!evaluated.has_value())
+            {
+                return std::unexpected(evaluated.error());
+            }
+
+            fock = std::move(*evaluated);
+        }
+
+        input.fock = fock;
+
+        // The operator's callback captures a copy of the shared pointer, so
+        // the derivative lives exactly as long as the state can apply it.
+        auto sharedDerivative =
+            std::make_shared<response::MatrixFreeEriDerivative>(std::move(*derivative));
+
+        // The state copies every array at construction, so the locals above
+        // only have to outlive this call. The callback's captures (the
+        // Kohn-Sham engine and action) are the caller's to keep alive.
+        if (kohnSham.has_value())
+        {
+            return response::ResponseState::CreateMatrixFree(input,
+                                                             std::move(*screening),
+                                                             std::move(sharedDerivative),
+                                                             solverOptions,
+                                                             std::move(kohnSham->kernel));
+        }
+
+        return response::ResponseState::CreateMatrixFree(
+            input, std::move(*screening), std::move(sharedDerivative), solverOptions);
+    }
+
+    // The dense-tensor band: the admission-capped AO tensor, its MO
+    // transform, and the SCF module's own evaluator for the reference Fock.
     auto eriTensor = integrals::BuildEriTensorGeneral(molecule, basisSet, eriOptions);
 
     if (!eriTensor.has_value())
@@ -596,12 +816,6 @@ qcx::Result<response::ResponseState> BuildResponseState(
                     " basis functions but the basis set spans " + std::to_string(shape[0]) +
                     "; the reference belongs to another basis"));
     }
-
-    const std::vector<double> density = RowMajor(reference.density);
-    const std::vector<double> coefficients = RowMajor(reference.coefficients);
-    const std::vector<double> orbitalEnergies(reference.orbitalEnergies.data(),
-                                              reference.orbitalEnergies.data() +
-                                                  reference.orbitalEnergies.size());
 
     // The Fock at the reference density, through the SCF module's own
     // evaluator: the same Roothaan contraction the SCF loop runs, so the
@@ -659,29 +873,8 @@ qcx::Result<response::ResponseState> BuildResponseState(
 
     const std::vector<double>& aoTensor = eriTensor->HostView();
     const std::vector<double> moTensor = TransformEriToMo(aoTensor, coefficients, numBasis);
-    const std::vector<double> coordinates = CoordinatesRowMajor(molecule);
-
-    auto screening = BuildScreening(molecule, basisSet, coordinates, density, numBasis);
-
-    if (!screening.has_value())
-    {
-        return std::unexpected(screening.error());
-    }
-
-    response::ResponseStateReference input;
-    input.converged = true;
-    input.numBasisFunctions = numBasis;
-    input.numOccupied = reference.numOccupied;
-    input.numVirtual = reference.numVirtual;
-    input.coordinatesBohr = coordinates;
-    input.moCoefficients = coefficients;
-    input.orbitalEnergies = orbitalEnergies;
-    input.density = density;
     input.fock = fock;
     input.moTwoElectron = moTensor;
-    input.history.scfIterations = static_cast<std::size_t>(reference.iterations);
-    input.history.achievedEnergyDelta = reference.achievedEnergyDelta;
-    input.history.achievedRmsDensityChange = reference.achievedRmsDensityChange;
 
     // The state copies every array at construction, so the locals above only
     // have to outlive this call. The Hartree-Fock call site is the one it
@@ -763,8 +956,13 @@ qcx::Result<TotalGradient> ComputeTotalGradient(const qcx::molecule::Molecule& m
             }};
     }
 
-    auto state = BuildResponseState(
-        molecule, basisSet, reference, options.eri, options.solver, std::move(route));
+    auto state = BuildResponseState(molecule,
+                                    basisSet,
+                                    reference,
+                                    options.eri,
+                                    options.solver,
+                                    std::move(route),
+                                    options.operatorBand);
 
     if (!state.has_value())
     {
@@ -920,8 +1118,8 @@ qcx::Result<TotalGradient> ComputeTotalGradient(const qcx::molecule::Molecule& m
             Invalid("total gradient: the derivative terms rebuild an electronic energy of " +
                     std::to_string(reconstructedElectronic) + " Hartree against the reference's " +
                     std::to_string(reference.electronicEnergy) + " (residual " +
-                    std::to_string(energyResidual) + " exceeds the tolerance " +
-                    std::to_string(options.energyTolerance) +
+                    Scientific(energyResidual) + " exceeds the tolerance " +
+                    Scientific(options.energyTolerance) +
                     "); the reference and the molecule or basis do not describe one state"));
     }
 

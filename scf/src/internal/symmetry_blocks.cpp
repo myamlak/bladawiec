@@ -1965,6 +1965,14 @@ std::string ElementDescriptorString(const FullGroupElement& element) {
 // plan's aufbau-straddle rule, record-don't-rotate). `dimensionOf` maps a
 // label to its irrep dimension.
 //
+// The same pass produces the degeneracy CHECK (the returned report): every
+// dim >= 2 irrep group in every energy cluster is recorded - a group of one
+// column included, because that is how a split partner appears - with its
+// spread and whether its cardinality is a multiple of the irrep dimension.
+// The check and the rotation read one partition of the same energy-sorted
+// columns, so the two cannot disagree about which partners the energies
+// showed.
+//
 // THE MANIFOLD KEY IS (ENERGY CLUSTER, IRREP LABEL), NOT THE LABEL ALONE.
 // The columns are ordered by their Fock expectation and cut into
 // clusters whose consecutive gaps are within kManifoldEnergyTolerance, and the
@@ -1977,13 +1985,14 @@ std::string ElementDescriptorString(const FullGroupElement& element) {
 // (each manifold is entirely occupied or entirely virtual), so no energy moves:
 // what moves is the record and the rotation decision it drives.
 template <typename DimensionOf>
-void CanonicalizeDegeneratePartners(const Eigen::MatrixXd& fock,
-                                    const std::vector<std::string>& labels,
-                                    int occupiedCount,
-                                    Eigen::MatrixXd& coefficients,
-                                    std::vector<DegenerateSubspaceRecord>& canonicalized,
-                                    std::vector<DegenerateSubspaceRecord>& straddled,
-                                    const DimensionOf& dimensionOf) {
+qcx::scf::SymmetryDegeneracyReport CanonicalizeDegeneratePartners(
+    const Eigen::MatrixXd& fock,
+    const std::vector<std::string>& labels,
+    int occupiedCount,
+    Eigen::MatrixXd& coefficients,
+    std::vector<DegenerateSubspaceRecord>& canonicalized,
+    std::vector<DegenerateSubspaceRecord>& straddled,
+    const DimensionOf& dimensionOf) {
     const int columnCount = static_cast<int>(labels.size());
 
     // The Fock expectation of every column. The SCF path hands columns that are
@@ -2004,6 +2013,7 @@ void CanonicalizeDegeneratePartners(const Eigen::MatrixXd& fock,
         return a.first != b.first ? a.first < b.first : a.second < b.second;
     });
 
+    std::vector<qcx::scf::SymmetryMultipletRecord> multiplets;
     std::vector<DegenerateSubspaceRecord> manifolds;
     std::size_t start = 0;
 
@@ -2017,24 +2027,49 @@ void CanonicalizeDegeneratePartners(const Eigen::MatrixXd& fock,
             ++end;
         }
 
-        std::map<std::string, std::vector<int>> byLabel;
+        std::map<std::string, std::vector<std::size_t>> byLabel; // label -> positions in `ordered`
 
         for (std::size_t k = start; k < end; ++k)
         {
-            byLabel[labels[static_cast<std::size_t>(ordered[k].second)]].push_back(
-                ordered[k].second);
+            byLabel[labels[static_cast<std::size_t>(ordered[k].second)]].push_back(k);
         }
 
         for (auto& entry : byLabel)
         {
-            if (dimensionOf(entry.first) < 2 || entry.second.size() < 2)
+            const int dimension = dimensionOf(entry.first);
+
+            if (dimension < 2)
             {
                 continue;
             }
 
-            std::vector<int>& indices = entry.second;
+            std::vector<int> indices;
+            indices.reserve(entry.second.size());
+            double lowestEnergy = ordered[entry.second.front()].first;
+            double highestEnergy = lowestEnergy;
+
+            for (const std::size_t k : entry.second)
+            {
+                indices.push_back(ordered[k].second);
+                lowestEnergy = std::min(lowestEnergy, ordered[k].first);
+                highestEnergy = std::max(highestEnergy, ordered[k].first);
+            }
+
             std::sort(indices.begin(), indices.end());
-            manifolds.push_back(DegenerateSubspaceRecord{entry.first, indices});
+
+            qcx::scf::SymmetryMultipletRecord multiplet;
+            multiplet.irrepLabel = entry.first;
+            multiplet.dimension = dimension;
+            multiplet.moIndices = indices;
+            multiplet.spreadHartree = highestEnergy - lowestEnergy;
+            multiplet.intact = indices.size() % static_cast<std::size_t>(dimension) == 0;
+
+            if (indices.size() >= 2)
+            {
+                manifolds.push_back(DegenerateSubspaceRecord{entry.first, std::move(indices)});
+            }
+
+            multiplets.push_back(std::move(multiplet));
         }
 
         start = end;
@@ -2043,6 +2078,9 @@ void CanonicalizeDegeneratePartners(const Eigen::MatrixXd& fock,
     // Emitted in ascending order of their lowest column, so the record order is
     // the coefficient order rather than the energy ordering.
     std::sort(manifolds.begin(), manifolds.end(), [](const auto& a, const auto& b) {
+        return a.moIndices.front() < b.moIndices.front();
+    });
+    std::sort(multiplets.begin(), multiplets.end(), [](const auto& a, const auto& b) {
         return a.moIndices.front() < b.moIndices.front();
     });
 
@@ -2077,6 +2115,19 @@ void CanonicalizeDegeneratePartners(const Eigen::MatrixXd& fock,
 
         canonicalized.push_back(std::move(record));
     }
+
+    qcx::scf::SymmetryDegeneracyReport report;
+    report.toleranceHartree = kManifoldEnergyTolerance;
+    report.multipletCount = static_cast<int>(multiplets.size());
+    report.brokenMultipletCount = static_cast<int>(std::count_if(
+        multiplets.begin(), multiplets.end(), [](const auto& record) { return !record.intact; }));
+    report.verdict =
+        report.brokenMultipletCount > 0
+            ? qcx::scf::SymmetryDegeneracyVerdict::kFailed
+            : (report.multipletCount == 0 ? qcx::scf::SymmetryDegeneracyVerdict::kNoMultiplets
+                                          : qcx::scf::SymmetryDegeneracyVerdict::kPassed);
+    report.multiplets = std::move(multiplets);
+    return report;
 }
 
 } // namespace
@@ -3216,13 +3267,13 @@ qcx::Result<qcx::scf::SymmetryLabels> SymmetryLabelAndSymmetrize(
         const auto dimensionOf = [](const std::string& label) {
             return label.starts_with("S") ? 1 : 2;
         };
-        CanonicalizeDegeneratePartners(fock,
-                                       out.labels,
-                                       occupiedCount,
-                                       out.coefficients,
-                                       out.canonicalized,
-                                       out.straddled,
-                                       dimensionOf);
+        out.degeneracy = CanonicalizeDegeneratePartners(fock,
+                                                        out.labels,
+                                                        occupiedCount,
+                                                        out.coefficients,
+                                                        out.canonicalized,
+                                                        out.straddled,
+                                                        dimensionOf);
 
         // The documented finite symmetrization subset (the continuum
         // symmetries cannot be finitely averaged).
@@ -3286,13 +3337,13 @@ qcx::Result<qcx::scf::SymmetryLabels> SymmetryLabelAndSymmetrize(
 
             return 0;
         };
-        CanonicalizeDegeneratePartners(fock,
-                                       out.labels,
-                                       occupiedCount,
-                                       out.coefficients,
-                                       out.canonicalized,
-                                       out.straddled,
-                                       dimensionOf);
+        out.degeneracy = CanonicalizeDegeneratePartners(fock,
+                                                        out.labels,
+                                                        occupiedCount,
+                                                        out.coefficients,
+                                                        out.canonicalized,
+                                                        out.straddled,
+                                                        dimensionOf);
     }
 
     // The symmetrized density D_sym = (1/|G|) sum_g A(g) D A(g)^T over the

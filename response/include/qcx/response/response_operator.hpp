@@ -87,6 +87,24 @@ using HessianExtraTermFn =
     std::function<qcx::Result<void>(std::span<const double> x, std::span<double> y)>;
 
 /// \ingroup qcx-response
+/// The two-electron term of the orbital-Hessian action, supplied as an
+/// action rather than as a dense MO tensor.
+///
+/// It is the same seam shape as HessianExtraTermFn, and for the same reason:
+/// the operator does not care how the term is represented, only that it can
+/// add its contribution to a trial vector. `matrix_free_eri_derivative.hpp`
+/// supplies one implementation (one direct Fock build per application); the
+/// dense tensor's loop is the other, and remains the operator's default.
+///
+/// The callback ADDS its term into `y` and is handed a zeroed result, so the
+/// contributions accumulate in a fixed order whatever the representation.
+///
+/// \param x Trial vector, size Dimension().
+/// \param y Result to add into, size Dimension().
+using TwoElectronDerivativeActionFn =
+    std::function<qcx::Result<void>(std::span<const double> x, std::span<double> y)>;
+
+/// \ingroup qcx-response
 /// The closed-shell orbital-Hessian operator, applied matrix-free.
 ///
 /// This is the coupled-perturbed Hartree-Fock matrix that the orbital response
@@ -176,6 +194,31 @@ public:
                                                       double exchangeFraction,
                                                       HessianExtraTermFn extraTerm);
 
+    /// Builds the action with a two-electron term computed on the fly instead
+    /// of read from a dense MO tensor.
+    ///
+    /// The two-electron term is the callback's: it must add
+    /// `4 J(S) - 2 c_HF K(S)` on the occupied-virtual block for the trial
+    /// vector it is handed, with S the symmetrised trial density - the exact
+    /// action the dense tensor's loop computes. The exchange fraction is
+    /// carried for reporting and for the caller's consistency checks; the
+    /// callback is responsible for applying it, because only the
+    /// representation knows where its exchange term is.
+    /// \param layout Occupied/virtual counts; both must be non-zero.
+    /// \param orbitalEnergies Canonical orbital energies, occupied orbitals
+    /// first, size `layout.numOccupied + layout.numVirtual`.
+    /// \param twoElectron The two-electron action; must be non-null.
+    /// \param exchangeFraction The exact-exchange fraction c_HF, in [0, 1].
+    /// \param extraTerm The term added to every action; may be empty.
+    /// \returns The operator, or an Error (kInvalidArgument for a zero block,
+    /// an energy-length mismatch, a null action or a fraction outside [0, 1]).
+    static qcx::Result<OrbitalHessianOperator> CreateMatrixFree(
+        ResponseLayout layout,
+        OrbitalEnergies orbitalEnergies,
+        TwoElectronDerivativeActionFn twoElectron,
+        double exchangeFraction = 1.0,
+        HessianExtraTermFn extraTerm = {});
+
     /// Applies the operator: y = A x.
     /// \param x Trial vector, size Dimension().
     /// \param y Result vector, size Dimension(); must not alias \p x.
@@ -207,6 +250,12 @@ public:
         return _exchangeFraction;
     }
 
+    /// \returns Whether the two-electron term is computed by the on-the-fly
+    /// action (true) rather than read from a dense MO tensor (false).
+    bool IsMatrixFree() const noexcept {
+        return _twoElectronAction != nullptr;
+    }
+
 private:
     OrbitalHessianOperator(ResponseLayout layout,
                            OrbitalEnergies orbitalEnergies,
@@ -214,10 +263,20 @@ private:
                            double exchangeFraction,
                            HessianExtraTermFn extraTerm);
 
+    /// The matrix-free construction: the two-electron term is the callback's
+    /// and there is no dense tensor to borrow.
+    OrbitalHessianOperator(ResponseLayout layout,
+                           OrbitalEnergies orbitalEnergies,
+                           TwoElectronDerivativeActionFn twoElectronAction,
+                           double exchangeFraction,
+                           HessianExtraTermFn extraTerm);
+
     /// Runs the Hartree-Fock action alone, without the extra term.
     /// \param x Trial vector, size Dimension().
     /// \param y Result vector, size Dimension().
-    void ApplyHartreeFock(std::span<const double> x, std::span<double> y) const;
+    /// \returns An Error (kInvalidArgument) on a length mismatch or the
+    /// matrix-free callback's own error.
+    qcx::Result<void> ApplyHartreeFock(std::span<const double> x, std::span<double> y) const;
 
     /// The unscaled Hartree-Fock action: the exact-exchange fraction is one and
     /// this loop is the operator's original one, kept verbatim so every anchor
@@ -232,12 +291,22 @@ private:
     /// \param y Result vector, size Dimension().
     void ApplyHartreeFockScaled(std::span<const double> x, std::span<double> y) const;
 
+    /// The Hartree-Fock action with its two-electron term supplied by the
+    /// matrix-free callback: the diagonal is written here and the callback's
+    /// contribution is added to it.
+    /// \param x Trial vector, size Dimension().
+    /// \param y Result vector, size Dimension().
+    qcx::Result<void> ApplyHartreeFockMatrixFree(std::span<const double> x,
+                                                 std::span<double> y) const;
+
     ResponseLayout _layout;
     std::size_t _numOrbitals = 0;
     std::span<const double> _orbitalEnergies;
     std::span<const double> _moTwoElectron;
     double _exchangeFraction = 1.0;
     HessianExtraTermFn _extraTerm;
+    /// Set only by the matrix-free factory; null means the dense tensor band.
+    TwoElectronDerivativeActionFn _twoElectronAction;
 };
 
 /// \ingroup qcx-response

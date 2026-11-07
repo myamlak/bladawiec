@@ -131,8 +131,228 @@ TEST(BasisSetTest, EcpStubIsRecorded) {
     ASSERT_EQ(basis->Ecps().size(), 1u);
     EXPECT_EQ(basis->Ecps()[0].atomicNumber, 47);
     EXPECT_EQ(basis->Ecps()[0].coreElectronCount, 28);
-    // The radial terms were skipped without disturbing the orbital basis.
+    // The radial terms are retained: the fixture's single local channel.
+    ASSERT_EQ(basis->Ecps()[0].channels.size(), 1u);
+    EXPECT_EQ(basis->Ecps()[0].channels[0].angularMomentum, kEcpLocalChannel);
+    ASSERT_EQ(basis->Ecps()[0].channels[0].terms.size(), 1u);
+    EXPECT_EQ(basis->Ecps()[0].channels[0].terms[0].power, 2);
+    EXPECT_NEAR(basis->Ecps()[0].channels[0].terms[0].exponent, 14.22, kValueTolerance);
+    EXPECT_NEAR(basis->Ecps()[0].channels[0].terms[0].coefficient, -33.68992012, kValueTolerance);
+    // The radial terms did not disturb the orbital basis.
     EXPECT_NE(basis->Find("Ag"), nullptr);
+}
+
+TEST(BasisSetTest, EcpChannelsAndTermsKeepFileOrder) {
+    // A local channel and two projectors, with powers other than the corpus's
+    // n = 2: the parser must store the integer power it read, not assume one.
+    constexpr char kChannelsFixture[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag nelec 28
+Ag ul
+-2      10.00000000    -1.50000000
+ 1       2.50000000     0.25000000
+Ag S
+ 2       3.00000000     4.00000000
+Ag D
+ 0       1.25000000    -0.50000000
+END
+)";
+    const auto basis = ParseNwchemText(kChannelsFixture);
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    ASSERT_EQ(basis->Ecps().size(), 1u);
+    const EcpDefinition& ecp = basis->Ecps()[0];
+    ASSERT_EQ(ecp.channels.size(), 3u);
+    EXPECT_EQ(ecp.channels[0].angularMomentum, kEcpLocalChannel);
+    EXPECT_EQ(ecp.channels[1].angularMomentum, 0);
+    EXPECT_EQ(ecp.channels[2].angularMomentum, 2);
+
+    ASSERT_EQ(ecp.channels[0].terms.size(), 2u);
+    EXPECT_EQ(ecp.channels[0].terms[0].power, -2);
+    EXPECT_NEAR(ecp.channels[0].terms[0].exponent, 10.0, kValueTolerance);
+    EXPECT_NEAR(ecp.channels[0].terms[0].coefficient, -1.5, kValueTolerance);
+    EXPECT_EQ(ecp.channels[0].terms[1].power, 1);
+    EXPECT_NEAR(ecp.channels[0].terms[1].exponent, 2.5, kValueTolerance);
+    EXPECT_NEAR(ecp.channels[0].terms[1].coefficient, 0.25, kValueTolerance);
+
+    ASSERT_EQ(ecp.channels[1].terms.size(), 1u);
+    EXPECT_EQ(ecp.channels[1].terms[0].power, 2);
+    ASSERT_EQ(ecp.channels[2].terms.size(), 1u);
+    EXPECT_EQ(ecp.channels[2].terms[0].power, 0);
+
+    // The accessor is the consumer entry for the operator's channel table.
+    ASSERT_NE(ecp.FindChannel(kEcpLocalChannel), nullptr);
+    ASSERT_NE(ecp.FindChannel(0), nullptr);
+    ASSERT_NE(ecp.FindChannel(2), nullptr);
+    EXPECT_EQ(ecp.FindChannel(1), nullptr);
+    EXPECT_EQ(ecp.FindChannel(3), nullptr);
+}
+
+TEST(BasisSetTest, EcpFGChannelsMapToAngularMomentumThreeAndFour) {
+    // The lanthanide ECPs are the corpus's only F/G carriers; l = 3 and 4
+    // must survive the channel mapping.
+    constexpr char kFGChannelFixture[] = R"(BASIS "ao basis" SPHERICAL PRINT
+Ce    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ce nelec 28
+Ce ul
+2       1.00000000     0.00000000
+Ce S
+2      20.13782900   580.08345700
+Ce P
+2      15.99848200   310.30283300
+Ce D
+2      14.97418700   167.81394400
+Ce F
+2      23.40245500   -49.39022900
+Ce G
+2      16.57055300   -21.33187900
+END
+)";
+    const auto basis = ParseNwchemText(kFGChannelFixture);
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+    ASSERT_EQ(basis->Ecps().size(), 1u);
+    const EcpDefinition& ecp = basis->Ecps()[0];
+    ASSERT_EQ(ecp.channels.size(), 6u);
+
+    const EcpChannel* f = ecp.FindChannel(3);
+    const EcpChannel* g = ecp.FindChannel(4);
+    ASSERT_NE(f, nullptr);
+    ASSERT_NE(g, nullptr);
+    ASSERT_EQ(f->terms.size(), 1u);
+    ASSERT_EQ(g->terms.size(), 1u);
+    EXPECT_NEAR(f->terms[0].coefficient, -49.39022900, kValueTolerance);
+    EXPECT_NEAR(g->terms[0].coefficient, -21.33187900, kValueTolerance);
+}
+
+TEST(BasisSetTest, EcpChannelsRequireTheirOwnNelecLine) {
+    constexpr char kChannelBeforeNelec[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag ul
+2       1.00000000     1.00000000
+END
+)";
+    const auto result = ParseNwchemText(kChannelBeforeNelec);
+    EXPECT_EQ(result.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(result.error().message.find("ECP channel before 'Ag nelec N'"), std::string::npos);
+}
+
+TEST(BasisSetTest, RejectsEcpTermsOutsideAChannel) {
+    constexpr char kTermOutside[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag nelec 28
+2       1.00000000     1.00000000
+END
+)";
+    const auto result = ParseNwchemText(kTermOutside);
+    EXPECT_EQ(result.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(result.error().message.find("ECP term line outside a channel"), std::string::npos);
+}
+
+TEST(BasisSetTest, RejectsDuplicateEcpChannels) {
+    constexpr char kDuplicate[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag nelec 28
+Ag ul
+2       1.00000000     1.00000000
+Ag ul
+2       2.00000000     2.00000000
+END
+)";
+    const auto result = ParseNwchemText(kDuplicate);
+    EXPECT_EQ(result.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(result.error().message.find("duplicate ECP channel 'ul'"), std::string::npos);
+}
+
+TEST(BasisSetTest, RejectsUnknownEcpChannelTypes) {
+    constexpr char kUnknownChannel[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag nelec 28
+Ag K
+2       1.00000000     1.00000000
+END
+)";
+    const auto result = ParseNwchemText(kUnknownChannel);
+    EXPECT_EQ(result.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(result.error().message.find("unknown ECP channel type 'K'"), std::string::npos);
+}
+
+TEST(BasisSetTest, RejectsAnEcpChannelWithNoTerms) {
+    constexpr char kEmptyChannel[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag nelec 28
+Ag ul
+Ag S
+2       1.00000000     1.00000000
+END
+)";
+    const auto result = ParseNwchemText(kEmptyChannel);
+    EXPECT_EQ(result.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(result.error().message.find("ECP channel 'ul' has no terms"), std::string::npos);
+}
+
+TEST(BasisSetTest, RejectsMalformedEcpTerms) {
+    constexpr char kFractionalPower[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag nelec 28
+Ag ul
+2.5     1.00000000     1.00000000
+END
+)";
+    const auto fractional = ParseNwchemText(kFractionalPower);
+    EXPECT_EQ(fractional.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(fractional.error().message.find("invalid ECP term power"), std::string::npos);
+
+    constexpr char kZeroExponent[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag nelec 28
+Ag ul
+2       0.00000000     1.00000000
+END
+)";
+    const auto zero = ParseNwchemText(kZeroExponent);
+    EXPECT_EQ(zero.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(zero.error().message.find("ECP term exponent must be positive"), std::string::npos);
+
+    constexpr char kTwoColumns[] = R"(BASIS "ao basis" SPHERICAL PRINT
+H    S
+      1.0000000000E+00       1.0000000000E+00
+END
+ECP
+Ag nelec 28
+Ag ul
+2       1.00000000
+END
+)";
+    const auto columns = ParseNwchemText(kTwoColumns);
+    EXPECT_EQ(columns.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(columns.error().message.find("ECP term line needs exactly three columns"),
+              std::string::npos);
 }
 
 TEST(BasisSetTest, GeneralContractionCarriesMultipleCoefficientSets) {

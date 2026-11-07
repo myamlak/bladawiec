@@ -75,10 +75,10 @@ struct ExpectedRow {
 
 // The driver's current outcome, one row per property, in the column order
 // rhf, uhf, rks, uks, rohf, roks. The refusals are transcribed from the
-// driver's pre-run checks (ETS-NOCV on a per-spin run and on a
-// functional-naming method) and the input validator's two
-// gradient policies plus the restricted open-shell key policy; the element
-// limits are declared beside the table and checked separately.
+// driver's pre-run checks (ETS-NOCV on the restricted open-shell pair) and
+// the input validator's two gradient policies plus the restricted open-shell
+// key policy; the element limits are declared beside the table and checked
+// separately.
 constexpr std::array<ExpectedRow, kPropertyCount> kExpected{{
     {PropertyKind::kPopulations,
      {RefusalReason::kNone,
@@ -150,17 +150,17 @@ constexpr std::array<ExpectedRow, kPropertyCount> kExpected{{
       RefusalReason::kNone,
       RefusalReason::kNone,
       RefusalReason::kNone}},
-    // The closed-shell check precedes the functional check, so uks reports the
-    // closed-shell reason and only rks reports the Hartree-Fock one; the
-    // restricted open-shell pair is per spin and reports the closed-shell
-    // reason like uks.
+    // The four references the module implements are served: closed-shell and
+    // unrestricted Hartree-Fock, closed-shell and unrestricted Kohn-Sham. The
+    // restricted open-shell pair is the one remaining hole (no transition
+    // Fock from the ROHF effective operators).
     {PropertyKind::kEtsNocv,
      {RefusalReason::kNone,
-      RefusalReason::kEtsNocvClosedShellOnly,
-      RefusalReason::kEtsNocvHartreeFockOnly,
-      RefusalReason::kEtsNocvClosedShellOnly,
-      RefusalReason::kEtsNocvClosedShellOnly,
-      RefusalReason::kEtsNocvClosedShellOnly}},
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kNone,
+      RefusalReason::kEtsNocvRestrictedOpenShellUnserved,
+      RefusalReason::kEtsNocvRestrictedOpenShellUnserved}},
     {PropertyKind::kMolden,
      {RefusalReason::kNone,
       RefusalReason::kNone,
@@ -254,8 +254,7 @@ TEST(PropertyRegistryTest, EveryDeclaredWordIsUnique) {
     std::vector<std::string_view> refusalWords;
 
     for (const RefusalReason reason : {RefusalReason::kNone,
-                                       RefusalReason::kEtsNocvClosedShellOnly,
-                                       RefusalReason::kEtsNocvHartreeFockOnly,
+                                       RefusalReason::kEtsNocvRestrictedOpenShellUnserved,
                                        RefusalReason::kHirshfeldSadTableZLimit,
                                        RefusalReason::kNalewajskiFragmentTableZLimit,
                                        RefusalReason::kEtsNocvFragmentTableZLimit,
@@ -278,6 +277,11 @@ TEST(PropertyRegistryTest, EveryDeclarationCarriesEvidence) {
 }
 
 TEST(PropertyRegistryTest, TheFunctionalRuleMatchesTheKohnShamCells) {
+    // No declaration states the rule today: ETS-NOCV, the one property that
+    // did, takes the run's own functional through its Kohn-Sham entry
+    // points. The check stays for any declaration that states it later.
+    EXPECT_FALSE(DeclarationFor(PropertyKind::kEtsNocv).refusesWhenFunctionalNamed);
+
     for (const PropertyDeclaration& declaration : AllDeclarations())
     {
         if (!declaration.refusesWhenFunctionalNamed)

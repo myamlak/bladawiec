@@ -52,9 +52,11 @@
 /// DIIS-extrapolated one, so the evaluator's fresh F at the converged
 /// density differs at the residue level, ~1e-11).
 ///
-/// The decomposition is Hartree-Fock in v1: the fragment SCFs are UHF and
-/// no density functional enters it, so a Kohn-Sham run's total energy is
-/// not the energy it partitions (see AnalyzeNocvEts).
+/// AnalyzeNocvEts, the closed-shell Hartree-Fock entry point, admits no
+/// density functional: its fragment SCFs are UHF and no functional enters
+/// it, so a Kohn-Sham run's total energy is not the energy it partitions.
+/// The Kohn-Sham entry points take the run's own functional seam instead
+/// (AnalyzeNocvEtsKohnSham, AnalyzeNocvEtsUnrestrictedKohnSham).
 ///
 /// E_orb is resolved twice. The restricted resolution evaluates every
 /// density with the closed-shell functional (self-consistent - the
@@ -72,7 +74,7 @@
 /// closed-shell fragments the per-spin spectra halve the spin-summed one
 /// and the two resolutions coincide).
 ///
-/// BEYOND THE CLOSED-SHELL HARTREE-FOCK REFERENCE (the v1 entry point
+/// THE OTHER THREE REFERENCES (the closed-shell Hartree-Fock entry point is
 /// AnalyzeNocvEts above):
 ///
 /// * AnalyzeNocvEtsUnrestricted runs an UNRESTRICTED Hartree-Fock
@@ -107,9 +109,26 @@
 ///   Hartree-Fock), which the result records through the binding-energy
 ///   identity's own accuracy.
 ///
+/// * AnalyzeNocvEtsUnrestrictedKohnSham runs an UNRESTRICTED Kohn-Sham
+///   (UKS) decomposition: the two per-spin NOCV problems of
+///   AnalyzeNocvEtsUnrestricted, each resolved against its own spin's
+///   three-point transition Fock
+///     F_sigma^TS = 1/6 F_sigma[P_orth] + 2/3 F_sigma[P_TS]
+///                  + 1/6 F_sigma[D],
+///   every F_sigma from the run's functional seam at the per-spin density
+///   pair. E_Pauli is that functional's value at the orthogonalized spin
+///   pair, so the partition identity
+///     E_KS[D_a, D_b] - sum_i E_frag,i = E_elstat + E_Pauli + E_orb
+///   holds by construction with the run's own functional throughout, and
+///   E_orb differs from the exact E[D] - E[P_orth] by the Simpson residual
+///   of the spin-pair path (zero when the functional is quadratic). The
+///   entry collapses to AnalyzeNocvEtsUnrestricted exactly on the
+///   Hartree-Fock seam (zero XC, c_HF = 1) and to AnalyzeNocvEtsKohnSham
+///   when the two molecular densities are equal.
+///
 /// * The RESTRICTED open-shell reference (ROHF/ROKS) is NOT served. Each
 ///   spin density of a restricted open-shell determinant is a projector,
-///   so the unrestricted path would run on it unchanged - which is exactly
+///   so the per-spin path would run on it unchanged - which is exactly
 ///   why it must be refused by name rather than left to run: the restricted
 ///   reference is ONE spatial orbital set, the unrestricted resolution
 ///   diagonalizes the two channels independently and returns NOCV pairs of
@@ -118,8 +137,9 @@
 ///   depends on the core/open-shell split), so a transition-state Fock has
 ///   to be defined from the ROHF effective Fock operators (F_c and F_o)
 ///   together with a channel pairing rule for a spectrum that is not
-///   +-nu paired. Neither exists in this module; both entry points refuse
-///   NocvEtsReference::kRestrictedOpenShell with that statement.
+///   +-nu paired. Neither exists in this module; every entry point refuses
+///   NocvEtsReference::kRestrictedOpenShell with that statement, and
+///   CheckNocvEtsReference is its one home.
 
 #include "qcx/basisset/basis_set.hpp"
 #include "qcx/error.hpp"
@@ -130,6 +150,7 @@
 
 #include <Eigen/Core>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -253,15 +274,51 @@ struct NocvEtsDecomposition {
 enum class NocvEtsReference {
     /// A closed-shell determinant (RHF or RKS): D_alpha = D_beta = D/2.
     kClosedShell,
-    /// An unrestricted determinant (UHF): each spin density is its own
-    /// projector, and the two NOCV problems are independent.
+    /// An unrestricted determinant (UHF or UKS): each spin density is its
+    /// own projector, and the two NOCV problems are independent.
     kUnrestricted,
-    /// A restricted open-shell determinant (ROHF or ROKS). NOT SERVED: the
-    /// unrestricted and Kohn-Sham entry points added here both refuse it by
-    /// name (see the file comment for what the restricted formulation still
-    /// needs).
+    /// A restricted open-shell determinant (ROHF or ROKS). NOT SERVED:
+    /// every entry point refuses it by name (see the file comment for what
+    /// the restricted formulation still needs).
     kRestrictedOpenShell,
 };
+
+/// The ETS-NOCV entry point a reference is checked against.
+///
+/// The four served entry points cover the two spin classes crossed with the
+/// two functional classes: closed-shell Hartree-Fock (AnalyzeNocvEts),
+/// unrestricted Hartree-Fock (AnalyzeNocvEtsUnrestricted), closed-shell
+/// Kohn-Sham (AnalyzeNocvEtsKohnSham) and unrestricted Kohn-Sham
+/// (AnalyzeNocvEtsUnrestrictedKohnSham). AnalyzeNocvEts takes no reference
+/// argument; its entry-point value is declared here so the gate's table is
+/// total, and it serves the closed-shell reference only.
+/// \ingroup qcx-properties
+enum class NocvEtsEntryPoint : std::uint8_t {
+    /// AnalyzeNocvEts: closed-shell Hartree-Fock.
+    kClosedShellHartreeFock,
+    /// AnalyzeNocvEtsUnrestricted: unrestricted Hartree-Fock.
+    kUnrestrictedHartreeFock,
+    /// AnalyzeNocvEtsKohnSham: closed-shell Kohn-Sham.
+    kClosedShellKohnSham,
+    /// AnalyzeNocvEtsUnrestrictedKohnSham: unrestricted Kohn-Sham.
+    kUnrestrictedKohnSham,
+};
+
+/// The reference gate the ETS-NOCV entry points share: returns the same
+/// Error the named entry point returns for \p reference, or success when
+/// that entry point serves it.
+///
+/// A caller that prepares an expensive analysis setup calls this first, so
+/// an unserved reference is refused with the module's own sentence instead
+/// of a later allocation or integrals refusal. The restricted open-shell
+/// reference is refused by every entry point; a reference of the other spin
+/// class than the entry point's is refused with a pointer to the entry
+/// point that serves it.
+/// \param reference The reference determinant the density came from.
+/// \param entryPoint The entry point the caller intends to call.
+/// \returns The entry point's refusal, or success.
+/// \ingroup qcx-properties
+qcx::Result<void> CheckNocvEtsReference(NocvEtsReference reference, NocvEtsEntryPoint entryPoint);
 
 /// The density-functional seam of a Kohn-Sham decomposition: the XC energy
 /// and both spin potentials at an arbitrary spin-density pair, plus the
@@ -434,8 +491,8 @@ qcx::Result<NocvEtsDecomposition> AnalyzeNocvEtsUnrestricted(
 /// \param reference The reference the density came from; must be
 /// NocvEtsReference::kClosedShell. kRestrictedOpenShell returns
 /// kUnimplemented with the missing restricted formulation named;
-/// kUnrestricted returns kUnimplemented naming the per-spin (UKS) path this
-/// closed-shell entry does not serve.
+/// kUnrestricted returns kInvalidArgument naming the per-spin (UKS) entry
+/// point that serves it.
 /// \param functional The density-functional seam (see NocvEtsFunctional);
 /// its evaluate callback must be callable and exchangeFraction in [0, 1].
 /// \param fragments The fragment partition, as AnalyzeNocvEts's.
@@ -450,6 +507,66 @@ qcx::Result<NocvEtsDecomposition> AnalyzeNocvEtsKohnSham(
     const Eigen::MatrixXd& coreHamiltonian,
     const qcx::memory::Tensor<double, 4, qcx::backend::CpuTag>& eri,
     const Eigen::MatrixXd& density,
+    NocvEtsReference reference,
+    const NocvEtsFunctional& functional,
+    const std::vector<std::vector<std::size_t>>& fragments,
+    const qcx::scf::UhfOptions& fragmentOptions = {});
+
+/// Runs the ETS-NOCV decomposition of an UNRESTRICTED Kohn-Sham (UKS) run:
+/// the two per-spin NOCV problems of AnalyzeNocvEtsUnrestricted, each
+/// resolved against its own spin's Ziegler-Rauk three-point transition
+/// state through the run's functional seam.
+///
+/// The orbital relaxation is
+///     E_orb = E[D_a, D_b] - E[P_orth,a, P_orth,b]
+///           = sum_sigma integral_0^1 Tr[Delta D_sigma
+///             F_sigma[P_orth + lambda Delta D]] dlambda,
+/// and Simpson's rule on [0, 1] replaces each spin's integrand samples by
+///     F_sigma^TS = 1/6 F_sigma[P_orth] + 2/3 F_sigma[P_TS]
+///                  + 1/6 F_sigma[D],
+///     P_TS = 1/2 (P_orth + D) per spin.
+/// Every Fock and every energy comes from the supplied functional seam: the
+/// XC potential is evaluated at all three per-spin density pairs, and each
+/// fragment runs its own SCF with the same seam (its spin state follows
+/// AnalyzeNocvEts's Hund/closed-shell convention, so an open-shell fragment
+/// is a UKS fragment). E_Pauli is the functional's value at the
+/// orthogonalized spin pair, so the partition identity
+///     E_KS[D_a, D_b] - sum_i E_frag,i = E_elstat + E_Pauli + E_orb
+/// holds by construction up to the Simpson residual of E_orb (zero on the
+/// Hartree-Fock seam, where the three-point Fock collapses to the midpoint).
+///
+/// The spin channels the closed-shell resolution reports are absent here:
+/// the result carries the per-spin channel arrays and leaves
+/// orbitalComponents/nocvEigenvalues empty, exactly as
+/// AnalyzeNocvEtsUnrestricted does.
+/// \param molecule Validated molecule; the canonical atom order indexes the
+/// fragment groups.
+/// \param basisSet The molecular basis set.
+/// \param coreHamiltonian The molecular core Hamiltonian H = T + V (n x n).
+/// \param eri Dense (uv|ws) repulsion tensor with shape {n, n, n, n},
+/// host-canonical.
+/// \param densityAlpha, densityBeta The converged UKS molecular densities
+/// (n x n each, the C_sigma,occ C_sigma,occ^T convention - no factor of 2).
+/// \param reference The reference the densities came from; must be
+/// NocvEtsReference::kUnrestricted. kRestrictedOpenShell returns
+/// kUnimplemented with the missing restricted formulation named;
+/// kClosedShell returns kInvalidArgument naming the closed-shell (RKS)
+/// entry point that serves it.
+/// \param functional The density-functional seam (see NocvEtsFunctional);
+/// its evaluate callback must be callable and exchangeFraction in [0, 1].
+/// \param fragments The fragment partition, as AnalyzeNocvEts's.
+/// \param fragmentOptions Convergence settings of every fragment SCF.
+/// \returns The decomposition, or an Error: as AnalyzeNocvEts, plus
+/// kInvalidArgument for an empty or invalid functional seam or a reference
+/// this entry does not serve.
+/// \ingroup qcx-properties
+qcx::Result<NocvEtsDecomposition> AnalyzeNocvEtsUnrestrictedKohnSham(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basisSet,
+    const Eigen::MatrixXd& coreHamiltonian,
+    const qcx::memory::Tensor<double, 4, qcx::backend::CpuTag>& eri,
+    const Eigen::MatrixXd& densityAlpha,
+    const Eigen::MatrixXd& densityBeta,
     NocvEtsReference reference,
     const NocvEtsFunctional& functional,
     const std::vector<std::vector<std::size_t>>& fragments,

@@ -22,13 +22,13 @@ add_library(qcx-grid ${QCX_MODULE_LIBRARY_TYPE}
 )
 target_include_directories(qcx-grid PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(qcx-grid PUBLIC cxx_std_23)
-# The public headers expose core, molecule, and basisset types (the AO
-# evaluator consumes BasisSet). The XC engine's public headers additionally
-# expose Eigen matrices and the excgrid geometry/block/kernel types, so those
-# include paths travel with the link - PRIVATE would
-# only be correct if the engine header hid every excgrid type.
+# The public headers expose core, molecule, basisset, and symmetry types
+# (the symmetry-adapted angular rule consumes PointGroupName). The XC
+# engine's public headers additionally expose Eigen matrices and the excgrid
+# geometry/block/kernel types, so those include paths travel with the link -
+# PRIVATE would only be correct if the engine header hid every excgrid type.
 target_link_libraries(qcx-grid
-  PUBLIC qcx-core qcx-molecule qcx-basisset eigen excgrid::excgrid)
+  PUBLIC qcx-core qcx-molecule qcx-basisset qcx-symmetry eigen excgrid::excgrid)
 
 # PCH is mandatory on every first-party target.
 target_precompile_headers(qcx-grid PRIVATE
@@ -37,6 +37,7 @@ target_precompile_headers(qcx-grid PRIVATE
 if (QCX_BUILD_TESTS AND TARGET gtest)
     add_executable(qcx-grid-tests
         tests/angular_grid_test.cpp
+        tests/symmetry_adapted_grid_test.cpp
         tests/radial_grid_test.cpp
         tests/atomic_grid_test.cpp
         tests/partition_function_test.cpp

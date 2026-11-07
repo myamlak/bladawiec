@@ -134,7 +134,8 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 19,
         .elementRefusal = RefusalReason::kNalewajskiFragmentTableZLimit,
-        .evidence = "BuildNalewajskiBlock; ClassifyFragmentStates",
+        .evidence = "BuildNalewajskiBlock; ClassifyFragmentStates; test "
+                    "NalewajskiOnAnElementBeyondTheTableNamesTheTableLimit",
     },
     {
         .kind = PropertyKind::kDensityAtNuclei,
@@ -164,27 +165,31 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .elementRefusal = RefusalReason::kNone,
         .evidence = "BuildQtaimBlock; test DriverPinTest.H2QtaimEndToEnd",
     },
-    // The closed-shell check runs first, so a UKS run reports the closed-shell
-    // reason and only RKS reaches the Hartree-Fock reason for ETS-NOCV. The
-    // Aufbau table bounds a fragment built as one atom only; a multi-atom
-    // fragment takes its multiplicity from its electron count.
+    // ETS-NOCV serves the four references the module implements: closed-shell
+    // and unrestricted Hartree-Fock, closed-shell and unrestricted Kohn-Sham.
+    // The restricted open-shell pair is the one remaining hole - the
+    // restricted reference is one spatial orbital set and no transition-state
+    // Fock exists from the ROHF effective operators. The Aufbau table bounds
+    // a fragment built as one atom only; a multi-atom fragment takes its
+    // multiplicity from its electron count.
     {
         .kind = PropertyKind::kEtsNocv,
         .name = "ets-nocv",
         .byMethod = {RefusalReason::kNone,
-                     RefusalReason::kEtsNocvClosedShellOnly,
-                     RefusalReason::kEtsNocvHartreeFockOnly,
-                     RefusalReason::kEtsNocvClosedShellOnly,
-                     // The restricted open-shell pair is per spin, so the
-                     // closed-shell refusal fires before the functional one.
-                     RefusalReason::kEtsNocvClosedShellOnly,
-                     RefusalReason::kEtsNocvClosedShellOnly},
-        .refusesWhenFunctionalNamed = true,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kNone,
+                     RefusalReason::kEtsNocvRestrictedOpenShellUnserved,
+                     RefusalReason::kEtsNocvRestrictedOpenShellUnserved},
+        .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 19,
         .elementScope = ElementScope::kSingleAtomFragment,
         .elementRefusal = RefusalReason::kEtsNocvFragmentTableZLimit,
         .evidence = "BuildNocvBlock; tests H2oDirectRhfNocvPartitionPins, "
-                    "RejectsUhfNocvCombination",
+                    "H2oDirectUhfNocvPartitionPins, H2DirectRksNocvPartitionPins, "
+                    "OhDoubletUksNocvPartitionPins, "
+                    "NocvOnRohfAndRoksNamesTheRestrictedOpenShellCapability, "
+                    "NocvOnASingleAtomFragmentBeyondTheTableNamesTheAufbauLimit",
     },
     {
         .kind = PropertyKind::kMolden,
@@ -216,8 +221,10 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .refusesWhenFunctionalNamed = false,
         .maxAtomicNumber = 0,
         .elementRefusal = RefusalReason::kNone,
-        .evidence = "BuildXcGradientBlock; test KsInputFileTest.TheGradientKeyOnAHartreeFockFileIs"
-                    "RefusedByName",
+        .evidence = "BuildXcGradientBlock; tests KsInputFileTest."
+                    "TheGradientKeyOnAHartreeFockFileIsRefusedByName, "
+                    "RunInputValidationTest.HartreeFockRefusesTheKohnShamKeys, "
+                    "RunInputValidationTest.RestrictedOpenShellKeyPolicyFollowsTheFunctional",
     },
     {
         .kind = PropertyKind::kTotalGradient,
@@ -232,7 +239,9 @@ constexpr std::array<PropertyDeclaration, 14> kDeclarations{{
         .maxAtomicNumber = 0,
         .elementRefusal = RefusalReason::kNone,
         .evidence = "BuildTotalGradientBlock; tests TheKeyIsRefusedOnTheUnrestrictedMethods, "
-                    "TheKohnShamGradientMatchesTheEnergyItDifferentiates",
+                    "TheKohnShamGradientMatchesTheEnergyItDifferentiates, "
+                    "RunInputValidationTest."
+                    "TotalGradientIsAdmittedOnTheClosedShellMethodsAndRefusedOnTheUnrestricted",
     },
 }};
 
@@ -325,10 +334,8 @@ std::string_view ToString(RefusalReason reason) noexcept {
     {
     case RefusalReason::kNone:
         return "none";
-    case RefusalReason::kEtsNocvClosedShellOnly:
-        return "ets-nocv-closed-shell-only";
-    case RefusalReason::kEtsNocvHartreeFockOnly:
-        return "ets-nocv-hartree-fock-only";
+    case RefusalReason::kEtsNocvRestrictedOpenShellUnserved:
+        return "ets-nocv-restricted-open-shell-unserved";
     case RefusalReason::kHirshfeldSadTableZLimit:
         return "hirshfeld-sad-table-z-limit";
     case RefusalReason::kNalewajskiFragmentTableZLimit:

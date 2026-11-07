@@ -1082,20 +1082,19 @@ TEST(EcpLocalPotentialTest, LocalTailGivesTheValenceChargeAtLongRange) {
 }
 
 TEST(EcpOperatorTest, LongRangePotentialSumRule) {
-    // TODO(ECP): no ECP matrix builder exists yet, and EcpDefinition retains
-    // only the nelec stub (the radial terms are skipped at parse time), so
-    // neither side of the comparison can be built today. This cell is
-    // satisfied when a local-channel builder exists whose matrix H_ecp
-    // carries the +N_core/r tail: for two s Gaussians localized on a centre
-    // 20 Bohr from the ECP centre C, with the Gaussian terms below 1e-20,
+    // TODO(ECP): no ECP matrix builder exists yet, so neither side of the
+    // comparison can be built today (the parsed EcpDefinition now carries
+    // the radial terms). This cell is satisfied when a local-channel builder
+    // exists whose matrix H_ecp carries the +N_core/r tail: for two s
+    // Gaussians localized on a centre 20 Bohr from the ECP centre C, with the
+    // Gaussian terms below 1e-20,
     //     H_ecp + V_nuc  ==  (Z - N_core)/Z * V_nuc
     // (V_nuc being the full-Z nuclear attraction) at 1e-10 relative, and
     //     H_ecp == -(N_core/Z) V_nuc
     // is the equivalent one-matrix form. The s-function-at-the-centre zero
     // test it pairs with is the projector selection rule above, which already
     // runs.
-    GTEST_SKIP() << "ECP operator not implemented: no matrix builder and no radial "
-                    "terms in EcpDefinition";
+    GTEST_SKIP() << "ECP operator not implemented: no matrix builder";
 }
 
 } // namespace

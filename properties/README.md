@@ -26,7 +26,12 @@ scf, response, io — consumed by: driver. Machine-checked by
 - `AnalyzeMultipoles` — dipole + traceless quadrupole.
 - `AnalyzeHirshfeld` / `AnalyzeVoronoi` — density-grid charges.
 - `AnalyzeEspCharges` — the CHELPG/MK fits.
-- `AnalyzeNocvEts` — the ETS-NOCV decomposition.
+- `AnalyzeNocvEts` (closed-shell Hartree-Fock), `AnalyzeNocvEtsUnrestricted`
+  (UHF), `AnalyzeNocvEtsKohnSham` (RKS) and
+  `AnalyzeNocvEtsUnrestrictedKohnSham` (UKS) — the ETS-NOCV decomposition; the
+  Kohn-Sham entries take the run's functional seam (`NocvEtsFunctional`), and
+  `CheckNocvEtsReference` is the one gate naming the restricted open-shell
+  reference as unserved.
 - `WavefunctionView` — the read-only view a property will read: total density,
   the spin densities when the run is spin-resolved (unrestricted or
   restricted open-shell), the method word, and the convergence state. It is a

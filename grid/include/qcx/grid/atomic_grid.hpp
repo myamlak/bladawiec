@@ -3,6 +3,7 @@
 #include "qcx/error.hpp"
 #include "qcx/grid/angular_grid.hpp"
 #include "qcx/grid/radial_grid.hpp"
+#include "qcx/symmetry/point_group_name.hpp"
 
 #include <array>
 #include <cstddef>
@@ -33,6 +34,26 @@ public:
                                      std::size_t angularPoints,
                                      double alpha,
                                      std::array<double, 3> centerBohr);
+
+    /// Creates the product grid on a symmetry-adapted angular rule.
+    ///
+    /// The radial quadrature, the r^2 volume element and the product
+    /// layout are those of Create: only the angular source changes, so the
+    /// angular adaptation cannot move a radial node or a radial weight.
+    /// \param radialPoints Radial point count (RadialGrid).
+    /// \param angularPoints Base Lebedev point count
+    ///        (AngularGrid::kAvailableSizes).
+    /// \param group The point group the angular rule is adapted to.
+    /// \param alpha Radial mapping length scale in Bohr.
+    /// \param centerBohr The atom position in Bohr.
+    /// \returns The grid, or kInvalidArgument for a non-Lebedev angular
+    /// count, an invalid radial parameter, or a group the rule cannot build.
+    /// \ingroup qcx-grid
+    static Result<AtomicGrid> CreateSymmetryAdapted(std::size_t radialPoints,
+                                                    std::size_t angularPoints,
+                                                    symmetry::PointGroupName group,
+                                                    double alpha,
+                                                    std::array<double, 3> centerBohr);
 
     /// The total number of points, radial x angular.
     /// \returns The total point count, radial x angular.
@@ -68,6 +89,14 @@ private:
     AtomicGrid(std::vector<std::array<double, 3>> points,
                std::vector<double> weights,
                std::array<double, 3> center) noexcept;
+
+    // The product loop, shared by every angular source so that the radial
+    // quadrature and the r^2 volume element cannot drift between them.
+    // Defined in the source; only the factories there instantiate it.
+    template <typename Angular>
+    static Result<AtomicGrid> BuildProduct(const RadialGrid& radial,
+                                           const Angular& angular,
+                                           std::array<double, 3> centerBohr);
 
     std::vector<std::array<double, 3>> _points;
     std::vector<double> _weights;

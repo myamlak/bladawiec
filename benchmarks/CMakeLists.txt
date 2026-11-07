@@ -396,6 +396,29 @@ target_precompile_headers(qcx-bench-fock-hot PRIVATE
     <Eigen/Dense>)
 qcx_apply_blas_runtime(qcx-bench-fock-hot)
 
+# The orbital-Hessian per-application instrument: wall time of ONE response
+# operator application on each band - the dense MO tensor and the matrix-free
+# direct Fock build - on the same alkane/def2-SVP fixture, trial vector and
+# thread lane, each application wrapped in the fixed-work canary. The dense arm
+# is admitted only under the tensor cap; past it the tool prints the refusal
+# and measures the matrix-free arm alone. --json carries the machine record
+# (per-application times and canary spins for both arms, the admission
+# estimate, and the two arms' worst result difference as the agreement
+# checksum). Plain main(), not a google-benchmark run.
+add_executable(qcx-bench-response-matvec response_matvec_benchmark.cpp)
+target_include_directories(qcx-bench-response-matvec PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/fixtures)
+target_compile_features(qcx-bench-response-matvec PRIVATE cxx_std_23)
+target_compile_definitions(qcx-bench-response-matvec PRIVATE
+    NOMINMAX
+    QcxBasisDataDir="${CMAKE_SOURCE_DIR}/data/basis")
+target_link_libraries(qcx-bench-response-matvec PRIVATE
+    qcx-properties qcx-response qcx-scf qcx-integrals qcx-test-fixtures)
+target_precompile_headers(qcx-bench-response-matvec PRIVATE
+    <qcx/properties/gradient.hpp>
+    <Eigen/Dense>)
+qcx_apply_blas_runtime(qcx-bench-response-matvec)
+
 # The disk-store read-vs-recompute crossover measurement:
 # per class of the disk-integral surface, wall time of serving the
 # whole class from the store vs recomputing it through the underlying

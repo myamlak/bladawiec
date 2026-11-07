@@ -27,7 +27,9 @@
 #include "qcx/integrals/one_electron.hpp"
 #include "qcx/memory/tensor.hpp"
 #include "qcx/molecule/molecule.hpp"
+#include "qcx/response/matrix_free_eri_derivative.hpp"
 #include "qcx/response/response_kernel.hpp"
+#include "qcx/response/response_operator.hpp"
 #include "qcx/response/response_state.hpp"
 #include "qcx/scf/rhf.hpp"
 #include "tensor_conversions.hpp"
@@ -221,9 +223,12 @@ struct ReferenceState {
 /// state's input takes.
 /// \param geometry The geometry.
 /// \param basis The basis set.
+/// \param eriOptions The AO ERI tensor's settings. The default screens at the
+/// normal preset; the matrix-free agreement test passes the exact build.
 /// \returns The reference, or an Error.
 qcx::Result<ReferenceState> BuildReference(const Geometry& geometry,
-                                           const qcx::basisset::BasisSet& basis) {
+                                           const qcx::basisset::BasisSet& basis,
+                                           const qcx::integrals::EriDenseOptions& eriOptions = {}) {
     ReferenceState state;
     state.geometry = geometry;
 
@@ -238,7 +243,7 @@ qcx::Result<ReferenceState> BuildReference(const Geometry& geometry,
     const auto overlap = qcx::integrals::BuildOverlapMatrix(*molecule, basis);
     const auto kinetic = qcx::integrals::BuildKineticMatrix(*molecule, basis);
     const auto nuclear = qcx::integrals::BuildNuclearAttractionMatrix(*molecule, basis);
-    const auto eri = qcx::integrals::BuildEriTensorGeneral(*molecule, basis);
+    const auto eri = qcx::integrals::BuildEriTensorGeneral(*molecule, basis, eriOptions);
 
     if (!overlap.has_value() || !kinetic.has_value() || !nuclear.has_value() || !eri.has_value())
     {
@@ -1051,6 +1056,371 @@ TEST(ResponseStateTest, ARebaseUsesTheOperatorArgumentsItIsHanded) {
     EXPECT_FALSE(state->HasKernel());
     EXPECT_TRUE(state->KernelName().empty());
     EXPECT_EQ(state->ExchangeFraction(), 1.0);
+}
+
+// --- the matrix-free band ---------------------------------------------------
+
+namespace {
+
+// The agreement the two bands are compared at: the direct builder's contracted
+// action against the dense MO tensor's loop, in exact arithmetic. The dense
+// band forms every quartet (`screen = false`) and the direct builder keeps its
+// two screening levels off at the tightest preset, so the only difference left
+// is floating-point summation order.
+constexpr double kBandAgreementTolerance = 1e-10;
+
+// The dense band's exact settings: every canonical quartet is evaluated.
+qcx::integrals::EriDenseOptions ExactDenseOptions() {
+    qcx::integrals::EriDenseOptions options;
+    options.screen = false;
+    return options;
+}
+
+// The matrix-free band's matching settings: both screening levels off at the
+// tightest preset. The preset's neighbour-list floor is the one screen the
+// builder keeps; at kTight it drops pairs whose bound is below 1e-12, which is
+// far under the agreement tolerance.
+qcx::response::MatrixFreeEriDerivativeOptions ExactDerivativeOptions() {
+    qcx::response::MatrixFreeEriDerivativeOptions options;
+    options.accuracy = qcx::integrals::AccuracyPreset::kTight;
+    options.useDensityScreening = false;
+    options.usePerElementScreening = false;
+    return options;
+}
+
+/// The core Hamiltonian H = T + V of the fixture, row-major.
+/// \param molecule The molecule.
+/// \param basis The basis set.
+/// \param numBasis The AO count.
+/// \returns The core matrix, or an Error.
+qcx::Result<std::vector<double>> BuildCoreRowMajor(const qcx::molecule::Molecule& molecule,
+                                                   const qcx::basisset::BasisSet& basis,
+                                                   std::size_t numBasis) {
+    const auto kinetic = qcx::integrals::BuildKineticMatrix(molecule, basis);
+    const auto nuclear = qcx::integrals::BuildNuclearAttractionMatrix(molecule, basis);
+
+    if (!kinetic.has_value() || !nuclear.has_value())
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInternalError, "a one-electron build failed"});
+    }
+
+    std::vector<double> core(numBasis * numBasis, 0.0);
+
+    for (std::size_t row = 0; row < numBasis; ++row)
+    {
+        for (std::size_t column = 0; column < numBasis; ++column)
+        {
+            core[row * numBasis + column] = (*kinetic)(row, column) + (*nuclear)(row, column);
+        }
+    }
+
+    return core;
+}
+
+/// The three trial vectors the two operators are applied to: deterministic and
+/// non-symmetric, so a contracted action and a transposed one cannot agree by
+/// accident.
+/// \param dimension The flattened response dimension.
+/// \returns The trial vectors.
+std::vector<std::vector<double>> MakeTrialVectors(std::size_t dimension) {
+    std::vector<std::vector<double>> trials(3, std::vector<double>(dimension, 0.0));
+
+    for (std::size_t trial = 0; trial < trials.size(); ++trial)
+    {
+        for (std::size_t index = 0; index < dimension; ++index)
+        {
+            const double position = static_cast<double>(index);
+            const double ordinal = static_cast<double>(trial);
+            trials[trial][index] = std::sin(0.37 * position * (ordinal + 1.0)) +
+                                   0.1 * std::cos(0.11 * position + ordinal);
+        }
+    }
+
+    return trials;
+}
+
+} // namespace
+
+TEST(ResponseStateTest, TheMatrixFreeOperatorAgreesWithTheDenseTensor) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+
+    const Geometry geometry;
+    const auto reference = BuildReference(geometry, *basis, ExactDenseOptions());
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    const auto molecule = MakeMolecule(geometry);
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+
+    const auto core = BuildCoreRowMajor(*molecule, *basis, reference->numBasis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    const std::size_t dimension = reference->layout.Dimension();
+    const std::vector<std::vector<double>> trials = MakeTrialVectors(dimension);
+
+    const qcx::response::OrbitalEnergies energies{reference->orbitalEnergies};
+    const qcx::response::MoTwoElectronTensor tensor{reference->moEri};
+
+    // The unscaled Roothaan action and a scaled exact-exchange one: one Fock
+    // build against two.
+    for (const double fraction : {1.0, 0.35})
+    {
+        auto derivative = qcx::response::MatrixFreeEriDerivative::Create(*molecule,
+                                                                         *basis,
+                                                                         *core,
+                                                                         reference->layout,
+                                                                         reference->numBasis,
+                                                                         reference->moCoefficients,
+                                                                         fraction,
+                                                                         ExactDerivativeOptions());
+        ASSERT_TRUE(derivative.has_value()) << derivative.error().message;
+
+        auto shared =
+            std::make_shared<qcx::response::MatrixFreeEriDerivative>(std::move(*derivative));
+
+        auto dense = qcx::response::OrbitalHessianOperator::Create(
+            reference->layout, energies, tensor, fraction);
+        ASSERT_TRUE(dense.has_value()) << dense.error().message;
+
+        auto matrixFree = qcx::response::OrbitalHessianOperator::CreateMatrixFree(
+            reference->layout,
+            energies,
+            [shared](std::span<const double> x, std::span<double> y) {
+                return shared->Apply(x, y);
+            },
+            fraction);
+        ASSERT_TRUE(matrixFree.has_value()) << matrixFree.error().message;
+        EXPECT_TRUE(matrixFree->IsMatrixFree());
+        EXPECT_FALSE(dense->IsMatrixFree());
+        EXPECT_EQ(matrixFree->ExchangeFraction(), fraction);
+
+        double worst = 0.0;
+
+        for (const std::vector<double>& trial : trials)
+        {
+            std::vector<double> denseResult(dimension, 0.0);
+            std::vector<double> matrixFreeResult(dimension, 0.0);
+            ASSERT_TRUE(dense->Apply(trial, denseResult).has_value());
+            ASSERT_TRUE(matrixFree->Apply(trial, matrixFreeResult).has_value());
+            worst = std::max(worst, MaxDifference(denseResult, matrixFreeResult));
+        }
+
+        std::cout << "[matrix-free] fraction " << fraction << " worst |action difference| " << worst
+                  << "\n";
+        EXPECT_LT(worst, kBandAgreementTolerance);
+    }
+}
+
+TEST(ResponseStateTest, TheMatrixFreeReferenceFockMatchesTheScfFock) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+
+    const Geometry geometry;
+    const auto reference = BuildReference(geometry, *basis, ExactDenseOptions());
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    const auto molecule = MakeMolecule(geometry);
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+
+    const auto core = BuildCoreRowMajor(*molecule, *basis, reference->numBasis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    auto derivative = qcx::response::MatrixFreeEriDerivative::Create(*molecule,
+                                                                     *basis,
+                                                                     *core,
+                                                                     reference->layout,
+                                                                     reference->numBasis,
+                                                                     reference->moCoefficients,
+                                                                     1.0,
+                                                                     ExactDerivativeOptions());
+    ASSERT_TRUE(derivative.has_value()) << derivative.error().message;
+
+    // The builder's density argument is rho = D / 2; the reference's D is the
+    // array the state carries.
+    std::vector<double> spatialDensity(reference->densityRowMajor.size(), 0.0);
+
+    for (std::size_t index = 0; index < spatialDensity.size(); ++index)
+    {
+        spatialDensity[index] = 0.5 * reference->densityRowMajor[index];
+    }
+
+    auto fock = derivative->ReferenceFock(spatialDensity);
+    ASSERT_TRUE(fock.has_value()) << fock.error().message;
+
+    const double worst = MaxDifference(*fock, reference->fockRowMajor);
+    std::cout << "[matrix-free] worst |reference Fock difference| " << worst << "\n";
+    EXPECT_LT(worst, kBandAgreementTolerance);
+}
+
+TEST(ResponseStateTest, TheMatrixFreeBandSolvesTheSameResponseAsTheDenseBand) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+
+    const Geometry geometry;
+    const auto reference = BuildReference(geometry, *basis, ExactDenseOptions());
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    const auto molecule = MakeMolecule(geometry);
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+
+    const auto core = BuildCoreRowMajor(*molecule, *basis, reference->numBasis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    auto derivative = qcx::response::MatrixFreeEriDerivative::Create(*molecule,
+                                                                     *basis,
+                                                                     *core,
+                                                                     reference->layout,
+                                                                     reference->numBasis,
+                                                                     reference->moCoefficients,
+                                                                     1.0,
+                                                                     ExactDerivativeOptions());
+    ASSERT_TRUE(derivative.has_value()) << derivative.error().message;
+
+    auto shared = std::make_shared<qcx::response::MatrixFreeEriDerivative>(std::move(*derivative));
+
+    auto screening = MakeScreening(*reference);
+    ASSERT_TRUE(screening.has_value()) << screening.error().message;
+
+    // The solve's own convergence tolerance must sit under the agreement
+    // claim: at the default 1e-8 two answers agree to about 1e-8 whatever the
+    // operators do.
+    qcx::response::ResponseSolveOptions solverOptions;
+    solverOptions.tolerance = 1e-13;
+
+    auto denseState =
+        ResponseState::Create(MakeStateReference(*reference), *screening, solverOptions);
+    ASSERT_TRUE(denseState.has_value()) << denseState.error().message;
+    ASSERT_FALSE(denseState->IsMatrixFree());
+    EXPECT_EQ(denseState->Band(), qcx::response::ResponseOperatorBand::kDenseTensor);
+
+    auto matrixFreeState = ResponseState::CreateMatrixFree(
+        MakeStateReference(*reference), *screening, shared, solverOptions);
+    ASSERT_TRUE(matrixFreeState.has_value()) << matrixFreeState.error().message;
+    EXPECT_TRUE(matrixFreeState->IsMatrixFree());
+    EXPECT_EQ(matrixFreeState->Band(), qcx::response::ResponseOperatorBand::kMatrixFree);
+    // The band holds no tensor, even though the reference handed to it carried
+    // one: that array is what the band exists to avoid.
+    EXPECT_TRUE(matrixFreeState->MoTwoElectron().empty());
+    EXPECT_NE(matrixFreeState->MatrixFreeDerivative(), nullptr);
+
+    auto rightHandSide = BuildRightHandSide(*reference, *basis, kDerivativeStep);
+    ASSERT_TRUE(rightHandSide.has_value()) << rightHandSide.error().message;
+
+    const auto overlap = BuildMoOverlapDerivative(*reference, *basis, 0, 0, kDerivativeStep);
+    ASSERT_TRUE(overlap.has_value()) << overlap.error().message;
+    const std::span<const double> overlapDerivative(overlap->data(), overlap->size());
+
+    const NuclearDisplacement displacement{0, 0};
+    auto denseSolution =
+        denseState->SolveDisplacement(displacement, *rightHandSide, overlapDerivative);
+    ASSERT_TRUE(denseSolution.has_value()) << denseSolution.error().message;
+    auto matrixFreeSolution =
+        matrixFreeState->SolveDisplacement(displacement, *rightHandSide, overlapDerivative);
+    ASSERT_TRUE(matrixFreeSolution.has_value()) << matrixFreeSolution.error().message;
+
+    const double amplitudeDifference =
+        MaxDifference(matrixFreeSolution->response.amplitudes, denseSolution->response.amplitudes);
+    const double densityDifference = MaxDifference(matrixFreeSolution->response.perturbedDensity,
+                                                   denseSolution->response.perturbedDensity);
+    std::cout << "[matrix-free] worst |amplitude difference| " << amplitudeDifference
+              << " and |density difference| " << densityDifference << "\n";
+    EXPECT_LT(amplitudeDifference, kBandAgreementTolerance);
+    EXPECT_LT(densityDifference, kBandAgreementTolerance);
+}
+
+TEST(ResponseStateTest, TheBandsRefuseEachOthersRebaseAndMismatchedDerivatives) {
+    const auto basis = MakeH2oSto3gBasis();
+    ASSERT_TRUE(basis.has_value()) << basis.error().message;
+
+    const Geometry geometry;
+    const auto reference = BuildReference(geometry, *basis);
+    ASSERT_TRUE(reference.has_value()) << reference.error().message;
+
+    const auto molecule = MakeMolecule(geometry);
+    ASSERT_TRUE(molecule.has_value()) << molecule.error().message;
+
+    const auto core = BuildCoreRowMajor(*molecule, *basis, reference->numBasis);
+    ASSERT_TRUE(core.has_value()) << core.error().message;
+
+    auto derivative = qcx::response::MatrixFreeEriDerivative::Create(*molecule,
+                                                                     *basis,
+                                                                     *core,
+                                                                     reference->layout,
+                                                                     reference->numBasis,
+                                                                     reference->moCoefficients,
+                                                                     1.0,
+                                                                     ExactDerivativeOptions());
+    ASSERT_TRUE(derivative.has_value()) << derivative.error().message;
+
+    auto shared = std::make_shared<qcx::response::MatrixFreeEriDerivative>(std::move(*derivative));
+
+    auto screening = MakeScreening(*reference);
+    ASSERT_TRUE(screening.has_value()) << screening.error().message;
+
+    auto state =
+        ResponseState::CreateMatrixFree(MakeStateReference(*reference), *screening, shared);
+    ASSERT_TRUE(state.has_value()) << state.error().message;
+    const auto identityBefore = state->Identity();
+
+    // A dense rebase of a matrix-free state would swap the operator's
+    // representation underneath the state; it is refused by name.
+    auto denseRebase = state->Rebase(MakeStateReference(*reference), *screening);
+    ASSERT_FALSE(denseRebase.has_value());
+    EXPECT_EQ(denseRebase.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(denseRebase.error().message.find("matrix-free band"), std::string::npos);
+    EXPECT_TRUE(state->Identity() == identityBefore);
+
+    // A missing derivative is a refusal, not a fallback to the dense band.
+    auto nullState =
+        ResponseState::CreateMatrixFree(MakeStateReference(*reference), *screening, nullptr);
+    ASSERT_FALSE(nullState.has_value());
+    EXPECT_EQ(nullState.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(nullState.error().message.find("carries none"), std::string::npos);
+
+    // A derivative built from another orbital set describes another state.
+    std::vector<double> otherCoefficients = reference->moCoefficients;
+    otherCoefficients[0] += 1.0;
+    auto otherDerivative = qcx::response::MatrixFreeEriDerivative::Create(*molecule,
+                                                                          *basis,
+                                                                          *core,
+                                                                          reference->layout,
+                                                                          reference->numBasis,
+                                                                          otherCoefficients,
+                                                                          1.0,
+                                                                          ExactDerivativeOptions());
+    ASSERT_TRUE(otherDerivative.has_value()) << otherDerivative.error().message;
+    auto otherShared =
+        std::make_shared<qcx::response::MatrixFreeEriDerivative>(std::move(*otherDerivative));
+
+    auto mismatched =
+        ResponseState::CreateMatrixFree(MakeStateReference(*reference), *screening, otherShared);
+    ASSERT_FALSE(mismatched.has_value());
+    EXPECT_EQ(mismatched.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(mismatched.error().message.find("different MO coefficients"), std::string::npos);
+
+    // The other direction: a dense state cannot be rebased onto a derivative.
+    auto denseState = ResponseState::Create(MakeStateReference(*reference), *screening);
+    ASSERT_TRUE(denseState.has_value()) << denseState.error().message;
+
+    auto denseMatrixFreeRebase =
+        denseState->RebaseMatrixFree(MakeStateReference(*reference), *screening, shared);
+    ASSERT_FALSE(denseMatrixFreeRebase.has_value());
+    EXPECT_EQ(denseMatrixFreeRebase.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(denseMatrixFreeRebase.error().message.find("dense-tensor band"), std::string::npos);
+
+    // The scaled action's fraction is validated before a builder exists.
+    auto badFraction = qcx::response::MatrixFreeEriDerivative::Create(*molecule,
+                                                                      *basis,
+                                                                      *core,
+                                                                      reference->layout,
+                                                                      reference->numBasis,
+                                                                      reference->moCoefficients,
+                                                                      1.5,
+                                                                      ExactDerivativeOptions());
+    ASSERT_FALSE(badFraction.has_value());
+    EXPECT_EQ(badFraction.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(badFraction.error().message.find("exact-exchange fraction"), std::string::npos);
 }
 
 // --- the refusals and the structure -----------------------------------------

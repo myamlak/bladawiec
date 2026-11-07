@@ -361,6 +361,65 @@ jobs:
         run: ctest --test-dir build/${{ matrix.preset }} -LE large -j"$(nproc)" --output-on-failure
 
   # -------------------------------------------------------------------------
+  # linux-mpi: the QCX_ENABLE_MPI=ON build, on the Open MPI the image ships.
+  #
+  # WRITTEN, NOT RUN IN CI: no CI run has carried this leg yet. What it has
+  # behind it is a local WSL run of the same preset with -DQCX_ENABLE_MPI=ON
+  # (2026-11-06): the execution-context and static-dispatcher cases in that
+  # build, the execution-context cases again under mpiexec on two ranks, and a
+  # two-rank ctest of qcx-mpi-smoke that printed SMOKE PASS. The smoke test is
+  # the raw MPI C interface with no qcx target: it checks the installation the
+  # execution context calls, and the launcher's exit code is the verdict. The
+  # OFF build stays the default every other leg compiles, unchanged.
+  #
+  # There is no Windows MPI leg: MS-MPI is not installed on the hosted runners
+  # and nothing here has approved adding it.
+  # -------------------------------------------------------------------------
+  linux-mpi:
+    name: linux-mpi openmpi Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-gcc-mpi-${{ github.sha }}
+          restore-keys: |
+            ccache-gcc-mpi-
+            ccache-gcc-
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache libboost-dev libboost-graph-dev libhdf5-dev openmpi-bin libopenmpi-dev
+      # The Release preset's own geometry, with the MPI option on and its own
+      # build directory, so the optional configuration never shares a tree with
+      # the option-off legs.
+      - name: Configure (MPI on)
+        run: cmake --preset wsl-gcc-release -B build/wsl-mpi -DQCX_ENABLE_MPI=ON
+      - name: Build
+        run: cmake --build build/wsl-mpi -j"$(nproc)" --target qcx-mpi-smoke qcx-backend-tests
+      # The smoke test is registered through mpiexec with two ranks and its
+      # launcher exit code is the verdict; the execution-context cases run once,
+      # against the real MPI body rather than the serial stub.
+      #
+      # ctest runs in the backend directory, not at the tree root, because this
+      # leg builds two targets rather than everything: the root CTestTestfile
+      # loads every module's large-case manifest, and each manifest refuses to
+      # load when its own test target was never built (grid's, for one). The
+      # backend directory's testfile is self-contained - its unbuilt sibling
+      # targets register a NOT_BUILT case instead - so it runs the smoke test
+      # and the execution-context cases and nothing else.
+      - name: Test (two-rank MPI smoke and the execution-context cases)
+        run: ctest --test-dir build/wsl-mpi/backend -R 'qcx-mpi-smoke|ExecutionContextTest' --output-on-failure
+
+  # -------------------------------------------------------------------------
   # windows-latest, MSVC, Debug + Release: every TU compiled by the other
   # toolchain family this project ships on - and tested here, not built only.
   #

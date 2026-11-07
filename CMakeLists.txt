@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.27)
-project(qcx VERSION 0.10.0 LANGUAGES CXX)
+project(qcx VERSION 0.11.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -143,6 +143,16 @@ if (QCX_ENABLE_CUDA)
     if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         set(CMAKE_CUDA_ARCHITECTURES native)  # auto-detect the installed GPU
     endif()
+endif()
+
+# MPI backs the execution context and the work partition built on it. OFF
+# compiles the same interface as a serial stub, so every existing configuration
+# is unchanged; ON requires an MPI implementation and uses the imported targets
+# FindMPI resolves, never a compiler wrapper script.
+option(QCX_ENABLE_MPI "Build the MPI-backed execution context (requires an MPI implementation)" OFF)
+
+if (QCX_ENABLE_MPI)
+    find_package(MPI REQUIRED COMPONENTS CXX)
 endif()
 
 # Dependency resolution. HDF5 is a compiled
@@ -1071,6 +1081,15 @@ if (QCX_BUILD_SHARED)
             COMMENT "Generating the composed library's export list"
             VERBATIM)
         add_custom_target(qcx_exports DEPENDS "${_qcxExportDef}")
+        # The object-file dependencies above order the scan on Makefile and
+        # Ninja, where a file dependency is a build-graph edge. The Visual
+        # Studio generator records them as AdditionalInputs of the custom build
+        # rule, which drives up-to-date checks and not project ordering, so a
+        # parallel build could scan before the module objects existed (link
+        # LNK1181 on the first object; measured 2026-11-07 in the shared arm).
+        # The module targets as target-level dependencies give the generator
+        # the project references that order the scan after them.
+        add_dependencies(qcx_exports ${_qcxComposedModules})
         add_dependencies(qcx qcx_exports)
         target_link_options(qcx PRIVATE
             "/DEF:${CMAKE_CURRENT_BINARY_DIR}/qcx_exports_$<CONFIG>.def")
