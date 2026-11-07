@@ -57,9 +57,10 @@ qcx::Result<RunOutcome> RunDriverOutcome(const qcx::io::RunInput& input);
 /// method the driver does not classify as a run path;
 /// kUnimplemented for the not-yet-wired combinations - UHF with any
 /// non-direct builder, ri_jk, the guess/method
-/// combinations the schema documents, SAD beyond Z <= 19, and UHF with
-/// nocv_fragments; kDeviceError from the GPU builder without a device;
-/// kInvalidArgument for an out-of-range nocv_fragments atom index). The
+/// combinations the schema documents, SAD beyond Z <= 19, and the
+/// restricted open-shell ETS-NOCV (ROHF/ROKS); kDeviceError from the GPU
+/// builder without a device; kInvalidArgument for an out-of-range
+/// nocv_fragments atom index). The
 /// parsed input is semantically validated first (qcx::io::ValidateInput);
 /// invalid input fails fast with the first issue (kInvalidArgument) before
 /// any construction. Which method words run is decided by one exhaustive

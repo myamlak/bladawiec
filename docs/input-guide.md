@@ -149,10 +149,14 @@ count allows; a singlet `rohf` run is the `rhf` run and a singlet `roks` run is 
 `roks` takes this family's keys (`functional`, `screening_tolerance`, the `[grid]` block) and reads
 `properties.xc_gradient`, exactly as `uks` does; `rohf` refuses them as `rhf` does. The per-spin
 refusals apply here for the per-spin reason: `guess restart`, `scf.checkpoint_file`,
-`properties.nocv_fragments`, the device builder families and the `ri_j_link` disk rungs are all
+the device builder families and the `ri_j_link` disk rungs are all
 refused, and `[symmetry] full_group` must be written `false`, because the labeling stage does not
-preserve the closed/open split the method is built from. `properties.total_gradient` is refused: it
-differentiates a converged closed-shell reference, and the open-shell response is not implemented.
+preserve the closed/open split the method is built from. `properties.nocv_fragments` is refused
+because the restricted open-shell ETS-NOCV is not served: the restricted reference needs a
+transition-state Fock built from the ROHF effective operators `F_c` and `F_o`, and a channel pairing
+rule for a spectrum that is not `+-nu` paired, and neither exists. `properties.total_gradient` is
+refused: it differentiates a converged closed-shell reference, and the open-shell response is not
+implemented.
 
 #### The deprecated builder key
 
@@ -384,8 +388,11 @@ because a path cannot be mistyped into a different valid path.
 
 `nocv_fragments` is an array of arrays of atom indices, each group non-empty and each index
 non-negative. The indices count the `atoms` rows as written in the file, starting at 0. The groups
-must be disjoint and must cover every atom exactly once. The decomposition is closed-shell only,
-so it is refused on a per-spin run (`uhf`, `uks`, `rohf` or `roks`).
+must be disjoint and must cover every atom exactly once. The decomposition runs on `rhf`, `uhf`,
+`rks` and `uks`: a Kohn-Sham run decomposes with its own functional, and a per-spin run reports the
+two spin channels. It is refused on the restricted open-shell pair (`rohf`, `roks`), whose
+restricted reference needs a transition-state Fock built from the ROHF effective operators and a
+channel pairing rule for a spectrum that is not `+-nu` paired, and neither exists.
 
 `xc_gradient` is a Kohn-Sham key and is **refused** on `rhf`, `uhf` and `rohf`, like the
 `functional` key and the `[grid]` block: there is no functional on those lanes to differentiate. It reports the derivative

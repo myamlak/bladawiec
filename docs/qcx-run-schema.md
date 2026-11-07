@@ -266,7 +266,7 @@ type is a parse error). The population/moment block has no switch
 | `[properties] molden` | string; the path of the Molden-format F-file written from the SCF result: the [Molden Format] [Atoms] (AU) [5D] [7F] [GTO] [MO] sections, RHF one spin block, UHF alpha then beta; an empty string counts as absent, and a file that cannot be written fails the run |
 | `[properties] xc_gradient` | bool; the fixed-density exchange-correlation contribution to the nuclear gradient, differentiated at the converged density on the grid the run integrated. A Kohn-Sham key: refused on `rhf`/`uhf`/`rohf` with the `functional` key and the `[grid]` block (see §2.3); on `roks` it consumes the converged per-spin density pair, the same call `uks` makes |
 | `[properties] total_gradient` | bool; schema 45. The total analytic nuclear gradient at the converged closed-shell reference: the electronic terms (one-electron, Coulomb, exchange, exchange-correlation on the density-functional lanes, orbital response), the nuclear repulsion and any `[dispersion]` correction, kept apart in the `total_gradient` record block (§3.4). Admitted on the two closed-shell lanes, `rhf` and `rks`; refused by name on the unrestricted lanes `uhf` and `uks` and on the restricted open-shell pair `rohf` and `roks` (their reference has an open shell, and the open-shell response is not implemented); refused when the SCF did not converge, when the reference is not stationary, and when a `[dispersion]` block of form `d4` names a charged molecule or an element its table does not cover. A `d4` gradient takes the dispersion module's frozen-charge tier: its C6 and C8 coefficients are held at the geometry's values and only the interatomic distances differentiate, and the record names that tier as `total_gradient.dispersion_tier = "frozen_charge"` (§3.4) |
-| `[properties] nocv_fragments` | array of non-empty arrays of non-negative atom indices (0-based, file row order); ETS-NOCV, closed-shell only (see §5) |
+| `[properties] nocv_fragments` | array of non-empty arrays of non-negative atom indices (0-based, file row order); ETS-NOCV on `rhf`, `uhf`, `rks` and `uks` (a Kohn-Sham run decomposes with the run's own functional); refused on the restricted open-shell pair `rohf`/`roks` (see §5) |
 
 `total_gradient` is the one key in this block that differentiates the run's
 **total** energy: it hands the converged closed-shell reference to
@@ -362,7 +362,9 @@ guess restart seeds the RHF solver in v1 (the only solver with a restart-state o
   uhf supports guess core, gwh and sad
 scf.checkpoint_file saves the RHF last-iterate state in v1 (the restart read path is
   RHF-only); a uhf run cannot write a checkpoint nothing could consume
-the ETS-NOCV analysis is closed-shell in v1; nocv_fragments cannot be requested on a uhf run
+the restricted open-shell ETS-NOCV (ROHF/ROKS) is not served: ... the restricted
+  formulation needs a transition-state Fock defined from the ROHF effective Fock operators
+  (F_c and F_o) and a channel pairing rule for a spectrum that is not +-nu paired
 [symmetry]: full_group is not available on method rohf (the labeling stage symmetrizes the
   occupied space without preserving the closed/open split the method is built from);
   write full_group = false
@@ -408,8 +410,10 @@ key rules follow from that one fact and from nothing else:
 - `[properties] total_gradient` is refused on both: the assembly
   differentiates a closed-shell reference and the open-shell response is not
   implemented;
-- `ets_nocv` is closed-shell only, so it is refused on both as it is on the
-  unrestricted legs; `fukui` runs on both, because its charged species follow
+- `ets_nocv` is refused on both: the restricted reference needs a
+  transition-state Fock built from the ROHF effective operators `F_c` and
+  `F_o` and a channel pairing rule for a spectrum that is not `+-nu` paired,
+  and neither exists; `fukui` runs on both, because its charged species follow
   the run's own method (restricted open-shell species on `rohf`, and ROKS
   species built with the run's functional on `roks`);
 - dispersion is method-independent and their default family is `hf` on `rohf`
@@ -559,7 +563,7 @@ which are always present and use null.
 | `eddb` | `total_population`, `atomic_populations`, `nobd_occupations` (descending), `central_atom_count`, `two_center_orbital_count` | electrons; counts |
 | `fukui` | `nucleophilic` (f_A+), `electrophilic` (f_A-), `radical` (f_A0) — per atom, each vector sums to one | electrons |
 | `nalewajski` | `bond_orders` (B(a,b)), `diatomic_covalent` (v_ab), `atomic_ionic_valence` (v_i_a), `atomic_covalent_valence` (v_c_a), `total_valence` — matrices symmetric, zero diagonal | electrons |
-| `nocv` | `electrostatic`, `pauli`, `orbital`, `orbital_unrestricted`, `binding_energy` (= E_mol - sum E_frag = elstat + pauli + orb), `fragment_energies`, `orbital_components`, `nocv_eigenvalues` (the +nu_k of each pair, signed tail), `orbital_components_alpha`/`beta`, `nocv_eigenvalues_alpha`/`beta` | hartree; eigenvalues electrons |
+| `nocv` | `electrostatic`, `pauli`, `orbital`, `orbital_unrestricted`, `binding_energy` (= E_mol - sum E_frag = elstat + pauli + orb), `fragment_energies`, `orbital_components`, `nocv_eigenvalues` (the +nu_k of each pair, signed tail), `orbital_components_alpha`/`beta`, `nocv_eigenvalues_alpha`/`beta`. Which channel arrays are filled follows the reference: on `rhf` both the sign-paired closed-shell resolution (`orbital_components`) and the per-spin resolution of the same relaxation (`_alpha`/`_beta`) are filled; on `rks` the functional is spin-summed, so the closed-shell arrays carry the resolution and the per-spin arrays are empty (`orbital_unrestricted` repeats `orbital`); on `uhf` and `uks` the decomposition is the two spin channels, so `orbital_components` and `nocv_eigenvalues` are empty and only the `_alpha`/`_beta` arrays carry it (`orbital` equals `orbital_unrestricted`) | hartree; eigenvalues electrons |
 | `density_at_nuclei` | `values` — rho(R_A) per atom in the molecule's canonical atom order | electrons/bohr³ |
 | `qtaim` | `bond_critical_points` (each: `atom_a`, `atom_b`, `position_bohr`, `density`, `laplacian`, `ellipticity`, `eigenvalues` ascending, `bond_path` — the two gradient rays BCP -> nucleus), `other_critical_points` (`position_bohr`, `rank`, `signature_sum`), `unconverged_seeds` (3 each) | electrons/bohr³; electrons/bohr⁵ |
 | `molden` | `file` — the path of the written Molden-format F-file | path |
@@ -1398,10 +1402,11 @@ The errors below are what a user actually sees when a limit is tripped.
   or a store of another molecule/basis — the fingerprint group check), or
   of a missing/corrupt file: refused before the SCF, never a silent
   fallback to the GWH start.
-- ETS-NOCV on a UHF run (`nocv_fragments` + UHF) — the decomposition's
-  per-spin resolution assumes the closed-shell D_sigma = D/2; a UHF
-  molecular density would silently feed it the wrong spin channels, so the
-  combination is rejected up front.
+- ETS-NOCV on a restricted open-shell run (`nocv_fragments` + `rohf`/`roks`)
+  — the restricted reference is one spatial orbital set, so the per-spin
+  formulation cannot run on it, and no transition-state Fock exists from the
+  ROHF effective operators (`F_c`/`F_o`); the missing formulation is named in
+  the refusal, and the combination is rejected up front.
 - A `nocv_fragments` index outside the file's atom rows.
 - `enforce_certified_bound` on an **unrestricted** run (`uhf`/`uks`) —
   the per-spin wiring never assigns the enforcement option, so no route on

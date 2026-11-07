@@ -342,7 +342,8 @@ input file keys (a key marked required must be written):
                                     gradient
     nocv_fragments = [[0, 1]]       optional; one atom-index array per fragment
                                     (the indices count the atom rows as
-                                    written). ETS-NOCV, closed-shell only
+                                    written). ETS-NOCV; not served on the
+                                    restricted open-shell pair (rohf, roks)
 )";
 
 } // namespace qcx::driver::internal

@@ -51,16 +51,12 @@ enum class PropertyKind : std::uint8_t {
 /// \ingroup qcx-properties
 enum class RefusalReason : std::uint8_t {
     kNone, ///< Supported: the driver runs the property on this method kind.
-    /// ETS-NOCV on an unrestricted run. The per-spin resolution assumes the
-    /// closed-shell D_sigma = D/2, so a molecular density with two different
-    /// spin channels would feed it the wrong ones (`"the ETS-NOCV analysis is
-    /// closed-shell in v1"`).
-    kEtsNocvClosedShellOnly,
-    /// ETS-NOCV on a method naming a functional. No functional enters the
-    /// fragment SCFs or the density-energy evaluator, so a DFT total energy
-    /// would sit beside Hartree-Fock fragment energies (`"the ETS-NOCV
-    /// analysis is Hartree-Fock in v1"`).
-    kEtsNocvHartreeFockOnly,
+    /// ETS-NOCV on a restricted open-shell run (ROHF/ROKS). The restricted
+    /// reference is one spatial orbital set, so the per-spin formulation
+    /// cannot run on it, and no transition-state Fock exists from the ROHF
+    /// effective operators (`"the restricted open-shell ETS-NOCV (ROHF/ROKS)
+    /// is not served"`).
+    kEtsNocvRestrictedOpenShellUnserved,
     /// Hirshfeld beyond the SAD atomic-multiplicity table. The promolecular
     /// fragment densities are the SAD guess's, and the v1 table covers
     /// Z <= 19 (`"the SAD atomic-multiplicity table (v1, Z <= 19) does not
@@ -130,8 +126,9 @@ struct PropertyDeclaration {
         RefusalReason::kNone,
     };
     /// True when a method that names a density functional refuses the
-    /// property even on a kind the method table admits (ETS-NOCV: the
-    /// decomposition is Hartree-Fock in v1).
+    /// property even on a kind the method table admits. No declaration
+    /// states it today: ETS-NOCV, the one property that did, now takes the
+    /// run's functional through its Kohn-Sham entry points.
     bool refusesWhenFunctionalNamed = false;
     /// The largest atomic number the analysis covers; 0 means no element
     /// limit.

@@ -9,16 +9,20 @@
 // reproduces the SCF loops' energies bit-for-bit at the converged
 // densities - the decomposition's energy-identity pin.
 //
-// Three references share the machinery:
+// Four references share the machinery:
 //  * closed-shell Hartree-Fock (AnalyzeNocvEts) - the restricted functional
 //    at the spin-summed densities, plus its per-spin resolution;
 //  * unrestricted Hartree-Fock (AnalyzeNocvEtsUnrestricted) - two
 //    independent NOCV problems, each spin with its own transition Fock;
 //  * closed-shell Kohn-Sham (AnalyzeNocvEtsKohnSham) - the Ziegler-Rauk
 //    three-point transition state, every Fock/energy from the caller's
-//    functional seam (the XC potential at all three densities).
+//    functional seam (the XC potential at all three densities);
+//  * unrestricted Kohn-Sham (AnalyzeNocvEtsUnrestrictedKohnSham) - the
+//    same three-point state applied per spin, each channel through its own
+//    spin's Fock.
 // The restricted open-shell reference is refused by name (the file comment
-// of nocv.hpp states what the restricted formulation still needs).
+// of nocv.hpp states what the restricted formulation still needs), and
+// CheckNocvEtsReference is that refusal's one home.
 #include "qcx/properties/nocv.hpp"
 
 #include "internal/tensor_to_eigen.hpp"
@@ -162,6 +166,9 @@ struct KsSpinEvaluation {
     Eigen::MatrixXd exchangeAlpha; ///< K[D_a].
     Eigen::MatrixXd exchangeBeta; ///< K[D_b].
     double xcEnergy = 0.0; ///< E_xc(D_a, D_b).
+    /// The Kohn-Sham total energy at (D_a, D_b), the same weighted total
+    /// the fragment SCF's seam composes (nuclear repulsion counted once).
+    double totalEnergy = 0.0;
 };
 
 qcx::Result<KsSpinEvaluation> EvaluateKsSpin(
@@ -203,6 +210,11 @@ qcx::Result<KsSpinEvaluation> EvaluateKsSpin(
     result.fockBeta =
         fraction * full->fockBeta + (1.0 - fraction) * coulomb->fockBeta + xc->potentialBeta;
     result.xcEnergy = xc->energy;
+    // The same weighted total the fragment SCF's energy seam forms:
+    // E = c_HF E_HF + (1 - c_HF) E_coul + E_xc, and both evaluator totals
+    // carry the nuclear repulsion once, so the weighted sum counts it once.
+    result.totalEnergy =
+        fraction * full->totalEnergy + (1.0 - fraction) * coulomb->totalEnergy + xc->energy;
     return result;
 }
 
@@ -757,6 +769,74 @@ LowdinTransform BuildLowdinTransform(const Eigen::MatrixXd& overlap) {
 
 } // namespace
 
+qcx::Result<void> CheckNocvEtsReference(NocvEtsReference reference, NocvEtsEntryPoint entryPoint) {
+    // The restricted open-shell reference is refused before the entry point
+    // is consulted: no entry point serves it, and its statement is the same
+    // whichever lane the caller intended.
+    if (reference == NocvEtsReference::kRestrictedOpenShell)
+    {
+        return std::unexpected(RestrictedOpenShellRefusal());
+    }
+
+    const bool unrestrictedReference = reference == NocvEtsReference::kUnrestricted;
+    const bool unrestrictedEntryPoint = entryPoint == NocvEtsEntryPoint::kUnrestrictedHartreeFock ||
+                                        entryPoint == NocvEtsEntryPoint::kUnrestrictedKohnSham;
+
+    // The served pairs: the closed-shell reference on the two closed-shell
+    // entry points, the unrestricted reference on the two unrestricted ones.
+    // A mismatched pair names the entry point that serves the declared
+    // reference, so a caller holding the wrong one is redirected rather than
+    // left with a generic domain error.
+    if (unrestrictedReference != unrestrictedEntryPoint)
+    {
+        switch (entryPoint)
+        {
+        case NocvEtsEntryPoint::kClosedShellHartreeFock:
+            return std::unexpected(
+                qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                           "AnalyzeNocvEts serves the closed-shell reference: a per-spin "
+                           "density pair is AnalyzeNocvEtsUnrestricted's input (the "
+                           "unrestricted Hartree-Fock decomposition, one NOCV problem per "
+                           "spin)"});
+
+        case NocvEtsEntryPoint::kUnrestrictedHartreeFock:
+            return std::unexpected(
+                qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                           "AnalyzeNocvEtsUnrestricted serves the unrestricted reference: a "
+                           "closed-shell density pair is AnalyzeNocvEts's input, which "
+                           "reports the restricted functional's E_Pauli/E_orb split this "
+                           "entry does not compute"});
+
+        case NocvEtsEntryPoint::kClosedShellKohnSham:
+            return std::unexpected(
+                qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                           "AnalyzeNocvEtsKohnSham serves the closed-shell reference: a "
+                           "per-spin (UKS) density pair is AnalyzeNocvEtsUnrestrictedKohnSham's "
+                           "input (the same three-point transition state applied per spin)"});
+
+        case NocvEtsEntryPoint::kUnrestrictedKohnSham:
+            return std::unexpected(
+                qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                           "AnalyzeNocvEtsUnrestrictedKohnSham serves the unrestricted "
+                           "reference: a spin-summed closed-shell density is "
+                           "AnalyzeNocvEtsKohnSham's input (the closed-shell Ziegler-Rauk "
+                           "three-point transition state)"});
+        }
+
+        // Unreachable while the enumerator set above is total; the tail keeps
+        // the mismatch fail-closed if a new entry point is added without a
+        // case, and the switch stays total without a `default:` arm that
+        // would hide that new entry point.
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kInvalidArgument, "unclassified ETS-NOCV entry point"});
+    }
+
+    // The reference and the entry point agree: the two closed-shell reference
+    // forms on the closed-shell entry points, the two unrestricted forms on
+    // the unrestricted ones.
+    return {};
+}
+
 qcx::Result<NocvEtsDecomposition> AnalyzeNocvEts(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basisSet,
@@ -947,18 +1027,12 @@ qcx::Result<NocvEtsDecomposition> AnalyzeNocvEtsUnrestricted(
     NocvEtsReference reference,
     const std::vector<std::vector<std::size_t>>& fragments,
     const qcx::scf::UhfOptions& fragmentOptions) {
-    if (reference == NocvEtsReference::kRestrictedOpenShell)
-    {
-        return std::unexpected(RestrictedOpenShellRefusal());
-    }
+    auto referenceGate =
+        CheckNocvEtsReference(reference, NocvEtsEntryPoint::kUnrestrictedHartreeFock);
 
-    if (reference != NocvEtsReference::kUnrestricted)
+    if (!referenceGate.has_value())
     {
-        return std::unexpected(
-            qcx::Error{qcx::ErrorCode::kInvalidArgument,
-                       "AnalyzeNocvEtsUnrestricted serves the unrestricted reference: a "
-                       "closed-shell density pair is AnalyzeNocvEts's input, which reports the "
-                       "restricted functional's E_Pauli/E_orb split this entry does not compute"});
+        return std::unexpected(referenceGate.error());
     }
 
     auto functionCount = CheckNocvShapes(eri, coreHamiltonian, densityAlpha, &densityBeta);
@@ -1098,20 +1172,11 @@ qcx::Result<NocvEtsDecomposition> AnalyzeNocvEtsKohnSham(
     const NocvEtsFunctional& functional,
     const std::vector<std::vector<std::size_t>>& fragments,
     const qcx::scf::UhfOptions& fragmentOptions) {
-    if (reference == NocvEtsReference::kRestrictedOpenShell)
-    {
-        return std::unexpected(RestrictedOpenShellRefusal());
-    }
+    auto referenceGate = CheckNocvEtsReference(reference, NocvEtsEntryPoint::kClosedShellKohnSham);
 
-    if (reference != NocvEtsReference::kClosedShell)
+    if (!referenceGate.has_value())
     {
-        return std::unexpected(
-            qcx::Error{qcx::ErrorCode::kUnimplemented,
-                       "AnalyzeNocvEtsKohnSham serves the closed-shell (RKS) reference: a "
-                       "per-spin (UKS) density pair needs the same three-point transition "
-                       "state applied per spin, which this closed-shell entry does not "
-                       "serve; pass the spin-summed density of a closed-shell run, or use "
-                       "the unrestricted entry for a Hartree-Fock determinant"});
+        return std::unexpected(referenceGate.error());
     }
 
     if (!functional.evaluate)
@@ -1258,6 +1323,196 @@ qcx::Result<NocvEtsDecomposition> AnalyzeNocvEtsKohnSham(
     result.deformationDensityBeta = 0.5 * deltaP;
     result.orbitalUnrestricted = result.orbital;
 
+    result.bindingEnergy = result.electrostatic + result.pauli + result.orbital;
+    return result;
+}
+
+qcx::Result<NocvEtsDecomposition> AnalyzeNocvEtsUnrestrictedKohnSham(
+    const qcx::molecule::Molecule& molecule,
+    const qcx::basisset::BasisSet& basisSet,
+    const Eigen::MatrixXd& coreHamiltonian,
+    const qcx::memory::Tensor<double, 4, qcx::backend::CpuTag>& eri,
+    const Eigen::MatrixXd& densityAlpha,
+    const Eigen::MatrixXd& densityBeta,
+    NocvEtsReference reference,
+    const NocvEtsFunctional& functional,
+    const std::vector<std::vector<std::size_t>>& fragments,
+    const qcx::scf::UhfOptions& fragmentOptions) {
+    auto referenceGate = CheckNocvEtsReference(reference, NocvEtsEntryPoint::kUnrestrictedKohnSham);
+
+    if (!referenceGate.has_value())
+    {
+        return std::unexpected(referenceGate.error());
+    }
+
+    if (!functional.evaluate)
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "the Kohn-Sham ETS-NOCV needs a callable XC "
+                                          "evaluator seam (NocvEtsFunctional::evaluate)"});
+    }
+
+    if (!(functional.exchangeFraction >= 0.0 && functional.exchangeFraction <= 1.0))
+    {
+        return std::unexpected(qcx::Error{qcx::ErrorCode::kInvalidArgument,
+                                          "the exact-exchange fraction must lie in [0, 1]"});
+    }
+
+    auto functionCount = CheckNocvShapes(eri, coreHamiltonian, densityAlpha, &densityBeta);
+
+    if (!functionCount.has_value())
+    {
+        return std::unexpected(functionCount.error());
+    }
+
+    const std::size_t n = *functionCount;
+    auto partition = ValidateFragmentPartition(molecule, fragments);
+
+    if (!partition.has_value())
+    {
+        return std::unexpected(partition.error());
+    }
+
+    auto overlap = qcx::integrals::BuildOverlapMatrix(molecule, basisSet);
+
+    if (!overlap.has_value())
+    {
+        return std::unexpected(overlap.error());
+    }
+
+    const Eigen::MatrixXd overlapEigen = internal::TensorToEigen(*overlap);
+
+    // The fragments run their own SCFs through the functional seam (the same
+    // UHF loop and the same convergence gate as every other entry), so an
+    // open-shell fragment - the Hund convention - comes out as a UKS
+    // fragment.
+    NocvEtsDecomposition result;
+    result.fragmentEnergies.resize(static_cast<Eigen::Index>(fragments.size()));
+    auto frozen = RunFragmentSet(molecule,
+                                 basisSet,
+                                 overlapEigen,
+                                 eri,
+                                 fragments,
+                                 fragmentOptions,
+                                 &functional,
+                                 result.fragmentEnergies);
+
+    if (!frozen.has_value())
+    {
+        return std::unexpected(frozen.error());
+    }
+
+    result.fragmentDensity = frozen->density;
+
+    // E_elstat is the functional-independent Coulomb-only cross-fragment
+    // interaction every entry forms: the exchange-free functional value of
+    // the combined density minus the fragments' own.
+    auto combinedCoulomb = qcx::scf::EvaluateRhfDensityEnergy(
+        molecule, coreHamiltonian, eri, result.fragmentDensity, /*includeExchange=*/false);
+
+    if (!combinedCoulomb.has_value())
+    {
+        return std::unexpected(combinedCoulomb.error());
+    }
+
+    result.electrostatic = combinedCoulomb->totalEnergy - frozen->coulombEnergySum;
+
+    const auto projectors = BuildOrthogonalizedChannels(frozen->scfs, overlapEigen, n);
+    result.orthogonalizedDensityAlpha = projectors.alpha;
+    result.orthogonalizedDensityBeta = projectors.beta;
+    result.orthogonalizedDensity = projectors.alpha + projectors.beta;
+
+    // E_Pauli of the run's own functional at the orthogonalized spin pair:
+    // the energy the antisymmetrized, orthogonalized combination adds beyond
+    // the frozen classical interaction (defined so the partition identity
+    // holds). The seam is evaluated at the true spin pair - not at the
+    // spin-summed density with the closed-shell split - which is what makes
+    // the zero-XC/c_HF = 1 limit reproduce AnalyzeNocvEtsUnrestricted.
+    auto orthEnergy = EvaluateKsSpin(
+        molecule, coreHamiltonian, eri, projectors.alpha, projectors.beta, functional);
+
+    if (!orthEnergy.has_value())
+    {
+        return std::unexpected(orthEnergy.error());
+    }
+
+    result.pauli = orthEnergy->totalEnergy - frozen->energySum - result.electrostatic;
+
+    // The per-spin three-point (Simpson) transition state. With
+    // D_sigma(lambda) = P_orth,sigma + lambda Delta D_sigma,
+    //     E[D] - E[P_orth] = sum_sigma integral_0^1 dlambda
+    //                        Tr[Delta D_sigma F_sigma(D(lambda))],
+    // and Simpson's rule replaces each spin's integrand samples by
+    //     F_sigma^TS = 1/6 F_sigma[P_orth] + 2/3 F_sigma[P_TS]
+    //                  + 1/6 F_sigma[D].
+    // The XC potential is evaluated at all three per-spin pairs, so a
+    // non-linear functional enters every sample; for a quadratic functional
+    // each weighted average collapses to the midpoint Fock exactly, which is
+    // the Hartree-Fock limit the module's tests pin.
+    const Eigen::MatrixXd transitionAlpha = 0.5 * (projectors.alpha + densityAlpha);
+    const Eigen::MatrixXd transitionBeta = 0.5 * (projectors.beta + densityBeta);
+
+    auto fockOrth = EvaluateKsSpin(
+        molecule, coreHamiltonian, eri, projectors.alpha, projectors.beta, functional);
+
+    if (!fockOrth.has_value())
+    {
+        return std::unexpected(fockOrth.error());
+    }
+
+    auto fockTransition =
+        EvaluateKsSpin(molecule, coreHamiltonian, eri, transitionAlpha, transitionBeta, functional);
+
+    if (!fockTransition.has_value())
+    {
+        return std::unexpected(fockTransition.error());
+    }
+
+    auto fockMolecular =
+        EvaluateKsSpin(molecule, coreHamiltonian, eri, densityAlpha, densityBeta, functional);
+
+    if (!fockMolecular.has_value())
+    {
+        return std::unexpected(fockMolecular.error());
+    }
+
+    const Eigen::MatrixXd transitionStateFockAlpha = (1.0 / 6.0) * fockOrth->fockAlpha +
+                                                     (2.0 / 3.0) * fockTransition->fockAlpha +
+                                                     (1.0 / 6.0) * fockMolecular->fockAlpha;
+    const Eigen::MatrixXd transitionStateFockBeta = (1.0 / 6.0) * fockOrth->fockBeta +
+                                                    (2.0 / 3.0) * fockTransition->fockBeta +
+                                                    (1.0 / 6.0) * fockMolecular->fockBeta;
+
+    // The two INDEPENDENT NOCV problems, one per spin, resolved against each
+    // spin's own transition Fock in the Loewdin basis.
+    const LowdinTransform lowdin = BuildLowdinTransform(overlapEigen);
+    const Eigen::MatrixXd deltaAlpha = densityAlpha - projectors.alpha;
+    const Eigen::MatrixXd deltaBeta = densityBeta - projectors.beta;
+    const Eigen::MatrixXd fockAlphaLowdin =
+        lowdin.rootInverse * transitionStateFockAlpha * lowdin.rootInverse;
+    const Eigen::MatrixXd fockBetaLowdin =
+        lowdin.rootInverse * transitionStateFockBeta * lowdin.rootInverse;
+    const auto alphaChannels =
+        ResolveChannels(lowdin.root * deltaAlpha * lowdin.root, fockAlphaLowdin);
+    const auto betaChannels =
+        ResolveChannels(lowdin.root * deltaBeta * lowdin.root, fockBetaLowdin);
+    result.orbitalComponentsAlpha = alphaChannels.components;
+    result.nocvEigenvaluesAlpha = alphaChannels.eigenvalues;
+    result.nocvEigenvaluesAlphaNegative = alphaChannels.negativeEigenvalues;
+    result.orbitalComponentsBeta = betaChannels.components;
+    result.nocvEigenvaluesBeta = betaChannels.eigenvalues;
+    result.nocvEigenvaluesBetaNegative = betaChannels.negativeEigenvalues;
+    result.orbitalUnrestricted = alphaChannels.energy + betaChannels.energy;
+
+    // The total deformation density is the sum of the two spin problems;
+    // there is no restricted resolution on a per-spin reference to report in
+    // the spin-summed fields, so orbitalComponents and nocvEigenvalues stay
+    // empty (the AnalyzeNocvEtsUnrestricted convention).
+    result.deformationDensityAlpha = deltaAlpha;
+    result.deformationDensityBeta = deltaBeta;
+    result.deformationDensity = deltaAlpha + deltaBeta;
+
+    result.orbital = result.orbitalUnrestricted;
     result.bindingEnergy = result.electrostatic + result.pauli + result.orbital;
     return result;
 }

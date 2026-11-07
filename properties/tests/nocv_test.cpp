@@ -34,14 +34,16 @@
 // and H2 singlet leave virtual space for the relaxation to fill (the
 // magnitudes cross-validate against the numpy reference later).
 //
-// The unrestricted (UHF) and closed-shell Kohn-Sham references are pinned
-// by their own gates: the closed-shell limit (the unrestricted entry on
-// D/2 = D/2 reproduces the closed-shell per-spin resolution; the Kohn-Sham
-// entry on the zero-XC/c_HF = 1 seam reproduces the Hartree-Fock
-// decomposition), the sum rule against each functional (channel sums =
-// E[D] - E[P_orth]), the +-nu pairing of the O2/STO-3G triplet's beta
-// spectrum, and the three-point transition state's trace on a real Slater
-// functional.
+// The unrestricted (UHF) and the two Kohn-Sham references are pinned by
+// their own gates: the closed-shell limit (the unrestricted entry on
+// D/2 = D/2 reproduces the closed-shell per-spin resolution; the
+// unrestricted Kohn-Sham entry on the same D/2 = D/2 reproduces the
+// unrestricted entry; the closed-shell Kohn-Sham entry on the
+// zero-XC/c_HF = 1 seam reproduces the Hartree-Fock decomposition), the sum
+// rule against each functional (channel sums = E[D] - E[P_orth]), the +-nu
+// pairing of the O2/STO-3G triplet's beta spectrum, and the three-point
+// transition state's trace on a real Slater functional in both the
+// closed-shell and the per-spin form.
 #include "fast_test_mode.hpp"
 #include "h2_sto3g.hpp"
 #include "h2o_ccpvdz.hpp"
@@ -69,6 +71,7 @@ namespace {
 
 using CpuTensor2 = qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>;
 using CpuTensor4 = qcx::memory::Tensor<double, 4, qcx::backend::CpuTag>;
+using qcx::properties::NocvEtsEntryPoint;
 using qcx::testing::MakeH2oCcpvdz;
 using qcx::testing::MakeH2oCcpvdzBasis;
 using qcx::testing::MakeH2oSto3g;
@@ -763,6 +766,56 @@ qcx::Result<KsDensity> EvaluateTestKs(const qcx::molecule::Molecule& molecule,
     return result;
 }
 
+// The unrestricted Kohn-Sham Fock pair and total energy at an arbitrary
+// spin-density pair, recomputed in the test from the dense evaluator and the
+// seam - the independent definition the per-spin three-point trace check
+// compares against (the per-spin twin of EvaluateTestKs).
+struct KsSpinDensity {
+    Eigen::MatrixXd fockAlpha;
+    Eigen::MatrixXd fockBeta;
+    double totalEnergy = 0.0;
+};
+
+qcx::Result<KsSpinDensity> EvaluateTestKsSpin(
+    const qcx::molecule::Molecule& molecule,
+    const Eigen::MatrixXd& core,
+    const CpuTensor4& eri,
+    const Eigen::MatrixXd& densityAlpha,
+    const Eigen::MatrixXd& densityBeta,
+    const qcx::properties::NocvEtsFunctional& functional) {
+    auto full = qcx::scf::EvaluateUhfDensityEnergy(molecule, core, eri, densityAlpha, densityBeta);
+
+    if (!full.has_value())
+    {
+        return std::unexpected(full.error());
+    }
+
+    auto coulomb =
+        qcx::scf::EvaluateUhfDensityEnergy(molecule, core, eri, densityAlpha, densityBeta, false);
+
+    if (!coulomb.has_value())
+    {
+        return std::unexpected(coulomb.error());
+    }
+
+    auto xc = functional.evaluate(densityAlpha, densityBeta);
+
+    if (!xc.has_value())
+    {
+        return std::unexpected(xc.error());
+    }
+
+    const double fraction = functional.exchangeFraction;
+    KsSpinDensity result;
+    result.fockAlpha =
+        fraction * full->fockAlpha + (1.0 - fraction) * coulomb->fockAlpha + xc->potentialAlpha;
+    result.fockBeta =
+        fraction * full->fockBeta + (1.0 - fraction) * coulomb->fockBeta + xc->potentialBeta;
+    result.totalEnergy =
+        fraction * full->totalEnergy + (1.0 - fraction) * coulomb->totalEnergy + xc->energy;
+    return result;
+}
+
 // The RKS loop a Kohn-Sham test fixture converges: the closure's three
 // callbacks over the dense evaluator and the seam (the driver's RksSeam
 // shape, composed test-side).
@@ -1067,6 +1120,196 @@ TEST(NocvEtsTest, UnrestrictedOpenShellO2Partition) {
     EXPECT_GE(genuinePairs, 1);
 }
 
+// The Hartree-Fock limit of the unrestricted Kohn-Sham seam: zero XC with
+// c_HF = 1 is the unrestricted Hartree-Fock functional, so the UKS entry
+// point must reproduce the UHF entry point's per-spin decomposition (the
+// fragment SCFs run through the callback seam instead of the supermatrix
+// path - the tolerance is that seam's rounding, not a physics band).
+TEST(NocvEtsTest, UnrestrictedKohnShamZeroXcReproducesTheUhfEntry) {
+    auto molecule = MakeH2oSto3g();
+
+    ASSERT_TRUE(molecule.has_value());
+
+    auto basis = MakeH2oSto3gBasis();
+
+    ASSERT_TRUE(basis.has_value());
+
+    auto inputs = BuildNocvInputs(*molecule, *basis);
+
+    ASSERT_TRUE(inputs.has_value());
+
+    const Eigen::MatrixXd half = 0.5 * inputs->scf->density;
+    auto uhf = qcx::properties::AnalyzeNocvEtsUnrestricted(*molecule,
+                                                           *basis,
+                                                           inputs->core,
+                                                           inputs->eri,
+                                                           half,
+                                                           half,
+                                                           kUnrestrictedReference,
+                                                           {{2}, {0, 1}},
+                                                           kNocvTightFragmentOptions);
+
+    ASSERT_TRUE(uhf.has_value()) << uhf.error().message;
+
+    auto uks = qcx::properties::AnalyzeNocvEtsUnrestrictedKohnSham(*molecule,
+                                                                   *basis,
+                                                                   inputs->core,
+                                                                   inputs->eri,
+                                                                   half,
+                                                                   half,
+                                                                   kUnrestrictedReference,
+                                                                   ZeroXcFunctional(),
+                                                                   {{2}, {0, 1}},
+                                                                   kNocvTightFragmentOptions);
+
+    ASSERT_TRUE(uks.has_value()) << uks.error().message;
+
+    ASSERT_EQ(uks->fragmentEnergies.size(), uhf->fragmentEnergies.size());
+
+    // Each path runs its OWN fragment SCFs, so the cross-path band is the
+    // 2e-6 magnitude band the file's other seam gates carry.
+    for (Eigen::Index i = 0; i < uhf->fragmentEnergies.size(); ++i)
+    {
+        EXPECT_NEAR(uks->fragmentEnergies(i), uhf->fragmentEnergies(i), 2e-6);
+    }
+
+    EXPECT_NEAR(uks->electrostatic, uhf->electrostatic, 2e-6);
+    EXPECT_NEAR(uks->pauli, uhf->pauli, 2e-6);
+    EXPECT_NEAR(uks->orbitalUnrestricted, uhf->orbitalUnrestricted, 2e-6);
+    EXPECT_NEAR(uks->orbital, uks->orbitalUnrestricted, 1e-12);
+    EXPECT_NEAR(uks->bindingEnergy, uhf->bindingEnergy, 2e-6);
+    ASSERT_EQ(uks->orbitalComponentsAlpha.size(), uhf->orbitalComponentsAlpha.size());
+    ASSERT_EQ(uks->orbitalComponentsBeta.size(), uhf->orbitalComponentsBeta.size());
+
+    for (Eigen::Index k = 0; k < uhf->orbitalComponentsAlpha.size(); ++k)
+    {
+        EXPECT_NEAR(uks->orbitalComponentsAlpha(k), uhf->orbitalComponentsAlpha(k), 2e-6);
+        EXPECT_NEAR(uks->nocvEigenvaluesAlpha(k), uhf->nocvEigenvaluesAlpha(k), 2e-6);
+        EXPECT_NEAR(
+            uks->nocvEigenvaluesAlphaNegative(k), uhf->nocvEigenvaluesAlphaNegative(k), 2e-6);
+    }
+
+    for (Eigen::Index k = 0; k < uhf->orbitalComponentsBeta.size(); ++k)
+    {
+        EXPECT_NEAR(uks->orbitalComponentsBeta(k), uhf->orbitalComponentsBeta(k), 2e-6);
+        EXPECT_NEAR(uks->nocvEigenvaluesBeta(k), uhf->nocvEigenvaluesBeta(k), 2e-6);
+        EXPECT_NEAR(uks->nocvEigenvaluesBetaNegative(k), uhf->nocvEigenvaluesBetaNegative(k), 2e-6);
+    }
+
+    // The per-spin reference reports no restricted resolution.
+    EXPECT_EQ(uks->orbitalComponents.size(), 0);
+    EXPECT_EQ(uks->nocvEigenvalues.size(), 0);
+    EXPECT_NEAR(uks->orbital, uks->orbitalUnrestricted, 1e-12);
+}
+
+// The real-functional gate of the per-spin Kohn-Sham seam: the O2/STO-3G
+// triplet with the Slater LDA exchange through the grid engine. Each spin's
+// channels must be its own THREE-point transition state's trace - which
+// differs from the one-point midpoint trace for a non-linear functional -
+// and the two per-spin channel sums must be E_KS[D] - E_KS[P_orth].
+TEST(NocvEtsTest, UnrestrictedKohnShamThreePointStateSlaterO2) {
+    auto molecule = MakeO2Sto3gTriplet();
+
+    ASSERT_TRUE(molecule.has_value());
+
+    auto basis = MakeO2Sto3gBasis();
+
+    ASSERT_TRUE(basis.has_value());
+
+    auto uhf = qcx::properties::testing::RunDenseUhfO2(*molecule, *basis);
+
+    ASSERT_TRUE(uhf.has_value()) << uhf.error().message;
+    ASSERT_TRUE(uhf->converged);
+
+    auto core = BuildCoreHamiltonian(*molecule, *basis);
+
+    ASSERT_TRUE(core.has_value());
+
+    auto eri = qcx::integrals::BuildEriTensorGeneral(*molecule, *basis);
+
+    ASSERT_TRUE(eri.has_value());
+
+    auto engine = qcx::grid::XcGridEngine::Create(*molecule, *basis, "slater");
+
+    ASSERT_TRUE(engine.has_value()) << engine.error().message;
+    EXPECT_DOUBLE_EQ(engine->ExchangeFraction(), 0.0);
+
+    const auto functional = EngineFunctional(*engine);
+    qcx::scf::UhfOptions fragmentOptions = kNocvFragmentOptions;
+    fragmentOptions.maxIterations = 300;
+    auto result = qcx::properties::AnalyzeNocvEtsUnrestrictedKohnSham(*molecule,
+                                                                      *basis,
+                                                                      ToMatrix(*core),
+                                                                      *eri,
+                                                                      uhf->densityAlpha,
+                                                                      uhf->densityBeta,
+                                                                      kUnrestrictedReference,
+                                                                      functional,
+                                                                      {{0}, {1}},
+                                                                      fragmentOptions);
+
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+
+    EXPECT_GT(std::abs(result->orbitalUnrestricted), 1e-4);
+    EXPECT_NEAR(result->orbitalComponentsAlpha.sum() + result->orbitalComponentsBeta.sum(),
+                result->orbitalUnrestricted,
+                1e-12);
+    EXPECT_NEAR(
+        result->electrostatic + result->pauli + result->orbital, result->bindingEnergy, 1e-12);
+    EXPECT_EQ(result->orbitalComponents.size(), 0);
+    EXPECT_NEAR(result->orbital, result->orbitalUnrestricted, 1e-12);
+
+    // The independent per-spin three-point trace the module's E_orb claims
+    // to be: 1/6 F[P_orth] + 2/3 F[P_TS] + 1/6 F[D] on each spin. The trace
+    // is basis-independent, so it reads in the AO matrices directly.
+    const auto orth = EvaluateTestKsSpin(*molecule,
+                                         ToMatrix(*core),
+                                         *eri,
+                                         result->orthogonalizedDensityAlpha,
+                                         result->orthogonalizedDensityBeta,
+                                         functional);
+
+    ASSERT_TRUE(orth.has_value());
+
+    const auto middle =
+        EvaluateTestKsSpin(*molecule,
+                           ToMatrix(*core),
+                           *eri,
+                           0.5 * (result->orthogonalizedDensityAlpha + uhf->densityAlpha),
+                           0.5 * (result->orthogonalizedDensityBeta + uhf->densityBeta),
+                           functional);
+
+    ASSERT_TRUE(middle.has_value());
+
+    const auto molecular = EvaluateTestKsSpin(
+        *molecule, ToMatrix(*core), *eri, uhf->densityAlpha, uhf->densityBeta, functional);
+
+    ASSERT_TRUE(molecular.has_value());
+
+    const Eigen::MatrixXd fockAlphaTransition = (1.0 / 6.0) * orth->fockAlpha +
+                                                (2.0 / 3.0) * middle->fockAlpha +
+                                                (1.0 / 6.0) * molecular->fockAlpha;
+    const Eigen::MatrixXd fockBetaTransition = (1.0 / 6.0) * orth->fockBeta +
+                                               (2.0 / 3.0) * middle->fockBeta +
+                                               (1.0 / 6.0) * molecular->fockBeta;
+    const Eigen::MatrixXd deltaAlpha = uhf->densityAlpha - result->orthogonalizedDensityAlpha;
+    const Eigen::MatrixXd deltaBeta = uhf->densityBeta - result->orthogonalizedDensityBeta;
+    const double threePointTrace = deltaAlpha.cwiseProduct(fockAlphaTransition).sum() +
+                                   deltaBeta.cwiseProduct(fockBetaTransition).sum();
+    EXPECT_NEAR(result->orbitalUnrestricted, threePointTrace, 1e-12);
+
+    // The midpoint-only trace is a DIFFERENT number: the XC potential really
+    // is sampled at all three per-spin pairs, not just the midpoint.
+    const double midpointTrace = deltaAlpha.cwiseProduct(middle->fockAlpha).sum() +
+                                 deltaBeta.cwiseProduct(middle->fockBeta).sum();
+    EXPECT_GT(std::abs(threePointTrace - midpointTrace), 1e-9);
+
+    // The per-spin Simpson residual: the three-point E_orb is the exact
+    // E_KS[D] - E_KS[P_orth] up to the rule's residual on this functional.
+    const double exactRelaxation = molecular->totalEnergy - orth->totalEnergy;
+    EXPECT_NEAR(result->orbitalUnrestricted, exactRelaxation, 1e-4);
+}
+
 // The closed-shell-limit gate of the Kohn-Sham seam: zero XC with c_HF = 1 is
 // the Hartree-Fock functional, so the RKS entry point must reproduce the
 // closed-shell HF decomposition's numbers (the fragment SCFs run through the
@@ -1310,8 +1553,78 @@ TEST(NocvEtsTest, RefusesUnservedReferences) {
                                                                         {{0}, {1}},
                                                                         kNocvFragmentOptions);
 
+    // The capability now exists in AnalyzeNocvEtsUnrestrictedKohnSham, so the
+    // closed-shell entry's answer is a wrong-reference argument error naming
+    // that entry, not a missing-capability refusal.
     ASSERT_FALSE(unrestrictedKohnSham.has_value());
-    EXPECT_EQ(unrestrictedKohnSham.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_EQ(unrestrictedKohnSham.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(unrestrictedKohnSham.error().message.find("AnalyzeNocvEtsUnrestrictedKohnSham"),
+              std::string::npos)
+        << unrestrictedKohnSham.error().message;
+
+    // The unrestricted Kohn-Sham entry's own reference refusals.
+    const Eigen::MatrixXd halfDensity = 0.5 * inputs->scf->density;
+    auto rohfUnrestrictedKohnSham =
+        qcx::properties::AnalyzeNocvEtsUnrestrictedKohnSham(*molecule,
+                                                            *basis,
+                                                            inputs->core,
+                                                            inputs->eri,
+                                                            halfDensity,
+                                                            halfDensity,
+                                                            kRestrictedOpenShellReference,
+                                                            functional,
+                                                            {{0}, {1}},
+                                                            kNocvFragmentOptions);
+
+    ASSERT_FALSE(rohfUnrestrictedKohnSham.has_value());
+    EXPECT_EQ(rohfUnrestrictedKohnSham.error().code, qcx::ErrorCode::kUnimplemented);
+    EXPECT_NE(rohfUnrestrictedKohnSham.error().message.find("restricted open-shell"),
+              std::string::npos);
+
+    auto closedShellUnrestrictedKohnSham =
+        qcx::properties::AnalyzeNocvEtsUnrestrictedKohnSham(*molecule,
+                                                            *basis,
+                                                            inputs->core,
+                                                            inputs->eri,
+                                                            halfDensity,
+                                                            halfDensity,
+                                                            kClosedShellReference,
+                                                            functional,
+                                                            {{0}, {1}},
+                                                            kNocvFragmentOptions);
+
+    ASSERT_FALSE(closedShellUnrestrictedKohnSham.has_value());
+    EXPECT_EQ(closedShellUnrestrictedKohnSham.error().code, qcx::ErrorCode::kInvalidArgument);
+    EXPECT_NE(closedShellUnrestrictedKohnSham.error().message.find("AnalyzeNocvEtsKohnSham"),
+              std::string::npos)
+        << closedShellUnrestrictedKohnSham.error().message;
+
+    // The shared gate answers every entry point's reference the same way the
+    // entry does, which is what lets a caller refuse before the dense setup.
+    const auto gateServes = [](qcx::properties::NocvEtsReference reference,
+                               NocvEtsEntryPoint entryPoint) {
+        return qcx::properties::CheckNocvEtsReference(reference, entryPoint).has_value();
+    };
+
+    for (const auto entryPoint : {NocvEtsEntryPoint::kClosedShellHartreeFock,
+                                  NocvEtsEntryPoint::kUnrestrictedHartreeFock,
+                                  NocvEtsEntryPoint::kClosedShellKohnSham,
+                                  NocvEtsEntryPoint::kUnrestrictedKohnSham})
+    {
+        auto restrictedGate =
+            qcx::properties::CheckNocvEtsReference(kRestrictedOpenShellReference, entryPoint);
+        ASSERT_FALSE(restrictedGate.has_value());
+        EXPECT_EQ(restrictedGate.error().code, qcx::ErrorCode::kUnimplemented);
+    }
+
+    EXPECT_TRUE(gateServes(kClosedShellReference, NocvEtsEntryPoint::kClosedShellHartreeFock));
+    EXPECT_TRUE(gateServes(kClosedShellReference, NocvEtsEntryPoint::kClosedShellKohnSham));
+    EXPECT_TRUE(gateServes(kUnrestrictedReference, NocvEtsEntryPoint::kUnrestrictedHartreeFock));
+    EXPECT_TRUE(gateServes(kUnrestrictedReference, NocvEtsEntryPoint::kUnrestrictedKohnSham));
+    EXPECT_FALSE(gateServes(kUnrestrictedReference, NocvEtsEntryPoint::kClosedShellHartreeFock));
+    EXPECT_FALSE(gateServes(kClosedShellReference, NocvEtsEntryPoint::kUnrestrictedHartreeFock));
+    EXPECT_FALSE(gateServes(kUnrestrictedReference, NocvEtsEntryPoint::kClosedShellKohnSham));
+    EXPECT_FALSE(gateServes(kClosedShellReference, NocvEtsEntryPoint::kUnrestrictedKohnSham));
 
     qcx::properties::NocvEtsFunctional emptyFunctional;
     auto emptySeam = qcx::properties::AnalyzeNocvEtsKohnSham(*molecule,

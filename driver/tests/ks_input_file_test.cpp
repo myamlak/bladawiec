@@ -403,37 +403,73 @@ xc_gradient = true
         << refused.error().message;
 }
 
-// The ETS-NOCV analysis is Hartree-Fock in v1. Before the refusal below
-// existed, this rks file ran and came back with an HF decomposition beside a
-// DFT total energy: HF fragment energies and HF E_orb channels, while
-// total_energy_hartree was the PBE energy - so the documented identity
-// binding_energy = E_mol - sum E_frag (result_json.hpp) was violated by the
-// exchange-correlation difference, and nothing in the record said so. The
-// request is now refused by NAME before the SCF, and the refusal names the
-// mismatch and the remedies.
-//
-// The key is method.functional (the method having one), not the string
-// "rks": a rule stated on the functional cannot drift from the validator's
-// own word policy.
-TEST(KsInputFileTest, NocvOnAKohnShamFileIsRefusedByName) {
-    auto refused = RunFile(TempInputPath("nocv-rks"),
-                           WaterToml(R"(type = "rks"
+// The ETS-NOCV block on a Kohn-Sham file. The refusal this test once pinned
+// existed because the analysis was Hartree-Fock only: the run came back with
+// HF fragment energies and HF E_orb channels beside a DFT total energy, so the
+// documented identity binding_energy = E_mol - sum E_frag (result_json.hpp)
+// was violated by the exchange-correlation difference with nothing in the
+// record saying so. The driver now routes a Kohn-Sham method word to the
+// functional-aware entry points: the fragments run the file's own functional
+// through the grid seam, E_orb is the three-point transition state's, and the
+// identity below holds against the run's Kohn-Sham total energy up to the
+// Simpson residual - which is the number this test pins.
+TEST(KsInputFileTest, NocvOnAKohnShamFileRunsTheFunctionalDecomposition) {
+    auto ran = RunFile(TempInputPath("nocv-rks"),
+                       WaterToml(R"(type = "rks"
 functional = "pbe"
 fock_builder = "direct"
 )",
-                                     R"([properties]
+                                 R"([properties]
 nocv_fragments = [[0], [1, 2]]
 )"));
-    ASSERT_FALSE(refused.has_value());
-    EXPECT_EQ(refused.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(refused.error().message.find("Hartree-Fock in v1"), std::string::npos)
-        << refused.error().message;
-    EXPECT_NE(refused.error().message.find("nocv_fragments"), std::string::npos)
-        << refused.error().message;
-    EXPECT_NE(refused.error().message.find("DFT total energy"), std::string::npos)
-        << refused.error().message;
-    EXPECT_NE(refused.error().message.find("method.functional"), std::string::npos)
-        << refused.error().message;
+    ASSERT_TRUE(ran.has_value()) << ran.error().message;
+    EXPECT_EQ(ran->result.method, MethodType::kRks);
+    EXPECT_TRUE(ran->result.converged);
+    ASSERT_TRUE(ran->result.properties.has_value());
+    ASSERT_TRUE(ran->result.properties->nocv.has_value());
+    const auto& nocv = *ran->result.properties->nocv;
+
+    // The two fragment SCFs run the file's functional, in the caller's
+    // fragment order (the file writes [O], [H, H]). Measured 2026-11-07 with
+    // `qcx.exe run .claude/lane-status/q-h1/h2o-rks-pbe-nocv.toml`, the deck
+    // this fixture's input matches word for word.
+    ASSERT_EQ(nocv.fragmentEnergies.size(), 2U);
+    EXPECT_NEAR(nocv.fragmentEnergies[0], -73.72762331017131, 1e-7); // O
+    EXPECT_NEAR(nocv.fragmentEnergies[1], -0.9646908069918889, 1e-7); // H2
+
+    // The closed-shell functional resolution is present and resolves the
+    // orbital term into its sign-paired channels.
+    ASSERT_FALSE(nocv.orbitalComponents.empty());
+    double componentSum = 0.0;
+
+    for (const double component : nocv.orbitalComponents)
+    {
+        componentSum += component;
+    }
+
+    EXPECT_NEAR(componentSum, nocv.orbital, 1e-9);
+
+    // The three-term identity the block is built on.
+    EXPECT_NEAR(nocv.bindingEnergy, nocv.electrostatic + nocv.pauli + nocv.orbital, 1e-9);
+
+    // The measured terms on the quoted deck: E_elstat -0.6432783482670601,
+    // E_Pauli 1.3875928868600909, E_orb -0.934046029400274, binding
+    // -0.18973149080724327. The kNormal gate carries the 1e-6 density
+    // acceptance, so the density-dependent terms are pinned at 1e-6 and
+    // E_orb (the three-point value) at 1e-4.
+    EXPECT_NEAR(nocv.electrostatic, -0.6432783482670601, 1e-6);
+    EXPECT_NEAR(nocv.pauli, 1.3875928868600909, 1e-6);
+    EXPECT_NEAR(nocv.orbital, -0.934046029400274, 1e-4);
+    EXPECT_NEAR(nocv.bindingEnergy, -0.18973149080724327, 1e-4);
+
+    // The documented meaning of that number: E_mol - sum E_frag, on the
+    // Kohn-Sham lane now, up to the three-point rule's residual. Measured
+    // residual on this deck 6.66e-6, so the 1e-4 band is an order-of-
+    // magnitude bound, not a precision claim.
+    EXPECT_NEAR(nocv.bindingEnergy,
+                ran->result.totalEnergyHartree -
+                    (nocv.fragmentEnergies[0] + nocv.fragmentEnergies[1]),
+                1e-4);
 }
 
 // The control beside the refusal: the same water and the same partition on

@@ -111,14 +111,24 @@ struct RunNalewajski {
 /// channel resolutions, all in Hartree except the channel
 /// eigenvalues (electrons) and the fragment energies (Hartree). The
 /// density matrices of the decomposition are not serialized - the energies
-/// and channels are the output.
+/// and channels are the output. Which channel arrays carry a resolution
+/// follows the reference: an unrestricted run (UHF, UKS) fills only the
+/// `_alpha`/`_beta` arrays and leaves `orbitalComponents`/`nocvEigenvalues`
+/// empty, with `orbital` equal to `orbitalUnrestricted`; a closed-shell
+/// run always fills `orbitalComponents`/`nocvEigenvalues`, and the
+/// Hartree-Fock one fills the per-spin arrays of the same relaxation too,
+/// while the spin-summed Kohn-Sham one repeats `orbital` in
+/// `orbitalUnrestricted` and leaves the per-spin arrays empty.
 /// \ingroup qcx-io
 struct RunNocv {
     double electrostatic = 0.0; ///< E_elstat.
     double pauli = 0.0; ///< E_Pauli.
     double orbital = 0.0; ///< E_orb, restricted functional.
     double orbitalUnrestricted = 0.0; ///< E_orb, spin-resolved.
-    double bindingEnergy = 0.0; ///< E_mol - sum_i E_frag_i = E_elstat + E_Pauli + E_orb.
+    /// E_mol - sum_i E_frag_i = E_elstat + E_Pauli + E_orb. On a
+    /// Kohn-Sham lane E_orb is the three-point transition state's, so the
+    /// equality to E_mol - sum_i E_frag_i holds up to the Simpson residual.
+    double bindingEnergy = 0.0;
     std::vector<double> fragmentEnergies; ///< Isolated fragment SCF energies, fragment order.
     std::vector<double> orbitalComponents; ///< Delta E_orb^k per sign-paired channel.
     std::vector<double> nocvEigenvalues; ///< The +nu_k of each pair (signed tail).

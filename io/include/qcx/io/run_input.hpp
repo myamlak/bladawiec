@@ -740,10 +740,14 @@ struct RunPropertiesInput {
     /// The indices refer to the atom rows AS WRITTEN IN THE FILE (the
     /// driver maps them to the molecule's canonical atom order - the
     /// groups must be disjoint and cover every atom exactly once).
-    /// Closed-shell only: rejected with kUnimplemented on UHF runs (the
-    /// per-spin resolution assumes D_sigma = D/2, the closed-shell
-    /// convention of qcx::properties::AnalyzeNocvEts). Empty (the
-    /// default) runs no decomposition.
+    /// Served on the closed-shell and unrestricted references of both
+    /// families (RHF, UHF, RKS, UKS): the driver routes each run path to the
+    /// matching analysis entry point, and a Kohn-Sham run decomposes with
+    /// the run's own functional. The restricted open-shell pair (ROHF, ROKS)
+    /// is refused with kUnimplemented: the restricted reference needs a
+    /// transition-state Fock from the ROHF effective operators and a channel
+    /// pairing rule for a spectrum that is not +-nu paired, and neither
+    /// exists in qcx::properties. Empty (the default) runs no decomposition.
     std::vector<std::vector<std::size_t>> nocvFragments;
     /// The Molden-format F-file export path: the
     /// [Molden Format] [Atoms] (AU) [5D] [7F] [GTO] [MO] sections of the

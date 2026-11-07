@@ -8822,67 +8822,300 @@ TEST(DriverErrorTest, FukuiRejectsUnconvergedSpeciesScf) {
     EXPECT_NE(result.error().message.find("did not converge"), std::string::npos);
 }
 
-TEST(DriverErrorTest, RejectsUhfNocvCombination) {
-    // The ETS-NOCV analysis is closed-shell in v1; the combination is
-    // rejected before the SCF runs. The refusal is asserted by its sentence,
-    // not only by its code: kUnimplemented is shared with the functional
-    // refusal one check below this one and with every other unwired leg, so
-    // the message is the only half that says WHICH capability is missing -
-    // the coverage record's kEtsNocvClosedShellOnly cell.
-    const auto uhfNocv = RunInputText(R"(
+// The UHF lane of the ETS-NOCV closure: the same water geometry and the same
+// fragment partition as the RHF pin, one method word apart. The module's
+// per-spin entry point runs the same fragment SCFs, so the fragment energies
+// are the RHF pin's; the decomposition itself is the spin-resolved pair, and
+// the run's own binding energy is what the three terms partition.
+TEST(DriverPinTest, H2oDirectUhfNocvPartitionPins) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    auto result = RunInputText(R"(
 [molecule]
-atoms = [["O", 0.0, 0.0, 0.0], ["O", 0.0, 0.0, 1.2]]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["O", 0.0, 0.0, 0.0],
+    ["H", 0.7569503270127429, 0.58588227657553, 0.0],
+    ["H", -0.7569503270127429, 0.58588227657553, 0.0],
+]
+
 [basis]
 orbital = "sto-3g"
+
 [method]
 type = "uhf"
 fock_builder = "direct"
-accuracy = "kNormal"
+accuracy = "kTight"
+
+[scf]
+energy_tolerance = 1e-08
+density_tolerance = 1e-06
+
+[properties]
+nocv_fragments = [[0], [1, 2]]
+)");
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+
+    // The fragment SCFs are the isolated O atom and H2 in the full basis -
+    // the same states the RHF pin above runs, because the entry point
+    // differs and the fragments do not.
+    const auto fragmentEnergies = JsonNumberArray(*result, "\"fragment_energies\":");
+    ASSERT_TRUE(fragmentEnergies.has_value());
+    ASSERT_EQ(fragmentEnergies->values.size(), 2u);
+    EXPECT_NEAR(fragmentEnergies->values[0], -73.834215719824, 1e-7); // O
+    EXPECT_NEAR(fragmentEnergies->values[1], -0.921901167759, 1e-7); // H2
+
+    // The per-spin reference reports the two spin resolutions and NO
+    // restricted one: the closed-shell channel arrays are empty, not a
+    // silently repeated half of the spin-resolved values.
+    EXPECT_NE(result->find("\"orbital_components\": []"), std::string::npos) << *result;
+    EXPECT_NE(result->find("\"nocv_eigenvalues\": []"), std::string::npos) << *result;
+
+    const auto orbital = JsonNumber(*result, "\"orbital\":");
+    const auto orbitalUnrestricted = JsonNumber(*result, "\"orbital_unrestricted\":");
+    ASSERT_TRUE(orbital.has_value());
+    ASSERT_TRUE(orbitalUnrestricted.has_value());
+    EXPECT_NEAR(*orbital, *orbitalUnrestricted, 1e-12);
+
+    const auto alphaComponents = JsonNumberArray(*result, "\"orbital_components_alpha\":");
+    const auto betaComponents = JsonNumberArray(*result, "\"orbital_components_beta\":");
+    ASSERT_TRUE(alphaComponents.has_value());
+    ASSERT_TRUE(betaComponents.has_value());
+    EXPECT_FALSE(alphaComponents->values.empty());
+    EXPECT_FALSE(betaComponents->values.empty());
+
+    double componentSum = 0.0;
+
+    for (const double component : alphaComponents->values)
+    {
+        componentSum += component;
+    }
+
+    for (const double component : betaComponents->values)
+    {
+        componentSum += component;
+    }
+
+    EXPECT_NEAR(componentSum, *orbitalUnrestricted, 1e-9);
+
+    // The partition identity, and the run's own binding energy it is.
+    const auto electrostatic = JsonNumber(*result, "\"electrostatic\":");
+    const auto pauli = JsonNumber(*result, "\"pauli\":");
+    const auto binding = JsonNumber(*result, "\"binding_energy\":");
+    ASSERT_TRUE(electrostatic.has_value());
+    ASSERT_TRUE(pauli.has_value());
+    ASSERT_TRUE(binding.has_value());
+    EXPECT_NEAR(*binding, *electrostatic + *pauli + *orbital, 1e-9);
+
+    const auto totalEnergy = JsonNumber(*result, "\"total_energy_hartree\":");
+    ASSERT_TRUE(totalEnergy.has_value());
+    EXPECT_NEAR(
+        *binding, *totalEnergy - (fragmentEnergies->values[0] + fragmentEnergies->values[1]), 1e-6);
+}
+
+// The closed-shell Kohn-Sham lane of the same closure: H2/STO-3G with the
+// Slater LDA through the driver's own functional seam. The channels are the
+// sign-paired closed-shell resolution of the functional's transition state,
+// and the three terms partition the run's Kohn-Sham binding energy up to the
+// three-point rule's residual.
+TEST(DriverPinTest, H2DirectRksNocvPartitionPins) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    auto result = RunInputText(R"(
+[molecule]
+charge = 0
+multiplicity = 1
+atoms = [
+    ["H", 0.0, 0.0, 0.0],
+    ["H", 0.74084809526419992, 0.0, 0.0],
+]
+
+[basis]
+orbital = "sto-3g"
+
+[method]
+type = "rks"
+functional = "slater"
+fock_builder = "direct"
+accuracy = "kTight"
+
 [properties]
 nocv_fragments = [[0], [1]]
 )");
-    ASSERT_FALSE(uhfNocv.has_value());
-    EXPECT_EQ(uhfNocv.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(uhfNocv.error().message.find("the ETS-NOCV analysis is closed-shell in v1"),
-              std::string::npos)
-        << uhfNocv.error().message;
-    EXPECT_NE(uhfNocv.error().message.find("cannot be requested on a uhf run"), std::string::npos)
-        << uhfNocv.error().message;
+    ASSERT_TRUE(result.has_value()) << result.error().message;
+
+    const auto fragmentEnergies = JsonNumberArray(*result, "\"fragment_energies\":");
+    ASSERT_TRUE(fragmentEnergies.has_value());
+    ASSERT_EQ(fragmentEnergies->values.size(), 2u);
+
+    // Measured 2026-11-07 with `qcx.exe run .claude/lane-status/q-h1/
+    // h2-rks-nocv.toml` (this fixture's input, word for word): the two
+    // hydrogen fragments are the same LDA state.
+    EXPECT_NEAR(fragmentEnergies->values[0], -0.4176086339228253, 1e-7); // H
+    EXPECT_NEAR(fragmentEnergies->values[1], -0.41760863392282976, 1e-7); // H
+
+    // The closed-shell resolution is present: the functional-aware entry
+    // reports the sign-paired channels, not the per-spin pair alone.
+    const auto orbital = JsonNumber(*result, "\"orbital\":");
+    ASSERT_TRUE(orbital.has_value());
+    const auto components = JsonNumberArray(*result, "\"orbital_components\":");
+    ASSERT_TRUE(components.has_value());
+    EXPECT_FALSE(components->values.empty());
+    double componentSum = 0.0;
+
+    for (const double component : components->values)
+    {
+        componentSum += component;
+    }
+
+    EXPECT_NEAR(componentSum, *orbital, 1e-9);
+
+    const auto electrostatic = JsonNumber(*result, "\"electrostatic\":");
+    const auto pauli = JsonNumber(*result, "\"pauli\":");
+    const auto binding = JsonNumber(*result, "\"binding_energy\":");
+    ASSERT_TRUE(electrostatic.has_value());
+    ASSERT_TRUE(pauli.has_value());
+    ASSERT_TRUE(binding.has_value());
+    EXPECT_NEAR(*binding, *electrostatic + *pauli + *orbital, 1e-9);
+
+    // Measured on the quoted deck: E_elstat -0.06907855338968846,
+    // E_Pauli 0.6312133884178839, E_orb -0.7519249492378461, binding
+    // -0.18979011420965075. The two fragment-derived terms carry the kTight
+    // density error at the 1e-7 band the RHF pin uses; E_orb (and the
+    // binding it forms) carries the three-point rule's density sensitivity
+    // at the 1e-4 band.
+    EXPECT_NEAR(*electrostatic, -0.06907855338968846, 1e-7);
+    EXPECT_NEAR(*pauli, 0.6312133884178839, 1e-7);
+    EXPECT_NEAR(*orbital, -0.7519249492378461, 1e-4);
+    EXPECT_NEAR(*binding, -0.18979011420965075, 1e-4);
+
+    // The Kohn-Sham binding energy: the run's total minus the functional's
+    // own fragment energies, up to the Simpson residual of E_orb. Measured
+    // residual on this deck 2.58e-6, so the 1e-4 band is an order-of-
+    // magnitude bound, not a precision claim.
+    const auto totalEnergy = JsonNumber(*result, "\"total_energy_hartree\":");
+    ASSERT_TRUE(totalEnergy.has_value());
+    EXPECT_NEAR(
+        *binding, *totalEnergy - (fragmentEnergies->values[0] + fragmentEnergies->values[1]), 1e-4);
 }
 
-TEST(DriverErrorTest, NocvOnUksRohfAndRoksNamesTheClosedShellReason) {
-    // The per-spin check above fires on every per-spin path (IsPerSpinPath):
-    // the two unrestricted words and the restricted open-shell pair. The
-    // coverage record gives all four the kEtsNocvClosedShellOnly cell, and
-    // these three legs had no test. The ordering is part of the cell: the
-    // closed-shell check precedes the functional one, so a UKS or ROKS run -
-    // both naming a functional - reports the closed-shell reason and must
-    // NOT report the Hartree-Fock-in-v1 sentence.
-    const auto uks = RunInputText(R"(
+// The unrestricted Kohn-Sham lane: the OH doublet, a genuinely spin-polarized
+// reference, with the Slater LDA through the driver's functional seam. Both
+// spin channels are reported; the run's Kohn-Sham binding energy is what the
+// three terms partition.
+TEST(DriverPinTest, OhDoubletUksNocvPartitionPins) {
+    if (qcx::testing::IsFastOnlyMode())
+    {
+        GTEST_SKIP() << "heavy numerical test: Release-only";
+    }
+
+    auto result = RunInputText(R"(
 [molecule]
-atoms = [["H", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 0.74]]
+charge = 0
+multiplicity = 2
+units = "bohr"
+atoms = [["O", 0.0, 0.0, 0.0], ["H", 0.0, 0.0, 1.8326]]
+
 [basis]
 orbital = "sto-3g"
+
 [method]
 type = "uks"
 functional = "slater"
-accuracy = "kNormal"
+fock_builder = "direct"
+accuracy = "kTight"
+
+[symmetry]
+full_group = false
+
+[scf]
+max_iterations = 200
+
 [properties]
 nocv_fragments = [[0], [1]]
 )");
-    ASSERT_FALSE(uks.has_value());
-    EXPECT_EQ(uks.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(uks.error().message.find("the ETS-NOCV analysis is closed-shell in v1"),
-              std::string::npos)
-        << uks.error().message;
-    EXPECT_NE(uks.error().message.find("cannot be requested on a uks run"), std::string::npos)
-        << uks.error().message;
-    EXPECT_EQ(uks.error().message.find("the ETS-NOCV analysis is Hartree-Fock in v1"),
-              std::string::npos)
-        << "the functional reason precedes the closed-shell one: " << uks.error().message;
+    ASSERT_TRUE(result.has_value()) << result.error().message;
 
-    // ROHF, the OH doublet: no functional is named, and the method is still
-    // per spin, so the closed-shell sentence is the one it must get.
+    EXPECT_NE(result->find("\"orbital_components\": []"), std::string::npos) << *result;
+    EXPECT_NE(result->find("\"nocv_eigenvalues\": []"), std::string::npos) << *result;
+
+    const auto orbital = JsonNumber(*result, "\"orbital\":");
+    const auto orbitalUnrestricted = JsonNumber(*result, "\"orbital_unrestricted\":");
+    ASSERT_TRUE(orbital.has_value());
+    ASSERT_TRUE(orbitalUnrestricted.has_value());
+    EXPECT_NEAR(*orbital, *orbitalUnrestricted, 1e-12);
+
+    const auto alphaComponents = JsonNumberArray(*result, "\"orbital_components_alpha\":");
+    const auto betaComponents = JsonNumberArray(*result, "\"orbital_components_beta\":");
+    ASSERT_TRUE(alphaComponents.has_value());
+    ASSERT_TRUE(betaComponents.has_value());
+    EXPECT_FALSE(alphaComponents->values.empty());
+    EXPECT_FALSE(betaComponents->values.empty());
+
+    double componentSum = 0.0;
+
+    for (const double component : alphaComponents->values)
+    {
+        componentSum += component;
+    }
+
+    for (const double component : betaComponents->values)
+    {
+        componentSum += component;
+    }
+
+    EXPECT_NEAR(componentSum, *orbitalUnrestricted, 1e-9);
+
+    const auto electrostatic = JsonNumber(*result, "\"electrostatic\":");
+    const auto pauli = JsonNumber(*result, "\"pauli\":");
+    const auto binding = JsonNumber(*result, "\"binding_energy\":");
+    ASSERT_TRUE(electrostatic.has_value());
+    ASSERT_TRUE(pauli.has_value());
+    ASSERT_TRUE(binding.has_value());
+    EXPECT_NEAR(*binding, *electrostatic + *pauli + *orbital, 1e-9);
+
+    const auto totalEnergy = JsonNumber(*result, "\"total_energy_hartree\":");
+    const auto fragmentEnergies = JsonNumberArray(*result, "\"fragment_energies\":");
+    ASSERT_TRUE(totalEnergy.has_value());
+    ASSERT_TRUE(fragmentEnergies.has_value());
+    ASSERT_EQ(fragmentEnergies->values.size(), 2u);
+
+    // Measured 2026-11-07 with `qcx.exe run .claude/lane-status/q-h1/
+    // oh-uks-nocv.toml` (this fixture's input, word for word): the O and H
+    // fragments at the run's own Slater LDA; E_elstat -0.2986764938228532,
+    // E_Pauli 0.6123706241856439, E_orb -0.4295278776055392 (both spin
+    // channels), binding -0.11583374724274847.
+    EXPECT_NEAR(fragmentEnergies->values[0], -72.93262688489175, 1e-7); // O
+    EXPECT_NEAR(fragmentEnergies->values[1], -0.41577128253191403, 1e-7); // H
+    EXPECT_NEAR(*electrostatic, -0.2986764938228532, 1e-7);
+    EXPECT_NEAR(*pauli, 0.6123706241856439, 1e-7);
+    EXPECT_NEAR(*orbital, -0.4295278776055392, 1e-4);
+    EXPECT_NEAR(*binding, -0.11583374724274847, 1e-4);
+
+    // The Simpson residual on this spin-polarized reference is larger than
+    // the closed-shell H2 deck's: measured 1.16516e-4 (binding
+    // -0.11583374724274847 against E_mol - sum E_frag -0.11595026329112557).
+    // The band is set an order of magnitude above that measurement rather
+    // than at the closed-shell 1e-4, which this deck exceeds.
+    EXPECT_NEAR(
+        *binding, *totalEnergy - (fragmentEnergies->values[0] + fragmentEnergies->values[1]), 1e-3);
+}
+
+TEST(DriverErrorTest, NocvOnRohfAndRoksNamesTheRestrictedOpenShellCapability) {
+    // The one remaining ETS-NOCV hole: the restricted open-shell pair. The
+    // module's reference gate refuses it by name before any SCF or dense
+    // tensor is built, and the sentence names the missing capability - a
+    // transition-state Fock from the ROHF effective operators F_c and F_o,
+    // and a pairing rule for a spectrum that is not +-nu paired. Both legs
+    // must answer with that sentence, so a refusal keyed on the KS seam
+    // word alone (ROKS) or the HF word alone (ROHF) fails here.
     const auto rohf = RunInputText(R"(
 [molecule]
 multiplicity = 2
@@ -8900,14 +9133,18 @@ nocv_fragments = [[0], [1]]
 )");
     ASSERT_FALSE(rohf.has_value());
     EXPECT_EQ(rohf.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(rohf.error().message.find("the ETS-NOCV analysis is closed-shell in v1"),
+    EXPECT_NE(rohf.error().message.find("the restricted open-shell ETS-NOCV (ROHF/ROKS) is not "
+                                        "served"),
               std::string::npos)
         << rohf.error().message;
-    EXPECT_NE(rohf.error().message.find("cannot be requested on a rohf run"), std::string::npos)
+    EXPECT_NE(rohf.error().message.find("transition-state Fock"), std::string::npos)
         << rohf.error().message;
+    EXPECT_NE(rohf.error().message.find("F_c"), std::string::npos) << rohf.error().message;
+    EXPECT_NE(rohf.error().message.find("F_o"), std::string::npos) << rohf.error().message;
 
-    // ROKS, the same fixture with the Kohn-Sham keys: closed-shell reason,
-    // not the functional one.
+    // ROKS, the same fixture with the Kohn-Sham keys: the same reference
+    // gate fires, so the answer is the same missing formulation and not a
+    // functional-side excuse.
     const auto roks = RunInputText(R"(
 [molecule]
 multiplicity = 2
@@ -8925,14 +9162,12 @@ nocv_fragments = [[0], [1]]
 )");
     ASSERT_FALSE(roks.has_value());
     EXPECT_EQ(roks.error().code, qcx::ErrorCode::kUnimplemented);
-    EXPECT_NE(roks.error().message.find("the ETS-NOCV analysis is closed-shell in v1"),
+    EXPECT_NE(roks.error().message.find("the restricted open-shell ETS-NOCV (ROHF/ROKS) is not "
+                                        "served"),
               std::string::npos)
         << roks.error().message;
-    EXPECT_NE(roks.error().message.find("cannot be requested on a roks run"), std::string::npos)
+    EXPECT_NE(roks.error().message.find("transition-state Fock"), std::string::npos)
         << roks.error().message;
-    EXPECT_EQ(roks.error().message.find("the ETS-NOCV analysis is Hartree-Fock in v1"),
-              std::string::npos)
-        << "the functional reason precedes the closed-shell one: " << roks.error().message;
 }
 
 TEST(DriverErrorTest, NocvOnASingleAtomFragmentBeyondTheTableNamesTheAufbauLimit) {

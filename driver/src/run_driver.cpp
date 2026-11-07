@@ -895,7 +895,8 @@ qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
     const Eigen::MatrixXd& core,
-    const Eigen::MatrixXd& spinSummed,
+    const Eigen::MatrixXd& alphaDensity,
+    const Eigen::MatrixXd& betaDensity,
     const std::vector<std::size_t>& canonicalOrder,
     const qcx::io::RunInput& input);
 qcx::Result<std::optional<qcx::io::RunDensityAtNuclei>> BuildDensityAtNucleiBlock(
@@ -961,7 +962,9 @@ qcx::Result<WiredFockBuilder> WireRhfFockBuilder(
 // P_sigma = C_sigma,occ C_sigma,occ^T with no factor of 2 (an RHF caller
 // passes HfResult::density / 2; a UHF caller passes
 // densityAlpha/densityBeta unchanged). The spin-summed density D = P_alpha
-// + P_beta is what the spin-summed analyses (charges, ESP, NOCV) take.
+// + P_beta is what the spin-summed analyses (charges, ESP, density at
+// nuclei) take; ETS-NOCV receives the pair as well, because its unrestricted
+// entry points resolve one NOCV problem per spin.
 // The always-on populations/moments block runs here; each opt-in analysis
 // is delegated to its per-analyzer builder (Build*Block), which returns
 // nullopt when the analysis was not requested. A requested analysis that
@@ -1086,7 +1089,8 @@ qcx::Result<void> FillProperties(
 
     properties.fukui = std::move(*fukui);
 
-    auto nocv = BuildNocvBlock(molecule, basis, core, spinSummed, canonicalOrder, input);
+    auto nocv =
+        BuildNocvBlock(molecule, basis, core, alphaDensity, betaDensity, canonicalOrder, input);
 
     if (!nocv.has_value())
     {
@@ -1787,6 +1791,50 @@ std::string RecordGuessWord(qcx::io::GuessKind kind) {
     return std::string(qcx::io::ToString(kind));
 }
 
+// The ETS-NOCV entry point and reference a run path selects. Mapped once, so
+// the up-front reference gate and the entry-point dispatch downstream cannot
+// disagree about which reference produced the density. The restricted
+// open-shell paths map onto the per-spin seam family they ran; they are
+// refused for their REFERENCE, and the gate refuses it before any entry
+// point is consulted.
+struct NocvEntrySelection {
+    qcx::properties::NocvEtsEntryPoint entryPoint =
+        qcx::properties::NocvEtsEntryPoint::kClosedShellHartreeFock;
+    qcx::properties::NocvEtsReference reference = qcx::properties::NocvEtsReference::kClosedShell;
+};
+
+/// \param path A run path resolved by ResolveScfPath.
+/// \returns The ETS-NOCV entry point its analysis calls and the reference
+/// that analysis is resolved against.
+constexpr NocvEntrySelection SelectNocvEntry(ScfPath path) noexcept {
+    switch (path)
+    {
+    case ScfPath::kRestricted:
+        return {qcx::properties::NocvEtsEntryPoint::kClosedShellHartreeFock,
+                qcx::properties::NocvEtsReference::kClosedShell};
+    case ScfPath::kUnrestricted:
+        return {qcx::properties::NocvEtsEntryPoint::kUnrestrictedHartreeFock,
+                qcx::properties::NocvEtsReference::kUnrestricted};
+    case ScfPath::kRestrictedKs:
+        return {qcx::properties::NocvEtsEntryPoint::kClosedShellKohnSham,
+                qcx::properties::NocvEtsReference::kClosedShell};
+    case ScfPath::kUnrestrictedKs:
+        return {qcx::properties::NocvEtsEntryPoint::kUnrestrictedKohnSham,
+                qcx::properties::NocvEtsReference::kUnrestricted};
+    case ScfPath::kRohf:
+        return {qcx::properties::NocvEtsEntryPoint::kUnrestrictedHartreeFock,
+                qcx::properties::NocvEtsReference::kRestrictedOpenShell};
+    case ScfPath::kRohfKs:
+        return {qcx::properties::NocvEtsEntryPoint::kUnrestrictedKohnSham,
+                qcx::properties::NocvEtsReference::kRestrictedOpenShell};
+    }
+
+    // Unreachable: ResolveScfPath returns one of the six values above. The
+    // tail keeps the switch total without a `default:` arm that would hide a
+    // seventh path from every other exhaustive switch.
+    return {};
+}
+
 // The not-yet-wired combinations the schema documents; the driver rejects
 // them up front so a silent substitution can never run the wrong physics.
 qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
@@ -2216,33 +2264,24 @@ qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
                                        " run cannot write a checkpoint nothing could consume"));
     }
 
-    // The ETS-NOCV decomposition's per-spin resolution assumes the
-    // closed-shell D_sigma = D/2 (nocv.hpp); a per-spin molecular density would
-    // silently feed it the wrong spin channels, so the combination is
-    // rejected up front like the others.
-    if (isPerSpin && !input.properties.nocvFragments.empty())
+    // ETS-NOCV admission is the properties module's reference gate
+    // (CheckNocvEtsReference), not a driver-side method table: the four
+    // references the module implements - closed-shell and unrestricted
+    // Hartree-Fock, closed-shell and unrestricted Kohn-Sham - are served, and
+    // the restricted open-shell pair (ROHF/ROKS) is refused by the module's
+    // own sentence naming the missing transition-state Fock. The gate runs
+    // here, before the SCF and before BuildNocvBlock's dense ERI tensor, so
+    // an unserved reference costs neither.
+    if (!input.properties.nocvFragments.empty())
     {
-        return std::unexpected(
-            Err(qcx::ErrorCode::kUnimplemented,
-                "the ETS-NOCV analysis is closed-shell in v1; nocv_fragments cannot be "
-                "requested on a " +
-                    std::string(qcx::io::ToString(input.method.method)) + " run"));
-    }
+        const NocvEntrySelection selection = SelectNocvEntry(*scfPath);
+        auto referenceGate =
+            qcx::properties::CheckNocvEtsReference(selection.reference, selection.entryPoint);
 
-    // ETS-NOCV is Hartree-Fock in v1 (no functional enters the fragment SCFs or
-    // the density-energy evaluator), so a functional-naming method is refused.
-    if (input.method.functional.has_value() && !input.properties.nocvFragments.empty())
-    {
-        return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
-                                   "the ETS-NOCV analysis is Hartree-Fock in v1: the fragment "
-                                   "SCFs and the density-energy evaluator take no density "
-                                   "functional, so nocv_fragments cannot be requested on a "
-                                   "method that names method.functional; the decomposition "
-                                   "would report HF fragment energies and HF E_orb channels "
-                                   "beside the run's DFT total energy. Remove "
-                                   "method.functional (an rhf run keeps ETS-NOCV) or remove "
-                                   "nocv_fragments; the functional-aware decomposition is "
-                                   "not implemented"));
+        if (!referenceGate.has_value())
+        {
+            return std::unexpected(referenceGate.error());
+        }
     }
 
     // The NOCV fragment groups index the atom rows as written in the file;
@@ -6550,19 +6589,53 @@ qcx::Result<std::optional<qcx::io::RunFukui>> BuildFukuiBlock(
     return block;
 }
 
-// The opt-in ETS-NOCV block . The UHF and functional rejections live in
-// ValidateCombination, with the other not-wired combinations; only the
-// analysis itself runs here.
+// The opt-in ETS-NOCV block. The entry point follows the run path the SCF
+// took: the one classifier (ResolveScfPath) decides which reference the
+// densities come from, so the analysis and the loop cannot disagree about
+// the state being decomposed. The up-front reference gate lives in
+// ValidateCombination (before the SCF and before this block's dense ERI
+// tensor); it is called again here as a failsafe, so a programmatic caller
+// reaching the builder directly still meets the module's own sentence
+// instead of a formulation that does not exist.
+//
+// The Kohn-Sham lanes resolve their functional seam here (ResolveKsContext:
+// the functional name, the `[grid]` block and the screening tolerance), the
+// same three keys the energy path and the xc_gradient walk resolve. The SCF
+// branch's engine does not outlive its branch, exactly as for the gradient
+// walk, so the keys - not the engine object - are what must not diverge.
+//
+// The densities arrive in the energy path's own convention: the spin pair on
+// every path (the restricted lane carries half the converged density in each
+// member), so the closed-shell entries receive the spin sum and the
+// unrestricted entries the pair.
 qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     const qcx::molecule::Molecule& molecule,
     const qcx::basisset::BasisSet& basis,
     const Eigen::MatrixXd& core,
-    const Eigen::MatrixXd& spinSummed,
+    const Eigen::MatrixXd& alphaDensity,
+    const Eigen::MatrixXd& betaDensity,
     const std::vector<std::size_t>& canonicalOrder,
     const qcx::io::RunInput& input) {
     if (input.properties.nocvFragments.empty())
     {
         return std::nullopt;
+    }
+
+    const auto scfPath = ResolveScfPath(input.method.method);
+
+    if (!scfPath.has_value())
+    {
+        return std::unexpected(scfPath.error());
+    }
+
+    const NocvEntrySelection selection = SelectNocvEntry(*scfPath);
+
+    auto referenceGate =
+        qcx::properties::CheckNocvEtsReference(selection.reference, selection.entryPoint);
+
+    if (!referenceGate.has_value())
+    {
+        return std::unexpected(referenceGate.error());
     }
 
     auto fragments = MapFragmentsToCanonical(input.properties.nocvFragments, canonicalOrder);
@@ -6624,8 +6697,97 @@ qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     fragmentOptions.densityTolerance = input.scf.densityTolerance;
     fragmentOptions.useDiis = input.scf.useDiis;
 
-    auto nocv = qcx::properties::AnalyzeNocvEts(
-        molecule, basis, core, *eri, spinSummed, *fragments, fragmentOptions);
+    // The spin sum the two closed-shell entries take (the unrestricted ones
+    // take the pair itself). The restricted lane's pair is (D/2, D/2), so the
+    // sum is the converged D in the energy path's convention.
+    const Eigen::MatrixXd spinSummed = alphaDensity + betaDensity;
+
+    auto nocv = [&]() -> qcx::Result<qcx::properties::NocvEtsDecomposition> {
+        switch (*scfPath)
+        {
+        case ScfPath::kRestricted:
+            return qcx::properties::AnalyzeNocvEts(
+                molecule, basis, core, *eri, spinSummed, *fragments, fragmentOptions);
+
+        case ScfPath::kUnrestricted:
+            return qcx::properties::AnalyzeNocvEtsUnrestricted(molecule,
+                                                               basis,
+                                                               core,
+                                                               *eri,
+                                                               alphaDensity,
+                                                               betaDensity,
+                                                               selection.reference,
+                                                               *fragments,
+                                                               fragmentOptions);
+
+        case ScfPath::kRestrictedKs: {
+            auto context = ResolveKsContext(input, molecule, basis);
+
+            if (!context.has_value())
+            {
+                return std::unexpected(context.error());
+            }
+
+            const qcx::properties::NocvEtsFunctional functional{
+                context->evaluator, context->functional.exchangeFraction};
+            return qcx::properties::AnalyzeNocvEtsKohnSham(molecule,
+                                                           basis,
+                                                           core,
+                                                           *eri,
+                                                           spinSummed,
+                                                           selection.reference,
+                                                           functional,
+                                                           *fragments,
+                                                           fragmentOptions);
+        }
+
+        case ScfPath::kUnrestrictedKs: {
+            auto context = ResolveKsContext(input, molecule, basis);
+
+            if (!context.has_value())
+            {
+                return std::unexpected(context.error());
+            }
+
+            const qcx::properties::NocvEtsFunctional functional{
+                context->evaluator, context->functional.exchangeFraction};
+            return qcx::properties::AnalyzeNocvEtsUnrestrictedKohnSham(molecule,
+                                                                       basis,
+                                                                       core,
+                                                                       *eri,
+                                                                       alphaDensity,
+                                                                       betaDensity,
+                                                                       selection.reference,
+                                                                       functional,
+                                                                       *fragments,
+                                                                       fragmentOptions);
+        }
+
+        case ScfPath::kRohf:
+        case ScfPath::kRohfKs: {
+            // Unreachable: the reference gate above refused the restricted
+            // open-shell reference these paths select. The arms keep the
+            // switch exhaustive and stay fail-closed: the gate is asked
+            // again and its refusal returned, and a value would mean the
+            // gate stopped refusing, which this arm reports as an
+            // unclassified path rather than reading .error() off a value.
+            auto refusal =
+                qcx::properties::CheckNocvEtsReference(selection.reference, selection.entryPoint);
+
+            if (!refusal.has_value())
+            {
+                return std::unexpected(refusal.error());
+            }
+
+            return std::unexpected(Err(qcx::ErrorCode::kUnimplemented,
+                                       "ETS-NOCV: the restricted open-shell reference is not "
+                                       "served"));
+        }
+        }
+
+        return std::unexpected(
+            Err(qcx::ErrorCode::kUnimplemented, "ETS-NOCV: the run path is unclassified"));
+    }();
 
     if (!nocv.has_value())
     {
