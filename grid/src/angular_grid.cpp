@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <numbers>
 #include <string>
 #include <unordered_map>
@@ -153,8 +154,10 @@ Matrix3 Improper(const Point3& axis, double angle) noexcept {
     return Multiply(Reflection(axis), Rotation(axis, angle));
 }
 
-// The symmetry families the canonical recipes are built from.
-enum class GroupFamily {
+// The symmetry families the canonical recipes are built from. The base type is
+// one byte: the table of 57 groups holds it per entry and the checker flags a
+// wider base for a small value set.
+enum class GroupFamily : std::uint8_t {
     kIdentity,
     kInversion,
     kMirror,

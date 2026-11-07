@@ -4118,20 +4118,30 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
 
             if (classPass)
             {
-                localClassTasks64.assign(classTasks64.begin() + slice->begin64,
-                                         classTasks64.begin() + slice->end64);
-                localClassTasks32.assign(classTasks32.begin() + slice->begin32,
-                                         classTasks32.begin() + slice->end32);
+                // The slice bounds are std::size_t; iterator arithmetic takes
+                // the container's signed difference_type, so the conversion is
+                // made explicit here.
+                const auto begin64 = static_cast<std::ptrdiff_t>(slice->begin64);
+                const auto end64 = static_cast<std::ptrdiff_t>(slice->end64);
+                const auto begin32 = static_cast<std::ptrdiff_t>(slice->begin32);
+                const auto end32 = static_cast<std::ptrdiff_t>(slice->end32);
+
+                localClassTasks64.assign(classTasks64.begin() + begin64,
+                                         classTasks64.begin() + end64);
+                localClassTasks32.assign(classTasks32.begin() + begin32,
+                                         classTasks32.begin() + end32);
                 passClassTasks64 = &localClassTasks64;
                 passClassTasks32 = &localClassTasks32;
             } else
             {
-                localF64Tasks.assign(f64Tasks.begin() + slice->begin64,
-                                     f64Tasks.begin() + slice->end64);
-                localF32Tasks.assign(f32Tasks.begin() + slice->begin32,
-                                     f32Tasks.begin() + slice->end32);
-                localF32Weights.assign(f32Weights.begin() + slice->begin32,
-                                       f32Weights.begin() + slice->end32);
+                const auto begin64F = static_cast<std::ptrdiff_t>(slice->begin64);
+                const auto end64F = static_cast<std::ptrdiff_t>(slice->end64);
+                const auto begin32F = static_cast<std::ptrdiff_t>(slice->begin32);
+                const auto end32F = static_cast<std::ptrdiff_t>(slice->end32);
+
+                localF64Tasks.assign(f64Tasks.begin() + begin64F, f64Tasks.begin() + end64F);
+                localF32Tasks.assign(f32Tasks.begin() + begin32F, f32Tasks.begin() + end32F);
+                localF32Weights.assign(f32Weights.begin() + begin32F, f32Weights.begin() + end32F);
                 passF64Tasks = &localF64Tasks;
                 passF32Tasks = &localF32Tasks;
                 passF32Weights = &localF32Weights;

@@ -107,7 +107,7 @@ TEST(ExecutionContextTest, DenseAllReduceSumsEveryElementInPlace) {
     const auto sum = (*context)->AllReduceSumInPlace(values);
     ASSERT_TRUE(sum.has_value()) << sum.error().message;
 
-    const double expected = static_cast<double>(size * (size + 1) / 2);
+    const double expected = static_cast<double>(size) * (size + 1) / 2.0;
 
     for (const double value : values)
     {
