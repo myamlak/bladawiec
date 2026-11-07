@@ -419,6 +419,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/eri_batch_test.cpp
         tests/eri_cache_test.cpp
         tests/fock_build_test.cpp
+        tests/distributed_fock_test.cpp
         tests/lean_direct_fock_builder_test.cpp
         tests/lean_point_group_test.cpp
         tests/four_cell_attribution_test.cpp
@@ -449,7 +450,10 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/qfmm_lmult_test.cpp
         tests/qfmm_fock_build_test.cpp
         tests/qfmm_hf_build_test.cpp)
-    target_link_libraries(qcx-integrals-tests PRIVATE ${QCX_LINK_integrals} ${QCX_LINK_linalg} gtest gtest_main qcx-test-fixtures)
+    # qcx-backend is named explicitly: it is PRIVATE on qcx-integrals, so the
+    # execution context header distributed_fock_test.cpp includes would not
+    # otherwise reach this target's compile.
+    target_link_libraries(qcx-integrals-tests PRIVATE ${QCX_LINK_integrals} ${QCX_LINK_linalg} qcx-backend gtest gtest_main qcx-test-fixtures)
     # qcx-linalg is PRIVATE on qcx-integrals but its headers are required
     # at compile time here: screening_test.cpp reaches md_transform.hpp's
     # qcx/linalg/batched_ops.hpp through internal/fock_screen.hpp (the same
@@ -494,6 +498,23 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
             TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
     else()
         gtest_discover_tests(qcx-integrals-tests DISCOVERY_TIMEOUT ${QCX_TEST_DISCOVERY_TIMEOUT_SECONDS} PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+    endif()
+
+    # The distributed Fock build (the E1 increment): the same binary under
+    # mpiexec at two and four ranks, where the DistributedFockTest cases
+    # actually distribute (a plain ctest run is one process, and those cases
+    # skip there). The launcher's exit code is the verdict; a rank that
+    # diverged shows up as a hang and the timeout.
+    if (QCX_ENABLE_MPI)
+        foreach(_qcxMpiRanks 2 4)
+            add_test(NAME qcx-integrals-distributed-fock-${_qcxMpiRanks}ranks
+                COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${_qcxMpiRanks}
+                        ${MPIEXEC_PREFLAGS}
+                        $<TARGET_FILE:qcx-integrals-tests> --gtest_filter=DistributedFockTest.*
+                        ${MPIEXEC_POSTFLAGS})
+            set_tests_properties(qcx-integrals-distributed-fock-${_qcxMpiRanks}ranks
+                PROPERTIES TIMEOUT ${QCX_TEST_TIMEOUT_SECONDS})
+        endforeach()
     endif()
 
     # THE LARGE CATEGORY (owner ruling 2026-09-18; the root CMakeLists carries

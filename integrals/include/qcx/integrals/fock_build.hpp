@@ -31,6 +31,10 @@
 #include <string>
 #include <vector>
 
+namespace qcx::backend {
+class ExecutionContext; // The distribution's communicator seam (execution_context.hpp).
+} // namespace qcx::backend
+
 namespace qcx::integrals {
 
 struct SymmetryReduction; // The class-aware contraction seam (fock_build.hpp).
@@ -1067,13 +1071,51 @@ public:
     /// the build runs as the option's absence would produce, so the option
     /// is never silently dropped. Null (the default) keeps the zero-cost
     /// path.
+    /// \param executionContext Optional execution context
+    /// (backend/execution_context.hpp). Null, or a context whose Size() is 1,
+    /// runs the serial build unchanged - the same code path, byte for byte
+    /// (the budget enforcement's routing-bound walk included). With more ranks
+    /// the call distributes: the screened shell-quartet work is split across
+    /// the ranks with the static dispatcher, each rank contracts its share
+    /// into a zero-start local Fock matrix, and one dense sum all-reduce per
+    /// call (ExecutionContext::AllReduceSumInPlace) forms the total on every
+    /// rank; the core Hamiltonian is added exactly once, after the reduction.
+    /// A rank always receives work or the call refuses before its first
+    /// collective: the partition count is replicated, so the refusal
+    /// (kInvalidArgument) carries the static dispatcher's message unchanged
+    /// on every rank. The partition point is the class-task list on the class
+    /// path - built REPLICATED on every rank from the full screened lists,
+    /// because the strong form's closure check compares each task's screened
+    /// members with its full orbit and cutting the screened list first would
+    /// truncate every orbit and demote the strong form on every rank - and
+    /// the sorted screened quartet list on the plain path; the two precision
+    /// lanes form ONE partition, so a lane may be empty on a rank without the
+    /// build refusing. Composition decisions under distribution: the
+    /// LightPath chunk loop REFUSES (kUnimplemented) - its chunk pair data is
+    /// built per rank in full, so distributing the contraction alone would
+    /// not lower the per-process memory peak that gives the path its purpose,
+    /// and the chunk count is a memory choice that cannot fill the ranks; a
+    /// chunk-owned distribution is the documented follow-on. The ERI cache is
+    /// rank-local (each rank caches the requests of its own share). The
+    /// precision ladder REFUSES (kUnimplemented) - its bands carry per-band
+    /// certified sums and a committed coarse sum as a per-call contract, and
+    /// their distributed composition is the documented follow-on. The
+    /// certified-bound sum out-parameter is all-reduced beside the Fock
+    /// matrix and carries the call's full sum on every rank; the
+    /// budget enforcement reads the replicated screening, so its verdict is
+    /// identical on every rank. FockBuildStats under distribution: the
+    /// screening and routing counters are the replicated full-call values on
+    /// every rank, the contraction-side counters (classBlockContractCalls,
+    /// elementDrops), cache hits and wall times describe this rank's share,
+    /// and every rank returns the same Fock matrix.
     /// \returns The Fock matrix as a rank-2 tensor, or an Error.
     qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> BuildFock(
         const qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>& density,
         double* certifiedBoundSumOut = nullptr,
         FockBuildStats* statsOut = nullptr,
         const PrecisionLadderInputs* ladderInputs = nullptr,
-        CertifiedBudgetOutcome* budgetOut = nullptr) const;
+        CertifiedBudgetOutcome* budgetOut = nullptr,
+        const qcx::backend::ExecutionContext* executionContext = nullptr) const;
 
     /// The core Hamiltonian this builder was constructed with (H in
     /// F = H + 2J(rho) - K(rho)). Exposed for callers that need to combine

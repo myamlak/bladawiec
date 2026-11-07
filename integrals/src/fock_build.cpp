@@ -21,7 +21,9 @@
 #include "internal/precision_ladder.hpp"
 #include "internal/tensor_eigen_bridge.hpp"
 #include "qcx/backend/cpu_backend.hpp"
+#include "qcx/backend/execution_context.hpp"
 #include "qcx/backend/memory_topology.hpp"
+#include "qcx/backend/static_dispatcher.hpp"
 #include "qcx/integrals/eri_batch.hpp"
 #include "qcx/integrals/limits.hpp"
 #include "qcx/integrals/screening.hpp"
@@ -38,6 +40,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -192,6 +195,38 @@ qcx::Result<void> ClassRoutingError() {
     return qcx::Result<void>{std::unexpected(
         qcx::Error{qcx::ErrorCode::kInternalError,
                    "class contraction: no assembled block for an orbit representative"})};
+}
+
+// One pass's share of the distributed build's work. The two precision lanes
+// are cut as ONE contiguous sequence (lane fp64's items, then lane fp32's):
+// the union is what fills the ranks, so a pass whose fp32 lane is empty still
+// gives every rank work from the fp64 lane and the dispatcher refuses only
+// when the PASS's whole work count is below the rank count. [begin, end) is
+// the dispatcher's half-open range over the union; each lane's own range is
+// its intersection with the lane's segment.
+struct TwoLaneSlice {
+    std::size_t begin64 = 0;
+    std::size_t end64 = 0;
+    std::size_t begin32 = 0;
+    std::size_t end32 = 0;
+};
+
+qcx::Result<TwoLaneSlice> PartitionTwoLanes(std::size_t count64,
+                                            std::size_t count32,
+                                            const qcx::backend::StaticDispatcher& dispatcher) {
+    const auto range = dispatcher.Partition(count64 + count32);
+
+    if (!range.has_value())
+    {
+        return std::unexpected(range.error());
+    }
+
+    TwoLaneSlice slice;
+    slice.begin64 = std::min(range->begin, count64);
+    slice.end64 = std::min(range->end, count64);
+    slice.begin32 = range->begin > count64 ? range->begin - count64 : 0;
+    slice.end32 = range->end > count64 ? range->end - count64 : 0;
+    return slice;
 }
 
 // The shared front of the cache's engine machinery: the miss
@@ -3503,9 +3538,16 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
     double* certifiedBoundSumOut,
     FockBuildStats* statsOut,
     const PrecisionLadderInputs* ladderInputs,
-    CertifiedBudgetOutcome* budgetOut) const {
+    CertifiedBudgetOutcome* budgetOut,
+    const qcx::backend::ExecutionContext* executionContext) const {
     const State& state = *_state;
     const std::size_t n = state._pairList.functionCount;
+    // The distributed build: a context with more than one rank partitions the
+    // pass's work with the static dispatcher and all-reduces the dense Fock
+    // matrix once per call. Null, or a context of size one, takes the serial
+    // code path below byte for byte (the budget enforcement's routing-bound
+    // walk included), so a serial build and a one-rank launch cannot drift.
+    const bool distributed = executionContext != nullptr && executionContext->Size() > 1;
     // The LightPath chunk loop: each chunk screens its bra window over the
     // full ket prefix,
     // builds the chunk's contracted transforms into the light store,
@@ -3584,6 +3626,31 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
     // and the class path return kUnimplemented (their ladder composition
     // is the documented follow-on).
     const bool ladderEngaged = ladderInputs != nullptr && ladderInputs->schedule != nullptr;
+
+    // The distribution's two refused compositions (the named decisions the
+    // E1 increment records; the third, the rank-local ERI cache, composes).
+    // Both refusals are decided from replicated state, so every rank returns
+    // the same message before the call's first collective.
+    if (distributed && lightMode)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kUnimplemented,
+                       "the LightPath chunk loop does not compose with a distributed build yet: "
+                       "its chunk pair data is built per rank in full, so distributing only the "
+                       "contraction would not lower the per-process memory peak that gives the "
+                       "path its purpose, and the chunk count is a memory choice that cannot "
+                       "fill the ranks; a chunk-owned distribution is the documented follow-on"});
+    }
+
+    if (distributed && ladderEngaged)
+    {
+        return std::unexpected(
+            qcx::Error{qcx::ErrorCode::kUnimplemented,
+                       "the precision ladder does not compose with a distributed build yet: its "
+                       "bands carry per-band certified sums and a committed coarse sum as a "
+                       "per-call contract, and their distributed composition is the documented "
+                       "follow-on"});
+    }
 
     if (ladderEngaged && lightMode)
     {
@@ -3890,9 +3957,21 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
     // only the part the group acts on as a sum of quartet terms (the lean
     // shape, lean_fock_build.cpp's post-fold step). Every other path starts
     // from H and contracts on top of it.
-    Eigen::MatrixXd fock = strongEngaged ? Eigen::MatrixXd::Zero(state._coreHamiltonian.rows(),
-                                                                 state._coreHamiltonian.cols())
-                                         : state._coreHamiltonian;
+    //
+    // The distributed build's local matrix is a SHARE, so it also starts at
+    // zero: H sits in every rank's input and summing it would multiply it by
+    // the rank count. It is added exactly once after the reduction (the
+    // strong form's post-fold step, or the weak branch below).
+    Eigen::MatrixXd fock =
+        (strongEngaged || distributed)
+            ? Eigen::MatrixXd::Zero(state._coreHamiltonian.rows(), state._coreHamiltonian.cols())
+            : state._coreHamiltonian;
+
+    // A distributed pass failure is recorded here instead of returned: the
+    // rank must still reach the reduction's first collective (the failure
+    // flag), or the ranks that succeeded wait in it forever. Empty on every
+    // serial build (no allocation).
+    std::optional<qcx::Error> distributedPassError;
 
     // The contraction context: the shared state pieces, the density, and
     // the Fock matrix under accumulation - the contract helpers above. The
@@ -3986,6 +4065,79 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
             }
         }
 
+        // The distributed partition: this pass's work is cut ONCE here,
+        // after the full-list measurement above and before the batch
+        // machinery, and the pass below contracts only this rank's share
+        // into the zero-start local Fock. The unit is the pass's
+        // authoritative list - the class-task list on the class path, the
+        // sorted screened quartet list on the plain path - and the two
+        // precision lanes form ONE cut (PartitionTwoLanes), so a lane may
+        // be empty on a rank while the other is not.
+        //
+        // The class path's partition point is deliberate: its task lists
+        // are built REPLICATED by the caller from the full screened
+        // masters, and the strong form's closure check compares each
+        // task's screened member set with its full orbit. Cutting the
+        // screened masters first would truncate every orbit's per-rank
+        // member set, read as a closure miss on every rank, and demote a
+        // call that is exact - so the class task is the distribution unit,
+        // and the replicated build is what keeps the orbit closed.
+        //
+        // The slice is a copy, not a view: the pass's task vector is the
+        // batch cursor's index space and must outlive the pass. The fp32
+        // member weights stay the FULL positional master on the class path
+        // (task.screenedMemberPositions indexes the screened master, not
+        // the slice); the plain path slices its weights beside its tasks.
+        // Every count here is replicated, so the dispatcher's refusal is
+        // identical on every rank and happens before the call's first
+        // collective.
+        const std::vector<internal::MdQuartetTask>* passF64Tasks = &f64Tasks;
+        const std::vector<internal::MdQuartetTask>* passF32Tasks = &f32Tasks;
+        const std::vector<double>* passF32Weights = &f32Weights;
+        const std::vector<ClassRepTask>* passClassTasks64 = &classTasks64;
+        const std::vector<ClassRepTask>* passClassTasks32 = &classTasks32;
+        std::vector<internal::MdQuartetTask> localF64Tasks;
+        std::vector<internal::MdQuartetTask> localF32Tasks;
+        std::vector<double> localF32Weights;
+        std::vector<ClassRepTask> localClassTasks64;
+        std::vector<ClassRepTask> localClassTasks32;
+
+        if (distributed)
+        {
+            const qcx::backend::StaticDispatcher dispatcher(executionContext->Rank(),
+                                                            executionContext->Size());
+            const bool classPass = classPath && state._reduction.has_value();
+            const auto slice = PartitionTwoLanes(classPass ? classTasks64.size() : f64Tasks.size(),
+                                                 classPass ? classTasks32.size() : f32Tasks.size(),
+                                                 dispatcher);
+
+            if (!slice.has_value())
+            {
+                return std::unexpected(slice.error());
+            }
+
+            if (classPass)
+            {
+                localClassTasks64.assign(classTasks64.begin() + slice->begin64,
+                                         classTasks64.begin() + slice->end64);
+                localClassTasks32.assign(classTasks32.begin() + slice->begin32,
+                                         classTasks32.begin() + slice->end32);
+                passClassTasks64 = &localClassTasks64;
+                passClassTasks32 = &localClassTasks32;
+            } else
+            {
+                localF64Tasks.assign(f64Tasks.begin() + slice->begin64,
+                                     f64Tasks.begin() + slice->end64);
+                localF32Tasks.assign(f32Tasks.begin() + slice->begin32,
+                                     f32Tasks.begin() + slice->end32);
+                localF32Weights.assign(f32Weights.begin() + slice->begin32,
+                                       f32Weights.begin() + slice->end32);
+                passF64Tasks = &localF64Tasks;
+                passF32Tasks = &localF32Tasks;
+                passF32Weights = &localF32Weights;
+            }
+        }
+
         // The reduction rides with the class table (both are set together
         // in Create), but the guard names it explicitly: the class pass
         // below dereferences both optionals, and the unchecked-access
@@ -4007,7 +4159,7 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
             // per (quartet, block) pair - the equivalence pin the tests
             // check. The per-batch assembly and contraction live inside
             // RunClassPass.
-            if (classTasks64.empty() && classTasks32.empty())
+            if (passClassTasks64->empty() && passClassTasks32->empty())
             {
                 return qcx::Result<void>{};
             }
@@ -4020,11 +4172,11 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
                 statsOut->classOrbitTaskCount += classTasks64.size() + classTasks32.size();
             }
 
-            auto pass = passContractor.RunClassPass(classTasks64,
-                                                    classTasks32,
+            auto pass = passContractor.RunClassPass(*passClassTasks64,
+                                                    *passClassTasks32,
                                                     *state._classTable,
                                                     *state._reduction,
-                                                    f32Weights,
+                                                    *passF32Weights,
                                                     scratch,
                                                     certifiedBoundSum,
                                                     strongEngaged,
@@ -4040,8 +4192,12 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
             // restructured per-half, per-batch): each half
             // assembles and contracts one maxBatchBytes-bounded batch at a
             // time.
-            auto pass = passContractor.RunPass(
-                f64Tasks, f32Tasks, f32Weights, scratch, certifiedBoundSum, statsOut);
+            auto pass = passContractor.RunPass(*passF64Tasks,
+                                               *passF32Tasks,
+                                               *passF32Weights,
+                                               scratch,
+                                               certifiedBoundSum,
+                                               statsOut);
 
             if (!pass.has_value())
             {
@@ -4350,7 +4506,18 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
 
                 if (strongFormClosureMisses != 0)
                 {
-                    fock = state._coreHamiltonian;
+                    // The distributed local matrix is a zero-start share (H
+                    // is added once after the reduction), so the demotion
+                    // restores the zero, not H - assigning H here and adding
+                    // it again below would double it.
+                    if (distributed)
+                    {
+                        fock.setZero();
+                    } else
+                    {
+                        fock = state._coreHamiltonian;
+                    }
+
                     strongEngaged = false;
                     strongFormFallbacks = 1;
                 }
@@ -4366,8 +4533,70 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
 
             if (!pass.has_value())
             {
-                return std::unexpected(pass.error());
+                if (!distributed)
+                {
+                    return std::unexpected(pass.error());
+                }
+
+                // The rank's share failed after the partition. Record it and
+                // fall through to the reduction: every rank must reach the
+                // failure flag, or the ranks whose shares succeeded wait in
+                // the collectives forever. The failing rank reports its own
+                // error; the others name the abort.
+                distributedPassError = pass.error();
             }
+        }
+    }
+
+    // The distributed reduction (the E1 increment). Every rank contracted its
+    // partition share into a zero-start local Fock; one dense MPI_SUM
+    // all-reduce forms the call's two-electron matrix on every rank, and the
+    // certified-bound partial is reduced beside it so the out-parameter is
+    // the call's sum, not a rank's share. The collective order is fixed and
+    // every rank reaches all three: failure flag, bound sum, dense Fock. The
+    // flag goes FIRST because a rank whose share failed records the error and
+    // still arrives here; without the flag the other ranks would wait in a
+    // dense all-reduce that rank never calls. A nonzero flag aborts the call
+    // on every rank before the reductions - the failing rank reports its own
+    // error, the others name the abort - so no rank returns a partial Fock.
+    if (distributed)
+    {
+        const auto failures =
+            executionContext->AllReduceSum(distributedPassError.has_value() ? 1 : 0);
+
+        if (!failures.has_value())
+        {
+            return std::unexpected(failures.error());
+        }
+
+        if (*failures != 0)
+        {
+            if (distributedPassError.has_value())
+            {
+                return std::unexpected(*distributedPassError);
+            }
+
+            return std::unexpected(
+                qcx::Error{qcx::ErrorCode::kInternalError,
+                           "distributed Fock build: a rank's share failed; the call aborted on "
+                           "every rank"});
+        }
+
+        const auto boundSum = executionContext->AllReduceSum(certifiedBoundSum);
+
+        if (!boundSum.has_value())
+        {
+            return std::unexpected(boundSum.error());
+        }
+
+        certifiedBoundSum = *boundSum;
+
+        auto reduced = executionContext->AllReduceSumInPlace(
+            std::span<double>(fock.data(), static_cast<std::size_t>(fock.size())));
+
+        if (!reduced.has_value())
+        {
+            return std::unexpected(reduced.error());
         }
     }
 
@@ -4388,6 +4617,12 @@ qcx::Result<qcx::memory::Tensor<double, 2, qcx::backend::CpuTag>> DirectJkFockBu
             strongFormWallTime += std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - strongStarted);
         }
+    } else if (distributed)
+    {
+        // The distributed weak build's local matrix was a zero-start share;
+        // H enters exactly once, after the reduction. (The strong branch
+        // above adds it after the projection.)
+        fock += state._coreHamiltonian;
     }
 
     // Both paths accumulate their certified-bound partial through the same
