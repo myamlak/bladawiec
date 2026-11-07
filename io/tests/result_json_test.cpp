@@ -39,7 +39,7 @@ int CountOccurrences(const std::string& text, const std::string& needle) {
     return count;
 }
 
-TEST(ResultJsonTest, SchemaVersionIsFifty) {
+TEST(ResultJsonTest, SchemaVersionIsFiftyOne) {
     // v34 -> v35: the run record says what it RAN in the orthogonal builder-axis
     // vocabulary, one bump for one payload - the top-level `builder_axes` block
     // (RunBuilderAxes): `integral_family`, `storage_tier`, `execution_backend`,
@@ -227,7 +227,15 @@ TEST(ResultJsonTest, SchemaVersionIsFifty) {
     // its cardinality is a multiple of the irrep dimension. A key added; a
     // consumer must notice it because it is the record's only statement of
     // whether the run's numbers honoured its own symmetry.
-    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 50);
+    //
+    // v50 -> v51: the optional `nocv` block gains the `reference` member and
+    // the three negative channel partners, because ETS-NOCV follows the
+    // method that produced the density: `"closed-shell"` for RHF and RKS,
+    // `"unrestricted"` for UHF and UKS. Each `*_negative` array holds the
+    // -nu_k partner of the +nu_k array beside it, in the same order, so an
+    // exactly paired spectrum no longer has to be inferred. Keys added to an
+    // optional block, so the number moves with them.
+    EXPECT_EQ(qcx::io::RunResult::kSchemaVersion, 51);
 }
 
 TEST(ResultJsonTest, MethodIsAlwaysWrittenAndNamesTheRunPath) {

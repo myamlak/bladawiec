@@ -1835,6 +1835,26 @@ constexpr NocvEntrySelection SelectNocvEntry(ScfPath path) noexcept {
     return {};
 }
 
+// The reference word the run record's `nocv.reference` key spells (schema
+// 51): the determinant the decomposition was resolved against, not the method
+// word. The restricted open-shell value never reaches a record - the module's
+// reference gate refuses that pair before the analysis - but the switch stays
+// total for the same reason SelectNocvEntry's does.
+const char* NocvReferenceLabel(qcx::properties::NocvEtsReference reference) noexcept {
+    switch (reference)
+    {
+    case qcx::properties::NocvEtsReference::kClosedShell:
+        return "closed-shell";
+    case qcx::properties::NocvEtsReference::kUnrestricted:
+        return "unrestricted";
+    case qcx::properties::NocvEtsReference::kRestrictedOpenShell:
+        return "restricted open-shell";
+    }
+
+    // Unreachable while the enumerator set above is total.
+    return "unrecognised reference";
+}
+
 // The not-yet-wired combinations the schema documents; the driver rejects
 // them up front so a silent substitution can never run the wrong physics.
 qcx::Result<void> ValidateCombination(const qcx::io::RunInput& input) {
@@ -6795,6 +6815,7 @@ qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     }
 
     qcx::io::RunNocv block;
+    block.reference = NocvReferenceLabel(selection.reference);
     block.electrostatic = nocv->electrostatic;
     block.pauli = nocv->pauli;
     block.orbital = nocv->orbital;
@@ -6803,10 +6824,13 @@ qcx::Result<std::optional<qcx::io::RunNocv>> BuildNocvBlock(
     block.fragmentEnergies = ToStdVector(nocv->fragmentEnergies);
     block.orbitalComponents = ToStdVector(nocv->orbitalComponents);
     block.nocvEigenvalues = ToStdVector(nocv->nocvEigenvalues);
+    block.nocvEigenvaluesNegative = ToStdVector(nocv->nocvEigenvaluesNegative);
     block.orbitalComponentsAlpha = ToStdVector(nocv->orbitalComponentsAlpha);
     block.orbitalComponentsBeta = ToStdVector(nocv->orbitalComponentsBeta);
     block.nocvEigenvaluesAlpha = ToStdVector(nocv->nocvEigenvaluesAlpha);
+    block.nocvEigenvaluesAlphaNegative = ToStdVector(nocv->nocvEigenvaluesAlphaNegative);
     block.nocvEigenvaluesBeta = ToStdVector(nocv->nocvEigenvaluesBeta);
+    block.nocvEigenvaluesBetaNegative = ToStdVector(nocv->nocvEigenvaluesBetaNegative);
     return block;
 }
 

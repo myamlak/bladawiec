@@ -8429,6 +8429,15 @@ TEST(DriverPinTest, H2DirectRhfNocvExactlyPairedChannel) {
     ASSERT_TRUE(betaNus.has_value());
     ASSERT_EQ(betaNus->values.size(), 1u);
     EXPECT_NEAR(betaNus->values[0], 1.0, 1e-6);
+
+    // The record states the reference the decomposition was resolved against
+    // (schema 51), and the exactly paired channel carries its -nu_k partner
+    // beside the +nu_k eigenvalue instead of leaving it to inference.
+    EXPECT_NE(result->find("\"reference\": \"closed-shell\""), std::string::npos) << *result;
+    const auto partners = JsonNumberArray(*result, "\"nocv_eigenvalues_negative\":");
+    ASSERT_TRUE(partners.has_value());
+    ASSERT_EQ(partners->values.size(), 1u);
+    EXPECT_NEAR(partners->values[0], -1.0, 1e-6);
 }
 
 // The H2O condensed Fukui indices through the driver path - the
@@ -8901,6 +8910,21 @@ nocv_fragments = [[0], [1, 2]]
     }
 
     EXPECT_NEAR(componentSum, *orbitalUnrestricted, 1e-9);
+
+    // The record states the unrestricted reference (schema 51) and each
+    // per-spin +nu_k beside its -nu_k partner: one negative array per
+    // positive one, the same channel count.
+    EXPECT_NE(result->find("\"reference\": \"unrestricted\""), std::string::npos) << *result;
+    const auto alphaNus = JsonNumberArray(*result, "\"nocv_eigenvalues_alpha\":");
+    const auto alphaPartners = JsonNumberArray(*result, "\"nocv_eigenvalues_alpha_negative\":");
+    const auto betaNus = JsonNumberArray(*result, "\"nocv_eigenvalues_beta\":");
+    const auto betaPartners = JsonNumberArray(*result, "\"nocv_eigenvalues_beta_negative\":");
+    ASSERT_TRUE(alphaNus.has_value());
+    ASSERT_TRUE(alphaPartners.has_value());
+    ASSERT_TRUE(betaNus.has_value());
+    ASSERT_TRUE(betaPartners.has_value());
+    EXPECT_EQ(alphaNus->values.size(), alphaPartners->values.size());
+    EXPECT_EQ(betaNus->values.size(), betaPartners->values.size());
 
     // The partition identity, and the run's own binding energy it is.
     const auto electrostatic = JsonNumber(*result, "\"electrostatic\":");

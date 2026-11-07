@@ -346,19 +346,23 @@ std::string SerializeRunResultJson(const RunResult& result) {
         if (result.properties->nocv.has_value())
         {
             const auto& nocv = *result.properties->nocv;
-            document["nocv"] =
-                nlohmann::json{{"electrostatic", nocv.electrostatic},
-                               {"pauli", nocv.pauli},
-                               {"orbital", nocv.orbital},
-                               {"orbital_unrestricted", nocv.orbitalUnrestricted},
-                               {"binding_energy", nocv.bindingEnergy},
-                               {"fragment_energies", nocv.fragmentEnergies},
-                               {"orbital_components", nocv.orbitalComponents},
-                               {"nocv_eigenvalues", nocv.nocvEigenvalues},
-                               {"orbital_components_alpha", nocv.orbitalComponentsAlpha},
-                               {"orbital_components_beta", nocv.orbitalComponentsBeta},
-                               {"nocv_eigenvalues_alpha", nocv.nocvEigenvaluesAlpha},
-                               {"nocv_eigenvalues_beta", nocv.nocvEigenvaluesBeta}};
+            document["nocv"] = nlohmann::json{
+                {"reference", nocv.reference},
+                {"electrostatic", nocv.electrostatic},
+                {"pauli", nocv.pauli},
+                {"orbital", nocv.orbital},
+                {"orbital_unrestricted", nocv.orbitalUnrestricted},
+                {"binding_energy", nocv.bindingEnergy},
+                {"fragment_energies", nocv.fragmentEnergies},
+                {"orbital_components", nocv.orbitalComponents},
+                {"nocv_eigenvalues", nocv.nocvEigenvalues},
+                {"nocv_eigenvalues_negative", nocv.nocvEigenvaluesNegative},
+                {"orbital_components_alpha", nocv.orbitalComponentsAlpha},
+                {"orbital_components_beta", nocv.orbitalComponentsBeta},
+                {"nocv_eigenvalues_alpha", nocv.nocvEigenvaluesAlpha},
+                {"nocv_eigenvalues_alpha_negative", nocv.nocvEigenvaluesAlphaNegative},
+                {"nocv_eigenvalues_beta", nocv.nocvEigenvaluesBeta},
+                {"nocv_eigenvalues_beta_negative", nocv.nocvEigenvaluesBetaNegative}};
         }
 
         if (result.properties->densityAtNuclei.has_value())

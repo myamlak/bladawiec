@@ -121,6 +121,9 @@ struct RunNalewajski {
 /// `orbitalUnrestricted` and leaves the per-spin arrays empty.
 /// \ingroup qcx-io
 struct RunNocv {
+    /// The reference determinant the channels were resolved against:
+    /// "closed-shell" for RHF and RKS, "unrestricted" for UHF and UKS.
+    std::string reference;
     double electrostatic = 0.0; ///< E_elstat.
     double pauli = 0.0; ///< E_Pauli.
     double orbital = 0.0; ///< E_orb, restricted functional.
@@ -132,10 +135,16 @@ struct RunNocv {
     std::vector<double> fragmentEnergies; ///< Isolated fragment SCF energies, fragment order.
     std::vector<double> orbitalComponents; ///< Delta E_orb^k per sign-paired channel.
     std::vector<double> nocvEigenvalues; ///< The +nu_k of each pair (signed tail).
+    /// The -nu_k partner of each pair, in nocvEigenvalues' order.
+    std::vector<double> nocvEigenvaluesNegative;
     std::vector<double> orbitalComponentsAlpha; ///< Alpha-channel resolution.
     std::vector<double> orbitalComponentsBeta; ///< Beta-channel resolution.
     std::vector<double> nocvEigenvaluesAlpha; ///< Alpha-channel nu_k.
+    /// The -nu_k partner of each alpha pair, in nocvEigenvaluesAlpha's order.
+    std::vector<double> nocvEigenvaluesAlphaNegative;
     std::vector<double> nocvEigenvaluesBeta; ///< Beta-channel nu_k.
+    /// The -nu_k partner of each beta pair, in nocvEigenvaluesBeta's order.
+    std::vector<double> nocvEigenvaluesBetaNegative;
 };
 
 /// The electron density at each nucleus: the spin-summed AO
@@ -2252,7 +2261,18 @@ struct RunResult {
     /// record's only statement of whether the run's numbers HONOURED its
     /// own symmetry, and its verdict vocabulary ("passed" | "failed" |
     /// "no_multiplets") is a claim rather than a bare flag.
-    static constexpr int kSchemaVersion = 50;
+    ///
+    /// Schema 51 ADDS the ETS-NOCV `reference` member and the three negative
+    /// channel partners (`nocv_eigenvalues_negative`,
+    /// `nocv_eigenvalues_alpha_negative`, `nocv_eigenvalues_beta_negative`).
+    /// The decomposition is no longer closed-shell only, so a consumer must
+    /// be able to tell a spin-summed problem from a per-spin one without
+    /// knowing which method word produced the file; `reference` states it in
+    /// the record. The partners complete each sign-paired channel: the
+    /// existing eigenvalues hold +nu_k, and an exactly paired spectrum's
+    /// partner is -nu_k, which the record previously made a consumer infer.
+    /// Keys added to an optional block, so the number moved with them.
+    static constexpr int kSchemaVersion = 51;
 
     bool converged = false; ///< True when a convergence criterion fired.
     int iterations = 0; ///< Iterations spent; the budget when not converged.

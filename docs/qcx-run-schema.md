@@ -483,7 +483,7 @@ bumped whenever a consumer must notice a change (§7).
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | int | The schema version; currently 50 (`RunResult::kSchemaVersion`) |
+| `schema_version` | int | The schema version; currently 51 (`RunResult::kSchemaVersion`) |
 | `molecule_units` | string | Schema 28. The unit the run's geometry was **read under** — the RESOLVED `[molecule] units` value, `"angstrom"` or `"bohr"`, never a request left for a consumer to apply. **Always present**, and `"angstrom"` is the value an absent key resolves to (the parser's default is a judgement, and the disclosure rule makes a judgement stateable). It exists so a record is self-describing on the one convention that has produced a wasted hunt twice in this project (2026-08-26, pyscf's Ångström default; 2026-09-15, Bohr numbers in an Ångström input file): a reader holding the JSON alone can now tell at what scale the geometry was read without consulting the input file. It describes the INPUT, not the numbers — the internal geometry is Bohr under either value |
 | `converged` | bool | True when a convergence criterion fired |
 | `iterations` | int | Iterations spent; the budget when not converged |
@@ -563,7 +563,7 @@ which are always present and use null.
 | `eddb` | `total_population`, `atomic_populations`, `nobd_occupations` (descending), `central_atom_count`, `two_center_orbital_count` | electrons; counts |
 | `fukui` | `nucleophilic` (f_A+), `electrophilic` (f_A-), `radical` (f_A0) — per atom, each vector sums to one | electrons |
 | `nalewajski` | `bond_orders` (B(a,b)), `diatomic_covalent` (v_ab), `atomic_ionic_valence` (v_i_a), `atomic_covalent_valence` (v_c_a), `total_valence` — matrices symmetric, zero diagonal | electrons |
-| `nocv` | `electrostatic`, `pauli`, `orbital`, `orbital_unrestricted`, `binding_energy` (= E_mol - sum E_frag = elstat + pauli + orb), `fragment_energies`, `orbital_components`, `nocv_eigenvalues` (the +nu_k of each pair, signed tail), `orbital_components_alpha`/`beta`, `nocv_eigenvalues_alpha`/`beta`. Which channel arrays are filled follows the reference: on `rhf` both the sign-paired closed-shell resolution (`orbital_components`) and the per-spin resolution of the same relaxation (`_alpha`/`_beta`) are filled; on `rks` the functional is spin-summed, so the closed-shell arrays carry the resolution and the per-spin arrays are empty (`orbital_unrestricted` repeats `orbital`); on `uhf` and `uks` the decomposition is the two spin channels, so `orbital_components` and `nocv_eigenvalues` are empty and only the `_alpha`/`_beta` arrays carry it (`orbital` equals `orbital_unrestricted`) | hartree; eigenvalues electrons |
+| `nocv` | Schema 51. `reference` (`"closed-shell"` for `rhf`/`rks`, `"unrestricted"` for `uhf`/`uks`), `electrostatic`, `pauli`, `orbital`, `orbital_unrestricted`, `binding_energy` (= E_mol - sum E_frag = elstat + pauli + orb), `fragment_energies`, `orbital_components`, `nocv_eigenvalues` (the +nu_k of each pair, signed tail), `nocv_eigenvalues_negative` (the -nu_k partners, same order), `orbital_components_alpha`/`beta`, `nocv_eigenvalues_alpha`/`beta`, `nocv_eigenvalues_alpha_negative`/`beta_negative` (the partners per spin). Which channel arrays are filled follows the reference: on `rhf` both the sign-paired closed-shell resolution (`orbital_components`) and the per-spin resolution of the same relaxation (`_alpha`/`_beta`) are filled; on `rks` the functional is spin-summed, so the closed-shell arrays carry the resolution and the per-spin arrays are empty (`orbital_unrestricted` repeats `orbital`); on `uhf` and `uks` the decomposition is the two spin channels, so `orbital_components` and `nocv_eigenvalues` are empty and only the `_alpha`/`_beta` arrays carry it (`orbital` equals `orbital_unrestricted`) | hartree; eigenvalues electrons |
 | `density_at_nuclei` | `values` — rho(R_A) per atom in the molecule's canonical atom order | electrons/bohr³ |
 | `qtaim` | `bond_critical_points` (each: `atom_a`, `atom_b`, `position_bohr`, `density`, `laplacian`, `ellipticity`, `eigenvalues` ascending, `bond_path` — the two gradient rays BCP -> nucleus), `other_critical_points` (`position_bohr`, `rank`, `signature_sum`), `unconverged_seeds` (3 each) | electrons/bohr³; electrons/bohr⁵ |
 | `molden` | `file` — the path of the written Molden-format F-file | path |
@@ -1585,7 +1585,7 @@ What to notice in this output:
 - No opt-in analysis key (`charges`, `esp`, `eddb`, `fukui`, `nalewajski`,
   `nocv`, `density_at_nuclei`, `qtaim`) appears anywhere — none was
   requested (§3.4).
-- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 50.
+- The document was captured at `schema_version: 1` (pre-`density_at_nuclei`); current runs carry version 51.
 
 ### Other pin fixtures
 
@@ -2337,6 +2337,17 @@ an alias by construction cannot.
   `"intact": false`. Keys added, so the number moves with them. A document
   outside a Kohn-Sham run and without a labeling block is byte-identical
   under the change.
+- 50 → 51 (ETS-NOCV follows the method that produced the density): the
+  `nocv` block (§3.4) gained the `reference` member (`"closed-shell"` for
+  `rhf` and `rks`, `"unrestricted"` for `uhf` and `uks`) and the three
+  negative channel partners (`nocv_eigenvalues_negative`,
+  `nocv_eigenvalues_alpha_negative`, `nocv_eigenvalues_beta_negative`),
+  because the decomposition is no longer resolved on the closed-shell
+  reference only. A consumer that reads the channels can now tell a
+  spin-summed problem from a per-spin one from the record alone, and each
+  `+nu_k` eigenvalue is stated beside its `-nu_k` partner instead of being
+  left to inference. Keys added to an optional block, so the number moves
+  with them.
 
 ## 8. The builder-selection axes (schema 35)
 
