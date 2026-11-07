@@ -702,9 +702,12 @@ qcx::Result<void> BasisSet::AppendNwchemText(std::string_view text) {
             {
                 if (channel.angularMomentum == *channelType)
                 {
-                    return std::unexpected(MakeError(line.number,
-                                                     "duplicate ECP channel '" + marker +
-                                                         "' for element '" + firstToken + "'"));
+                    std::string message = "duplicate ECP channel '";
+                    message += marker;
+                    message += "' for element '";
+                    message += firstToken;
+                    message += "'";
+                    return std::unexpected(MakeError(line.number, message));
                 }
             }
 
