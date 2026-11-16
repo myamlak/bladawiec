@@ -19,6 +19,7 @@ add_library(qcx-grid ${QCX_MODULE_LIBRARY_TYPE}
   src/xc_gradient.cpp
   src/xc_kernel_action.cpp
   src/xc_kernel_gradient.cpp
+  src/xc_third_derivative.cpp
 )
 target_include_directories(qcx-grid PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(qcx-grid PUBLIC cxx_std_23)
@@ -49,6 +50,7 @@ if (QCX_BUILD_TESTS AND TARGET gtest)
         tests/xc_hessian_exactness_test.cpp
         tests/xc_kernel_action_test.cpp
         tests/xc_kernel_gradient_test.cpp
+        tests/xc_third_derivative_test.cpp
         tests/tau_reference_test.cpp
         tests/quadrature_cross_validation_test.cpp
         tests/synthetic_fixture.cpp
