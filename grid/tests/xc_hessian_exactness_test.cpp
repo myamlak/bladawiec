@@ -1278,6 +1278,25 @@ void ExpectWalkMatches(std::string_view label,
                                     Scientific(separation));
 
     EXPECT_GT(expected.cwiseAbs().maxCoeff(), 1e-8) << label << ": the pin carries no Hessian";
+
+    if (!(deviation < bar))
+    {
+        Eigen::Index row = 0;
+        Eigen::Index column = 0;
+        (walk - expected).cwiseAbs().maxCoeff(&row, &column);
+        std::fprintf(stderr,
+                     "%s: max difference at (%ld,%ld): walk %.17g expected %.17g broken %.17g "
+                     "walk_max %.17g expected_max %.17g\n",
+                     std::string(label).c_str(),
+                     static_cast<long>(row),
+                     static_cast<long>(column),
+                     walk(row, column),
+                     expected(row, column),
+                     broken(row, column),
+                     walk.cwiseAbs().maxCoeff(),
+                     expected.cwiseAbs().maxCoeff());
+    }
+
     EXPECT_LT(deviation, bar) << label << ": the walk and the field evaluator disagree";
     EXPECT_GT(margin, bar)
         << label << ": the deliberate defect is below the pin's own bar, so it cannot be seen";
@@ -1775,6 +1794,18 @@ TEST(XcHessianExactnessTest, TheMaterialisedMatrixMatchesTheWalkContractionTerm)
     controlSpec.tier = {};
 
     const PolynomialFunctional control(controlSpec);
+
+    double controlTierMax = 0.0;
+
+    for (const auto& row : controlSpec.tier)
+    {
+        for (const double value : row)
+        {
+            controlTierMax = std::max(controlTierMax, std::abs(value));
+        }
+    }
+
+    EXPECT_EQ(controlTierMax, 0.0) << "the control's second-derivative tier is not zero";
 
     const auto fullWalk = RunWalk(*fixture, full);
     ASSERT_TRUE(fullWalk.has_value()) << fullWalk.error().message;
