@@ -10,9 +10,11 @@
 # from a copy of its parent's COMPILE_OPTIONS list and may replace it: that
 # is the one mechanism that subtracts for a subtree, and it is why this unit
 # lives here. Everything the unit needs is restated below, and the baseline
-# flags are added by the parent's tier block for a baseline configure and by
-# the else() branch of the same block (none) - in an avx2 configure this
-# directory adds nothing, because nothing was inherited.
+# tier itself is stated explicitly at the end of this file: the reset
+# subtracts the tier this build inherited, but no CMake mechanism subtracts
+# a compiler whose own default already is above the baseline, and Ubuntu
+# 26.04's amd64v3 GCC is one (a 2026-11-16 CI runner moved to that image and
+# the unit, handed no tier flag, still answered false).
 #
 # The objects join qcx-integrals through $<TARGET_OBJECTS:...>, and in the
 # shared configuration they are registered for the composed qcx target, the
@@ -55,6 +57,23 @@ if (MSVC)
     target_compile_options(qcx-fock-scalar PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4>)
 else()
     target_compile_options(qcx-fock-scalar PRIVATE -ffp-contract=off)
+endif()
+
+# The reset subtracts this tree's tier; it does not subtract the compiler's
+# own default. Ubuntu 26.04's amd64v3 GCC 15.2 is configured for
+# -march=x86-64-v3, so it defines __AVX2__ in a unit handed none of this
+# tree's tier flags - the 2026-11-16 CI runs of the gcc Release and Debug
+# legs failed exactly there, while the same tree passed on Ubuntu 24.04's
+# gcc 13.3. State the baseline itself, and last: a later -march spelling
+# wins (gcc 15.2, measured: -march=x86-64-v3 -march=x86-64 defines neither
+# __AVX2__ nor __FMA__ nor __F16C__), and /arch:SSE2 is the x64 baseline in
+# the same last-spelling position on MSVC.
+if (QCX_ARCH_X86_64)
+    if (MSVC)
+        target_compile_options(qcx-fock-scalar PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:SSE2>)
+    else()
+        target_compile_options(qcx-fock-scalar PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-march=x86-64>)
+    endif()
 endif()
 
 # No precompiled header: the target is one translation unit, and a PCH would
